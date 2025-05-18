@@ -2,12 +2,20 @@ from gpu import thread_idx, block_idx, warp, barrier
 from gpu.host import DeviceContext, DeviceBuffer
 from gpu.memory import AddressSpace
 from memory import stack_allocation
-from layout import Layout, LayoutTensor
-from math import iota
+from layout import Layout, LayoutTensor, UNKNOWN_VALUE
+from layout.tensor_builder import LayoutTensorBuild as tb
+from math import iota, exp
 from sys import sizeof
 
 from tensor import InputTensor, OutputTensor, ManagedTensorSlice
 
+alias Dyn1DLayout = Layout.row_major(UNKNOWN_VALUE)
+alias Dyn2DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE)
+alias Dyn3DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE)
+alias Dyn4DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE)
+alias dtype = DType.float32
+
+alias ALPHA_THRESHOLD = 1.0 / 255.0
 
 fn _rasterize_to_pixels_3dgs_fwd_kernel[
     tile_size: Int,
@@ -16,87 +24,63 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
     # packed: Bool,
 ](
     # Constants - passed as arguments
-    C: UInt32,
-    N: UInt32,
-    n_isects: UInt32,
-    image_width: UInt32,
-    image_height: UInt32,
+    C: UInt, # Number of cameras (aka batch size)
+    N: UInt, # Number of gaussians
+    n_isects: UInt, # Number of intersections
+    image_width: UInt,
+    image_height: UInt,
     # Inputs - Using placeholder LayoutTensors
-    means2d: ManagedTensorSlice[type=DType.float32, rank=3],         # [C, N, 2] or [nnz, 2]
-    conics: ManagedTensorSlice[type=DType.float32, rank=3],          # [C, N, 3] or [nnz, 3]
-    colors: ManagedTensorSlice[type=DType.float32, rank=3],      # [C, N, CDIM] or [nnz, CDIM]
-    opacities: ManagedTensorSlice[type=DType.float32, rank=2],   # [C, N] or [nnz]
-    backgrounds: ManagedTensorSlice[type=DType.float32, rank=2], # Optional [C, CDIM] - Handle optionality
+    means2d: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin],         # [C, N, 2] or [nnz, 2]
+    conics: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin],          # [C, N, 3] or [nnz, 3]
+    colors: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin],      # [C, N, CDIM] or [nnz, CDIM]
+    opacities: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin],   # [C, N] or [nnz]
+    backgrounds: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin], # Optional [C, CDIM] - Handle optionality
     has_backgrounds: Bool,                      # Flag for optional backgrounds
-    masks: ManagedTensorSlice[type=DType.bool, rank=3],           # Optional [C, tile_height, tile_width] - Handle optionality
-    has_masks: Bool,                            # Flag for optional masks
-    tile_ranges: ManagedTensorSlice[type=DType.int32, rank=4], # [C, tile_height, tile_width, 2]
-    flatten_ids: ManagedTensorSlice[type=DType.int32, rank=1],  # [n_isects]
+    tile_ranges: LayoutTensor[DType.int32, Dyn4DLayout, MutableAnyOrigin], # [C, tile_height, tile_width, 2]
+    flatten_ids: LayoutTensor[DType.int32, Dyn1DLayout, MutableAnyOrigin],  # [n_isects]
     # Outputs - Using placeholder LayoutTensors
-    render_colors: ManagedTensorSlice[type=DType.float32, rank=4], # [C, image_height, image_width, CDIM]
-    render_alphas: ManagedTensorSlice[type=DType.float32, rank=4], # [C, image_height, image_width, 1]
-    last_ids: ManagedTensorSlice[type=DType.int32, rank=3],        # [C, image_height, image_width]
+    render_colors: LayoutTensor[dtype, Dyn4DLayout, MutableAnyOrigin], # [C, image_height, image_width, CDIM]
+    render_alphas: LayoutTensor[dtype, Dyn4DLayout, MutableAnyOrigin], # [C, image_height, image_width, 1]
+    last_ids: LayoutTensor[DType.int32, Dyn3DLayout, MutableAnyOrigin],        # [C, image_height, image_width]
 ):
-    var sh_gaussian_ids = stack_allocation[
-        tile_size * tile_size,
-        DType.int32,
-        address_space = AddressSpace.SHARED,
-    ]()
-    var sh_means = stack_allocation[
-        tile_size * tile_size * 2,
-        DType.float32,
-        address_space = AddressSpace.SHARED,
-    ]()
-    var sh_conics = stack_allocation[
-        tile_size * tile_size * 3,
-        DType.float32,
-        address_space = AddressSpace.SHARED,
-    ]()
-    var sh_opacities = stack_allocation[
-        tile_size * tile_size,
-        DType.float32,
-        address_space = AddressSpace.SHARED,
-    ]()
+    sh_gaussian_ids = tb[DType.int32]().row_major[tile_size * tile_size]().shared().alloc()
+    sh_means = tb[dtype]().row_major[tile_size * tile_size, 2]().shared().alloc()
+    sh_conics = tb[dtype]().row_major[tile_size * tile_size, 3]().shared().alloc()
+    sh_opacities = tb[dtype]().row_major[tile_size * tile_size]().shared().alloc()
     
     # Get block and thread IDs
-    alias camera_id: UInt32 = block_idx.x # Corresponds to grid.x
-    alias tile_row: UInt32 = block_idx.y # Tile id row
-    alias tile_col: UInt32 = block_idx.z # Tile id column
+    camera_id = block_idx.x # Corresponds to grid.x
+    tile_row = block_idx.y # Tile id row
+    tile_col = block_idx.z # Tile id column
 
-    alias thread_row: UInt32 = thread_idx.y # Pixel row within tile #TODO: Double check this order!
-    alias thread_col: UInt32 = thread_idx.x # Pixel column within tile
-    alias thread_count: UInt32 = tile_size * tile_size
-    var thread_id: UInt32 = thread_row * tile_size + thread_col # Flat thread id within tile
+    thread_row = thread_idx.y # Pixel row within tile #TODO: Double check this order!
+    thread_col = thread_idx.x # Pixel column within tile
+    thread_count = tile_size * tile_size
+    thread_id = thread_row * tile_size + thread_col # Flat thread id within tile
 
     # var tile_id: UInt32 = block_row * tile_grid_width + block_col
-    var i: UInt32 = tile_row * tile_size + thread_row # Absolute image row
-    var j: UInt32 = tile_col * tile_size + thread_col # Absolute image column
+    i = tile_row * tile_size + thread_row # Absolute image row
+    j = tile_col * tile_size + thread_col # Absolute image column
 
-    var px: Float32 = j.cast[DType.float32]() + 0.5
-    var py: Float32 = i.cast[DType.float32]() + 0.5
-    var pix_id: UInt32 = i * image_width + j # Flat pixel index within the camera's image
+    px = Float32(j) + 0.5
+    py = Float32(i) + 0.5
+    # pix_id = i * image_width + j # Flat pixel index within the camera's image
 
     # Return if out of bounds
     var inside: Bool = (i < image_height) and (j < image_width)
     var done: Bool = not inside
 
-    # When the mask is provided, render the background color and return
-    # if this tile is labeled as False
-    if has_masks and inside:
-        # TODO: Masking
-        pass
-    
     # Have all threads in tile process the same gaussians in batches
     # First collect gaussians between range.x and range.y in batches
     # Which gaussians to look through in this tile
     var range_start = tile_ranges[camera_id, tile_row, tile_col, 0]
     var range_end = tile_ranges[camera_id, tile_row, tile_col, 1]
-    var num_batches: UInt32 = (range_end - range_start + thread_count - 1) / thread_count
+    var num_batches = (range_end - range_start + thread_count - 1) / thread_count
 
     # Pixel Transmittance
     var T: Float32 = 1.0
     # Pixel Color
-    var c: Vec3 = {0.0, 0.0, 0.0}
+    var c = SIMD[dtype, 3](0.0, 0.0, 0.0)
     var last_id: Int32 = -1
 
     # Collect gaussians in batches
@@ -108,49 +92,49 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
         var batch_start = range_start + thread_count * batch
         var idx = batch_start + thread_id
         if idx < range_end:
-            var g = flatten_ids[idx]
+            g = Int(flatten_ids[Int(idx)])
             sh_gaussian_ids[thread_id] = g
-            sh_means[thread_id] = means2d[g, :]
-            sh_conics[thread_id] = conics[g, :]
-            sh_opacities[thread_id] = opacities[g]
+            sh_means[thread_id] = means2d[camera_id, g]
+            sh_conics[thread_id] = conics[camera_id, g]
+            sh_opacities[thread_id] = opacities[camera_id, g]
 
-        # Wait for all threads to load gaussians
+        # Wait for all threads in block to load gaussians
         barrier()
 
         # Rasterize gaussians for this pixel
         # We iterate over the gaussians in the current batch
         var batch_size = min(thread_count, range_end - batch_start)
         for t in range(batch_size):
-            var g = sh_gaussian_ids[t]
-            var mean: Vec2 = sh_means[t]
-            var conic: Vec3 = sh_conics[t]
-            var opacity: Float32 = sh_opacities[t]
+            var g = Int(sh_gaussian_ids[t])
+            var mean = sh_means[t]
+            var conic = sh_conics[t]
+            var opacity = sh_opacities[t]
 
-            var delta: Vec2 = {mean[0] - px, mean[1] - py}
+            var delta = SIMD[dtype, 2](mean[0] - px, mean[1] - py)
             var sigma: Float32 = 0.5 * (conic[0] * delta[0] * delta[0] +
                                         conic[2] * delta[1] * delta[1]) +
                                         conic[1] * delta[0] * delta[1]
-            var alpha: Float32 = min(0.999, opacity * exp(-sigma))
+            var alpha = min(opacity * exp(-sigma), 0.999)
             if sigma < 0.0 or alpha < ALPHA_THRESHOLD:
                 continue
 
-            var next_T: Float32 = T * (1.0 - alpha)
+            var next_T = T * (1.0 - alpha)
             if next_T <= 1e-4:
                 done = True
                 break
 
-            var vis: Float32 = alpha * T
+            var vis = alpha * T
 
-            var c: Vec3 = colors[g, :]
+            var c = colors[camera_id, g] #TODO: check if faster loaded to shared memory
             c = c * vis
 
             T = next_T
             last_id = last_id + 1
 
     if inside:
-        render_colors[pix_id, :] = c
-        render_alphas[pix_id] = T
-        last_ids[pix_id] = last_id
+        render_colors[camera_id, i, j] = c
+        render_alphas[camera_id, i, j] = T
+        last_ids[camera_id, i, j] = last_id
             
 
 
