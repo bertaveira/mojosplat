@@ -17,10 +17,15 @@ alias dtype = DType.float32
 
 alias ALPHA_THRESHOLD = 1.0 / 255.0
 
-fn _rasterize_to_pixels_3dgs_fwd_kernel[
+alias Means3DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, 2)
+alias Conics3DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, 3)
+alias TileRanges4DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE, 2)
+
+fn rasterize_to_pixels_3dgs_fwd_kernel[
     tile_size: Int,
     tile_grid_width: Int,
     tile_grid_height: Int,
+    CDIM: Int, # Number of color channels
     # packed: Bool,
 ](
     # Constants - passed as arguments
@@ -30,23 +35,25 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
     image_width: UInt,
     image_height: UInt,
     # Inputs - Using placeholder LayoutTensors
-    means2d: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin],         # [C, N, 2] or [nnz, 2]
-    conics: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin],          # [C, N, 3] or [nnz, 3]
-    colors: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin],      # [C, N, CDIM] or [nnz, CDIM]
-    opacities: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin],   # [C, N] or [nnz]
+    means2d: LayoutTensor[dtype, Means3DLayout, MutableAnyOrigin],         # [C, N, 2]
+    conics: LayoutTensor[dtype, Conics3DLayout, MutableAnyOrigin],          # [C, N, 3]
+    colors: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin],      # [C, N, CDIM]
+    opacities: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin],   # [C, N]
     backgrounds: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin], # Optional [C, CDIM] - Handle optionality
     has_backgrounds: Bool,                      # Flag for optional backgrounds
-    tile_ranges: LayoutTensor[DType.int32, Dyn4DLayout, MutableAnyOrigin], # [C, tile_height, tile_width, 2]
+    tile_ranges: LayoutTensor[DType.int32, TileRanges4DLayout, MutableAnyOrigin], # [C, tile_height, tile_width, 2]
     flatten_ids: LayoutTensor[DType.int32, Dyn1DLayout, MutableAnyOrigin],  # [n_isects]
     # Outputs - Using placeholder LayoutTensors
     render_colors: LayoutTensor[dtype, Dyn4DLayout, MutableAnyOrigin], # [C, image_height, image_width, CDIM]
-    render_alphas: LayoutTensor[dtype, Dyn4DLayout, MutableAnyOrigin], # [C, image_height, image_width, 1]
+    render_alphas: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin], # [C, image_height, image_width]
     last_ids: LayoutTensor[DType.int32, Dyn3DLayout, MutableAnyOrigin],        # [C, image_height, image_width]
 ):
     sh_gaussian_ids = tb[DType.int32]().row_major[tile_size * tile_size]().shared().alloc()
     sh_means = tb[dtype]().row_major[tile_size * tile_size, 2]().shared().alloc()
     sh_conics = tb[dtype]().row_major[tile_size * tile_size, 3]().shared().alloc()
     sh_opacities = tb[dtype]().row_major[tile_size * tile_size]().shared().alloc()
+
+    alias FloatType = opacities.element_type
     
     # Get block and thread IDs
     camera_id = block_idx.x # Corresponds to grid.x
@@ -78,9 +85,12 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
     var num_batches = (range_end - range_start + thread_count - 1) / thread_count
 
     # Pixel Transmittance
-    var T: Float32 = 1.0
+    var T: FloatType = 1.0
     # Pixel Color
-    var c = SIMD[dtype, 3](0.0, 0.0, 0.0)
+    # var pix_out: SIMD[dtype, CDIM] = SIMD[dtype, CDIM](0.0)
+    var pix_out = tb[dtype]().row_major[CDIM]().alloc()
+    for c in range(CDIM):
+        pix_out[c] = 0.0
     var last_id: Int32 = -1
 
     # Collect gaussians in batches
@@ -108,10 +118,10 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
             var g = Int(sh_gaussian_ids[t])
             var mean = sh_means[t]
             var conic = sh_conics[t]
-            var opacity = sh_opacities[t]
+            var opacity: FloatType = sh_opacities[t]
 
             var delta = SIMD[dtype, 2](mean[0] - px, mean[1] - py)
-            var sigma: Float32 = 0.5 * (conic[0] * delta[0] * delta[0] +
+            var sigma: FloatType = 0.5 * (conic[0] * delta[0] * delta[0] +
                                         conic[2] * delta[1] * delta[1]) +
                                         conic[1] * delta[0] * delta[1]
             var alpha = min(opacity * exp(-sigma), 0.999)
@@ -125,14 +135,15 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
 
             var vis = alpha * T
 
-            var c = colors[camera_id, g] #TODO: check if faster loaded to shared memory
-            c = c * vis
+            for c in range(CDIM):
+                pix_out[c] += colors[camera_id, g, c] * vis
 
             T = next_T
             last_id = last_id + 1
 
     if inside:
-        render_colors[camera_id, i, j] = c
+        for c in range(CDIM):
+            render_colors[camera_id, i, j, c] = pix_out[c]
         render_alphas[camera_id, i, j] = T
         last_ids[camera_id, i, j] = last_id
             
@@ -142,90 +153,90 @@ fn _rasterize_to_pixels_3dgs_fwd_kernel[
 # MAX Engine Kernel Definition
 # --------------------------------------------------------------------------
 
-@compiler.register("rasterize_to_pixels_3dgs_fwd")
-struct RasterizeToPixels3DGSFwd:
-    @staticmethod
-    fn execute[
-        # The kind of device this will be run on: "cpu" or "gpu"
-        target: StaticString,
-        # Compile-time constants for the kernel
-        tile_size: Int,
-        CDIM: Int
-    ](
-        # Inputs
-        means2d: InputTensor[type=DType.float32, rank=2],        # [nnz, 2]
-        conics: InputTensor[type=DType.float32, rank=2],         # [nnz, 3]
-        colors: InputTensor[type=DType.float32, rank=2],         # [nnz, CDIM]
-        opacities: InputTensor[type=DType.float32, rank=1],      # [nnz]
-        backgrounds: InputTensor[type=DType.float32, rank=2],    # [C, CDIM]
-        masks: InputTensor[type=DType.bool, rank=3],             # [C, tile_h, tile_w]
-        tile_ranges: InputTensor[type=DType.int32, rank=4],      # [C, tile_h, tile_w, 2]
-        flatten_ids: InputTensor[type=DType.int32, rank=1],      # [n_isects]
-        # Outputs
-        render_colors: OutputTensor[type=DType.float32, rank=4], # [C, H, W, CDIM]
-        render_alphas: OutputTensor[type=DType.float32, rank=4], # [C, H, W, 1]
-        last_ids: OutputTensor[type=DType.int32, rank=3],        # [C, H, W]
-        # Runtime parameters (passed explicitly)
-        image_height: Int,
-        image_width: Int,
-        has_backgrounds: Bool, # Pass flags explicitly
-        has_masks: Bool,
-        # Context
-        ctx: DeviceContextPtr,
-    ) raises:
-        # Determine grid and block dimensions based on output image and tile size
-        var C = render_colors.dim_size(0) # Number of cameras
-        # Assuming image_height, image_width are passed correctly
-        var tile_grid_height = ceildiv(image_height, tile_size)
-        var tile_grid_width = ceildiv(image_width, tile_size)
+# @compiler.register("rasterize_to_pixels_3dgs_fwd")
+# struct RasterizeToPixels3DGSFwd:
+#     @staticmethod
+#     fn execute[
+#         # The kind of device this will be run on: "cpu" or "gpu"
+#         target: StaticString,
+#         # Compile-time constants for the kernel
+#         tile_size: Int,
+#         CDIM: Int
+#     ](
+#         # Inputs
+#         means2d: InputTensor[type=DType.float32, rank=2],        # [nnz, 2]
+#         conics: InputTensor[type=DType.float32, rank=2],         # [nnz, 3]
+#         colors: InputTensor[type=DType.float32, rank=2],         # [nnz, CDIM]
+#         opacities: InputTensor[type=DType.float32, rank=1],      # [nnz]
+#         backgrounds: InputTensor[type=DType.float32, rank=2],    # [C, CDIM]
+#         masks: InputTensor[type=DType.bool, rank=3],             # [C, tile_h, tile_w]
+#         tile_ranges: InputTensor[type=DType.int32, rank=4],      # [C, tile_h, tile_w, 2]
+#         flatten_ids: InputTensor[type=DType.int32, rank=1],      # [n_isects]
+#         # Outputs
+#         render_colors: OutputTensor[type=DType.float32, rank=4], # [C, H, W, CDIM]
+#         render_alphas: OutputTensor[type=DType.float32, rank=4], # [C, H, W, 1]
+#         last_ids: OutputTensor[type=DType.int32, rank=3],        # [C, H, W]
+#         # Runtime parameters (passed explicitly)
+#         image_height: Int,
+#         image_width: Int,
+#         has_backgrounds: Bool, # Pass flags explicitly
+#         has_masks: Bool,
+#         # Context
+#         ctx: DeviceContextPtr,
+#     ) raises:
+#         # Determine grid and block dimensions based on output image and tile size
+#         var C = render_colors.dim_size(0) # Number of cameras
+#         # Assuming image_height, image_width are passed correctly
+#         var tile_grid_height = ceildiv(image_height, tile_size)
+#         var tile_grid_width = ceildiv(image_width, tile_size)
 
-        # Check Tensor dimensions (optional but recommended)
-        # TODO: Add assertions for tensor shapes consistency
+#         # Check Tensor dimensions (optional but recommended)
+#         # TODO: Add assertions for tensor shapes consistency
 
-        # Dispatch based on target device
-        @parameter
-        if target == "cpu":
-            # TODO: Implement CPU version if needed
-             raise Error("Rasterize3DGS CPU target not implemented yet.")
-        elif target == "gpu":
-            # Get GPU context
-            var gpu_ctx = ctx.get_device_context()
+#         # Dispatch based on target device
+#         @parameter
+#         if target == "cpu":
+#             # TODO: Implement CPU version if needed
+#              raise Error("Rasterize3DGS CPU target not implemented yet.")
+#         elif target == "gpu":
+#             # Get GPU context
+#             var gpu_ctx = ctx.get_device_context()
 
-            # Define grid and block dimensions for the kernel launch
-            # Grid: (Num Cameras, Num Tiles Height, Num Tiles Width)
-            let grid = (C, tile_grid_height, tile_grid_width)
-            # Block: (Tile Width, Tile Height, 1) - Assuming tile_size x tile_size threads per tile
-            let block = (tile_size, tile_size, 1) # Note: thread_idx.x maps to tile width, thread_idx.y to height
+#             # Define grid and block dimensions for the kernel launch
+#             # Grid: (Num Cameras, Num Tiles Height, Num Tiles Width)
+#             let grid = (C, tile_grid_height, tile_grid_width)
+#             # Block: (Tile Width, Tile Height, 1) - Assuming tile_size x tile_size threads per tile
+#             let block = (tile_size, tile_size, 1) # Note: thread_idx.x maps to tile width, thread_idx.y to height
 
-            # Launch the GPU kernel
-            gpu_ctx.enqueue_function[
-                 rasterize_kernel[tile_size, CDIM, ALPHA_THRESHOLD] # Pass compile-time params
-            ](
-                # Pass runtime params
-                image_width.cast[DType.uint32](),
-                image_height.cast[DType.uint32](),
-                tile_grid_width,
-                tile_grid_height,
-                # Pass tensor slices (implicitly converted from Input/OutputTensor)
-                means2d,
-                conics,
-                colors,
-                opacities,
-                backgrounds,
-                has_backgrounds,
-                masks,
-                has_masks,
-                tile_ranges,
-                flatten_ids,
-                render_colors,
-                render_alphas,
-                last_ids,
-                # Grid and block dimensions
-                grid_dim=grid,
-                block_dim=block
-            )
-        else:
-            raise Error("Unsupported target:", target)
+#             # Launch the GPU kernel
+#             gpu_ctx.enqueue_function[
+#                  rasterize_kernel[tile_size, CDIM, ALPHA_THRESHOLD] # Pass compile-time params
+#             ](
+#                 # Pass runtime params
+#                 image_width.cast[DType.uint32](),
+#                 image_height.cast[DType.uint32](),
+#                 tile_grid_width,
+#                 tile_grid_height,
+#                 # Pass tensor slices (implicitly converted from Input/OutputTensor)
+#                 means2d,
+#                 conics,
+#                 colors,
+#                 opacities,
+#                 backgrounds,
+#                 has_backgrounds,
+#                 masks,
+#                 has_masks,
+#                 tile_ranges,
+#                 flatten_ids,
+#                 render_colors,
+#                 render_alphas,
+#                 last_ids,
+#                 # Grid and block dimensions
+#                 grid_dim=grid,
+#                 block_dim=block
+#             )
+#         else:
+#             raise Error("Unsupported target:", target)
 
 
  
