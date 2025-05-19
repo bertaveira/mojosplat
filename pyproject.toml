@@ -1,0 +1,9 @@
+[project]
+name = "mojosplat"
+version = "0.0.0"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["modular", "torch>=2.6.0", "pillow>=11.2.1, <12"]
+
+
+[tool.uv]

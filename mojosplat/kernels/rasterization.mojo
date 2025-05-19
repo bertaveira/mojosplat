@@ -7,6 +7,10 @@ from runtime.asyncrt import DeviceContextPtr
 from math import exp, ceildiv
 from sys import sizeof
 
+from python import Python, PythonObject
+from os import abort
+
+
 from tensor import InputTensor, OutputTensor, ManagedTensorSlice
 
 alias Dyn1DLayout = Layout.row_major(UNKNOWN_VALUE)
@@ -29,9 +33,6 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     # packed: Bool,
 ](
     # Constants - passed as arguments
-    C: UInt, # Number of cameras (aka batch size)
-    N: UInt, # Number of gaussians
-    n_isects: UInt, # Number of intersections
     image_width: UInt,
     image_height: UInt,
     # Inputs - Using placeholder LayoutTensors
@@ -45,8 +46,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     flatten_ids: LayoutTensor[DType.int32, Dyn1DLayout, MutableAnyOrigin],  # [n_isects]
     # Outputs - Using placeholder LayoutTensors
     render_colors: LayoutTensor[dtype, Dyn4DLayout, MutableAnyOrigin], # [C, image_height, image_width, CDIM]
-    render_alphas: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin], # [C, image_height, image_width]
-    last_ids: LayoutTensor[DType.int32, Dyn3DLayout, MutableAnyOrigin],        # [C, image_height, image_width]
+    # render_alphas: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin], # [C, image_height, image_width]
 ):
     sh_gaussian_ids = tb[DType.int32]().row_major[tile_size * tile_size]().shared().alloc()
     sh_means = tb[dtype]().row_major[tile_size * tile_size, 2]().shared().alloc()
@@ -144,8 +144,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     if inside:
         for c in range(CDIM):
             render_colors[camera_id, i, j, c] = pix_out[c]
-        render_alphas[camera_id, i, j] = T
-        last_ids[camera_id, i, j] = last_id
+        # render_alphas[camera_id, i, j] = T
             
 
 
@@ -153,7 +152,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
 # MAX Engine Kernel Definition
 # --------------------------------------------------------------------------
 
-@compiler.register("rasterize_to_pixels_3dgs_fwd")
+@compiler.register("modular_ops::rasterize_to_pixels_3dgs_fwd")
 struct RasterizeToPixels3DGSFwd:
     @staticmethod
     fn execute[
@@ -165,15 +164,13 @@ struct RasterizeToPixels3DGSFwd:
     ](
         # Outputs
         render_colors: OutputTensor[type=DType.float32, rank=4],
-        render_alphas: OutputTensor[type=DType.float32, rank=4],
-        last_ids: OutputTensor[type=DType.int32, rank=3],
+        # render_alphas: OutputTensor[type=DType.float32, rank=4],
         # Inputs
         means2d: InputTensor[type=DType.float32, rank=3],
         conics: InputTensor[type=DType.float32, rank=3],
         colors: InputTensor[type=DType.float32, rank=3],
         opacities: InputTensor[type=DType.float32, rank=2],
         backgrounds: InputTensor[type=DType.float32, rank=2],
-        has_backgrounds: Bool,
         tile_ranges: InputTensor[type=DType.int32, rank=4],
         flatten_ids: InputTensor[type=DType.int32, rank=1],
         # Context
@@ -184,6 +181,8 @@ struct RasterizeToPixels3DGSFwd:
         alias tile_grid_height = ceildiv(image_height, tile_size)
         alias tile_grid_width = ceildiv(image_width, tile_size)
 
+        has_backgrounds = False
+
         means2d_tensor = means2d.to_layout_tensor()
         conics_tensor = conics.to_layout_tensor()
         colors_tensor = colors.to_layout_tensor()
@@ -192,8 +191,7 @@ struct RasterizeToPixels3DGSFwd:
         tile_ranges_tensor = tile_ranges.to_layout_tensor()
 
         render_colors_tensor = render_colors.to_layout_tensor()
-        render_alphas_tensor = render_alphas.to_layout_tensor()
-        last_ids_tensor = last_ids.to_layout_tensor()
+        # render_alphas_tensor = render_alphas.to_layout_tensor()
 
         @parameter
         if target == "cpu":
@@ -211,9 +209,7 @@ struct RasterizeToPixels3DGSFwd:
                     tile_size, tile_grid_width, tile_grid_height, CDIM
                 ]
             ](
-                render_colors_tensor,
-                render_alphas_tensor,
-                last_ids_tensor,
+                image_width, image_height,
                 means2d_tensor,
                 conics_tensor,
                 colors_tensor,
@@ -222,9 +218,47 @@ struct RasterizeToPixels3DGSFwd:
                 has_backgrounds,
                 tile_ranges_tensor,
                 flatten_ids,
+                render_colors_tensor,
+                # render_alphas_tensor,
                 grid_dim=grid,
                 block_dim=block,
             )
 
         else:
             raise Error("Unsupported target:", target)
+
+    @staticmethod
+    fn _fallback_impl(
+        torch: PythonObject,
+        means2d: PythonObject,
+        conics: PythonObject,
+        colors: PythonObject,
+        opacities: PythonObject,
+        backgrounds: PythonObject,
+        tile_ranges: PythonObject,
+        flatten_ids: PythonObject,
+    ) -> PythonObject:
+        var cpython = Python().cpython()
+        var state = cpython.PyGILState_Ensure()
+        try:
+            cpython.check_init_error()
+            return colors
+        except e:
+            abort(e)
+        finally:
+            cpython.PyGILState_Release(state)
+        return None
+
+    @staticmethod
+    fn pytorch_fallback(
+        torch: PythonObject,
+        means2d: PythonObject,
+        conics: PythonObject,
+        colors: PythonObject,
+        opacities: PythonObject,
+        backgrounds: PythonObject,
+        tile_ranges: PythonObject,
+        flatten_ids: PythonObject,
+    ) -> PythonObject:
+        return RasterizeToPixels3DGSFwd._fallback_impl(torch, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids)
+
