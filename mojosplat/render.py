@@ -96,6 +96,16 @@ def render_gaussians(
     #     background_color=background_color_tensor,
     #     tile_size=tile_size,
     # )
+    means2d = means2d.unsqueeze(0)
+    covs2d = covs2d.unsqueeze(0)
+    colors = colors.unsqueeze(0)
+    projected_opacities = projected_opacities.unsqueeze(0)
+    background_color_tensor = background_color_tensor.unsqueeze(0)
+    tile_ranges = tile_ranges.unsqueeze(0)
+    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)
+    print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, projected_opacities: {projected_opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
+
+    template = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=colors.dtype)
     final_image = torch.ops.modular_ops.rasterize_to_pixels_3dgs_fwd(
         means2d,
         covs2d,
@@ -104,6 +114,7 @@ def render_gaussians(
         background_color_tensor,
         tile_ranges,
         sorted_gaussian_indices,
+        template,
         mojo_parameters={
             "tile_size": tile_size,
             "image_height": camera.H,
@@ -111,6 +122,9 @@ def render_gaussians(
             "CDIM": num_channels,
         }
     )
+
+    print(f"final_image: {final_image.shape}")
+    print(f"max_val: {final_image.max()}")
 
     # --- 6. Blending (Removed - Done in rasterizer) ---
     # final_image = alpha_blend(rasterized_output, camera)

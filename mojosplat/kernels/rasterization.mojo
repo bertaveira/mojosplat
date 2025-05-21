@@ -30,6 +30,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     tile_grid_width: Int,
     tile_grid_height: Int,
     CDIM: Int, # Number of color channels
+    out_layout: Layout,
     # packed: Bool,
 ](
     # Constants - passed as arguments
@@ -43,9 +44,9 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     backgrounds: LayoutTensor[dtype, Dyn2DLayout, MutableAnyOrigin], # Optional [C, CDIM] - Handle optionality
     has_backgrounds: Bool,                      # Flag for optional backgrounds
     tile_ranges: LayoutTensor[DType.int32, TileRanges4DLayout, MutableAnyOrigin], # [C, tile_height, tile_width, 2]
-    flatten_ids: LayoutTensor[DType.int32, Dyn1DLayout, MutableAnyOrigin],  # [n_isects]
+    flatten_ids: LayoutTensor[DType.int32, Dyn2DLayout, MutableAnyOrigin],  # [C, n_isects]
     # Outputs - Using placeholder LayoutTensors
-    render_colors: LayoutTensor[dtype, Dyn4DLayout, MutableAnyOrigin], # [C, image_height, image_width, CDIM]
+    render_colors: LayoutTensor[dtype, out_layout, MutableAnyOrigin], # [C, image_height, image_width, CDIM]
     # render_alphas: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin], # [C, image_height, image_width]
 ):
     sh_gaussian_ids = tb[DType.int32]().row_major[tile_size * tile_size]().shared().alloc()
@@ -102,7 +103,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
         var batch_start = range_start + thread_count * batch
         var idx = batch_start + thread_id
         if idx < range_end:
-            g = Int(flatten_ids[Int(idx)])
+            g = Int(flatten_ids[camera_id, Int(idx)])
             sh_gaussian_ids[thread_id] = g
             sh_means[thread_id] = means2d[camera_id, g]
             sh_conics[thread_id] = conics[camera_id, g]
@@ -160,7 +161,7 @@ struct RasterizeToPixels3DGSFwd:
         tile_size: Int,
         image_height: Int,
         image_width: Int,
-        CDIM: Int
+        CDIM: Int,
     ](
         # Outputs
         render_colors: OutputTensor[type=DType.float32, rank=4],
@@ -172,7 +173,8 @@ struct RasterizeToPixels3DGSFwd:
         opacities: InputTensor[type=DType.float32, rank=2],
         backgrounds: InputTensor[type=DType.float32, rank=2],
         tile_ranges: InputTensor[type=DType.int32, rank=4],
-        flatten_ids: InputTensor[type=DType.int32, rank=1],
+        flatten_ids: InputTensor[type=DType.int32, rank=2],
+        template: InputTensor[type=DType.float32, rank=4],
         # Context
         ctx: DeviceContextPtr
     ) raises:
@@ -189,6 +191,7 @@ struct RasterizeToPixels3DGSFwd:
         opacities_tensor = opacities.to_layout_tensor()
         backgrounds_tensor = backgrounds.to_layout_tensor()
         tile_ranges_tensor = tile_ranges.to_layout_tensor()
+        flatten_ids_tensor = flatten_ids.to_layout_tensor()
 
         render_colors_tensor = render_colors.to_layout_tensor()
         # render_alphas_tensor = render_alphas.to_layout_tensor()
@@ -206,7 +209,7 @@ struct RasterizeToPixels3DGSFwd:
 
             gpu_ctx.enqueue_function[
                 rasterize_to_pixels_3dgs_fwd_kernel[
-                    tile_size, tile_grid_width, tile_grid_height, CDIM
+                    tile_size, tile_grid_width, tile_grid_height, CDIM, render_colors_tensor.layout
                 ]
             ](
                 image_width, image_height,
@@ -217,7 +220,7 @@ struct RasterizeToPixels3DGSFwd:
                 backgrounds_tensor,
                 has_backgrounds,
                 tile_ranges_tensor,
-                flatten_ids,
+                flatten_ids_tensor,
                 render_colors_tensor,
                 # render_alphas_tensor,
                 grid_dim=grid,
@@ -237,12 +240,13 @@ struct RasterizeToPixels3DGSFwd:
         backgrounds: PythonObject,
         tile_ranges: PythonObject,
         flatten_ids: PythonObject,
+        template: PythonObject,
     ) -> PythonObject:
         var cpython = Python().cpython()
         var state = cpython.PyGILState_Ensure()
         try:
             cpython.check_init_error()
-            return colors
+            return template 
         except e:
             abort(e)
         finally:
@@ -259,6 +263,7 @@ struct RasterizeToPixels3DGSFwd:
         backgrounds: PythonObject,
         tile_ranges: PythonObject,
         flatten_ids: PythonObject,
+        template: PythonObject,
     ) -> PythonObject:
-        return RasterizeToPixels3DGSFwd._fallback_impl(torch, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids)
+        return RasterizeToPixels3DGSFwd._fallback_impl(torch, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids, template)
 
