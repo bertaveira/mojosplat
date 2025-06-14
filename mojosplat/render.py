@@ -1,15 +1,8 @@
 
-import os
-import sys
-import sysconfig
-import max.torch as mtorch
 from pathlib import Path
 import torch
-import numpy as np
-import math
 
-from max import engine
-from max.driver import Accelerator
+from max.torch import CustomOpLibrary
 
 from .projection import Camera, project_gaussians
 from .binning import bin_gaussians_to_tiles
@@ -18,12 +11,48 @@ TILE_SIZE = 16
 
 # Register Mojo kernels in Torch
 mojo_kernels = Path(__file__).parent / "kernels"
-inference_session = engine.InferenceSession(
-    devices=[Accelerator()],
-    custom_extensions=[mojo_kernels],
-)
-with torch.no_grad():
-    mtorch.register_custom_ops(inference_session)
+op_library = CustomOpLibrary(mojo_kernels)
+# rasterize_to_pixels_3dgs_fwd_kernel = op_library.rasterize_to_pixels_3dgs_fwd[
+#     {
+#         "tile_size": TILE_SIZE,
+#         "image_height": 512,
+#         "image_width": 512,
+#         "CDIM": 3,
+#         "C": 1,
+#         "N": 1,
+#         "NIntersections": 1,
+#         "image_width": 512,
+#         "image_height": 512,
+#     }
+# ]
+
+def rasterize_to_pixels_3dgs_fwd(
+    means2d: torch.Tensor,
+    covs2d: torch.Tensor,
+    colors: torch.Tensor,
+    projected_opacities: torch.Tensor,
+    background_color_tensor: torch.Tensor,
+    tile_ranges: torch.Tensor,
+    sorted_gaussian_indices: torch.Tensor,
+    camera: Camera,
+    num_channels: int,
+) -> torch.Tensor:
+    result = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=means2d.dtype)
+    rasterize_to_pixels_3dgs_fwd_kernel = op_library.rasterize_to_pixels_3dgs_fwd[
+        {
+            "tile_size": TILE_SIZE,
+            "image_height": camera.H,
+            "image_width": camera.W,
+            "CDIM": 3,
+            "C": 1,
+            "N": means2d.shape[1],
+            "NIntersections": sorted_gaussian_indices.shape[1],
+        }
+    ]
+    rasterize_to_pixels_3dgs_fwd_kernel(result, means2d, covs2d, colors, projected_opacities, background_color_tensor, tile_ranges, sorted_gaussian_indices)
+
+    print("Back in python")
+    return result
 
 @torch.no_grad()
 def render_gaussians(
@@ -105,8 +134,7 @@ def render_gaussians(
     sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)
     print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, projected_opacities: {projected_opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
 
-    template = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=colors.dtype)
-    final_image = torch.ops.modular_ops.rasterize_to_pixels_3dgs_fwd(
+    final_image = rasterize_to_pixels_3dgs_fwd(
         means2d,
         covs2d,
         colors,
@@ -114,15 +142,10 @@ def render_gaussians(
         background_color_tensor,
         tile_ranges,
         sorted_gaussian_indices,
-        template,
-        mojo_parameters={
-            "tile_size": tile_size,
-            "image_height": camera.H,
-            "image_width": camera.W,
-            "CDIM": num_channels,
-        }
+        camera,
+        num_channels,
     )
-
+    print("Done")
     print(f"final_image: {final_image.shape}")
     print(f"max_val: {final_image.max()}")
 

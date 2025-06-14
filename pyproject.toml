@@ -3,7 +3,13 @@ name = "mojosplat"
 version = "0.0.0"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["modular", "torch>=2.6.0", "pillow>=11.2.1, <12"]
+dependencies = [
+    "torch>=2.6.0",
+    "pillow>=11.2.1, <12",
+    "modular>=25.4.0.dev2025061222",
+]
 
 
 [tool.uv]
+[[tool.uv.index]]
+url = "https://dl.modular.com/public/nightly/python/simple/"

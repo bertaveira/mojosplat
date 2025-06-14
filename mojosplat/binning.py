@@ -157,5 +157,6 @@ def bin_gaussians_to_tiles(
 
     # Create tile_ranges (n_tiles, 2) for easier kernel access
     tile_ranges = torch.stack([tile_pointers[:-1], tile_pointers[1:]], dim=-1)
+    tile_ranges = tile_ranges.view(n_tiles_h, n_tiles_w, 2)
 
     return sorted_gaussian_indices, tile_pointers, tile_ranges 
