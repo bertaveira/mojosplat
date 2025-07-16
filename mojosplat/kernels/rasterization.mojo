@@ -86,8 +86,6 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     range_end = tile_ranges[camera_id, tile_row, tile_col, 1]
     num_batches = (range_end - range_start + thread_count - 1) / thread_count
 
-    print("ola")
-
     # Pixel Transmittance
     var T: FloatType = 1.0
     # Pixel Color
@@ -106,11 +104,27 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
         # Each thread loads one gaussian from front to back
         var batch_start = range_start + thread_count * batch
         var idx = batch_start + thread_id
+        
+        # Add comprehensive bounds checking
         if idx < range_end:
+            # Check idx bounds for flatten_ids access
+            if Int(idx) >= flatten_ids.dim[1]() or Int(idx) < 0:
+                # print("ERROR: idx out of bounds for flatten_ids... idx:", idx, "flatten_ids.dim[1]():", flatten_ids.dim[1](), "camera_id:", camera_id)
+                # print("  batch:", batch, "thread_id:", thread_id, "thread_count:", thread_count, "range_start:", range_start, "range_end:", range_end)
+                return  # Early return instead of continue
+                
             g = Int(flatten_ids[camera_id, Int(idx)])
+            if g < 0 or g >= N:
+                print("ERROR: g < 0 or g >= N... g:", g, "N:", N, "camera_id:", camera_id, "idx:", idx)
+                return  # Early return instead of continue
+                
             sh_gaussian_ids[thread_id] = g
-            sh_means[thread_id] = means2d[camera_id, g]
-            sh_conics[thread_id] = conics[camera_id, g]
+            # Copy individual elements instead of assigning tensor slices
+            sh_means[thread_id, 0] = means2d[camera_id, g, 0]
+            sh_means[thread_id, 1] = means2d[camera_id, g, 1]
+            sh_conics[thread_id, 0] = conics[camera_id, g, 0]
+            sh_conics[thread_id, 1] = conics[camera_id, g, 1]
+            sh_conics[thread_id, 2] = conics[camera_id, g, 2]
             sh_opacities[thread_id] = opacities[camera_id, g]
 
         # Wait for all threads in block to load gaussians
@@ -122,14 +136,19 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
             var batch_size = min(thread_count, range_end - batch_start)
             for t in range(batch_size):
                 var g = Int(sh_gaussian_ids[t])
-                var mean = sh_means[t]
-                var conic = sh_conics[t]
+                # Access 2D tensor elements individually instead of getting row slices
+                var mean_x: FloatType = sh_means[t, 0]
+                var mean_y: FloatType = sh_means[t, 1]
+                var conic_xx: FloatType = sh_conics[t, 0]
+                var conic_xy: FloatType = sh_conics[t, 1]
+                var conic_yy: FloatType = sh_conics[t, 2]
                 var opacity: FloatType = sh_opacities[t]
 
-                var delta = SIMD[dtype, 2](mean[0] - px, mean[1] - py)
-                var sigma: FloatType = 0.5 * (conic[0] * delta[0] * delta[0] +
-                                            conic[2] * delta[1] * delta[1]) +
-                                            conic[1] * delta[0] * delta[1]
+                var delta_x = mean_x - px
+                var delta_y = mean_y - py
+                var sigma: FloatType = 0.5 * (conic_xx * delta_x * delta_x +
+                                            conic_yy * delta_y * delta_y) +
+                                            conic_xy * delta_x * delta_y
                 var alpha = min(opacity * exp(-sigma), 0.999)
                 if sigma < 0.0 or alpha < ALPHA_THRESHOLD:
                     continue

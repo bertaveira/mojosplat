@@ -62,7 +62,6 @@ def render_gaussians(
     opacities: torch.Tensor, # (N, 1) Opacity features (often pre-activation)
     features: torch.Tensor, # (N, C) Color features (e.g., RGB or SH coefficients)
     camera: Camera, # Camera object with intrinsics/extrinsics, H, W, near, far
-    backend: str = "triton",
     # Optional args
     sh_degree: int | None = None, # Degree of Spherical Harmonics if used
     background_color: torch.Tensor | None = None, # (C,) Background color
@@ -72,7 +71,6 @@ def render_gaussians(
 
     Orchestrates projection, rasterization, and blending.
     """
-    assert backend == "triton", "Only Triton backend is supported for now."
     required_tensors = [means3d, scales, rotations, opacities, features]
     if not all(isinstance(t, torch.Tensor) and t.is_cuda for t in required_tensors):
         raise ValueError("All input gaussian tensors must be CUDA tensors.")
@@ -125,13 +123,13 @@ def render_gaussians(
     #     background_color=background_color_tensor,
     #     tile_size=tile_size,
     # )
-    means2d = means2d.unsqueeze(0)
-    covs2d = covs2d.unsqueeze(0)
-    colors = colors.unsqueeze(0)
-    projected_opacities = projected_opacities.unsqueeze(0)
-    background_color_tensor = background_color_tensor.unsqueeze(0)
-    tile_ranges = tile_ranges.unsqueeze(0)
-    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)
+    means2d = means2d.unsqueeze(0).contiguous()
+    covs2d = covs2d.unsqueeze(0).contiguous()
+    colors = colors.unsqueeze(0).contiguous()
+    projected_opacities = projected_opacities.unsqueeze(0).contiguous()
+    background_color_tensor = background_color_tensor.unsqueeze(0).contiguous()
+    tile_ranges = tile_ranges.unsqueeze(0).to(torch.int32).contiguous()
+    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0).to(torch.int32).contiguous()
     print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, projected_opacities: {projected_opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
 
     final_image = rasterize_to_pixels_3dgs_fwd(

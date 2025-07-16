@@ -63,7 +63,7 @@ def main():
     view_matrix = look_at(cam_pos, cam_target, cam_up)
 
     # Approximate perspective projection
-    focal_length = 300.0 # Adjust for zoom
+    focal_length = 80.0 # Adjust for zoom FIXME: 30 causes weird squares to appear
     fx = focal_length
     fy = focal_length
     cx = img_width / 2.0
@@ -131,7 +131,7 @@ def main():
     # --- Save Output ---
     print(f"Saving image to {output_path}...")
     # Convert from torch tensor (H, W, C) on GPU to numpy array (H, W, C) on CPU
-    output_image_np = (rendered_image.cpu().numpy() * 255).astype(np.uint8)
+    output_image_np = (rendered_image.cpu().numpy() * 255).astype(np.uint8)[0]
     
     # Create PIL image and save
     pil_image = Image.fromarray(output_image_np)
