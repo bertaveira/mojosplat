@@ -232,20 +232,6 @@ struct RasterizeToPixels3DGSFwd:
             var grid = (C, tile_grid_height, tile_grid_width)
             var block = (tile_size, tile_size, 1)
 
-            print("lets clear memory")
-
-            gpu_ctx.enqueue_memset(
-                DeviceBuffer[render_colors.dtype](
-                    gpu_ctx,
-                    rebind[UnsafePointer[Scalar[render_colors.dtype]]](render_colors_tensor.ptr),
-                    render_colors.dim_size(0) * render_colors.dim_size(1) * render_colors.dim_size(2) * render_colors.dim_size(3),
-                    owning=False,
-                ),
-                0,
-            )
-
-            print("lets run the kernel")
-
             gpu_ctx.enqueue_function[
                 rasterize_to_pixels_3dgs_fwd_kernel[
                     tile_size, tile_grid_width, tile_grid_height, CDIM, C, N, NIntersections, image_width, image_height
@@ -264,8 +250,6 @@ struct RasterizeToPixels3DGSFwd:
                 grid_dim=grid,
                 block_dim=block,
             )
-
-            print("Finished running the kernel!")
 
         else:
             raise Error("Unsupported target:", target)
