@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.6.0",
     "pillow>=11.2.1, <12",
-    "modular>=25.4.0.dev2025061222",
+    "modular==25.5.0.dev2025071605",
 ]
 
 

@@ -232,7 +232,6 @@ struct RasterizeToPixels3DGSFwd:
                     tile_size, tile_grid_width, tile_grid_height, CDIM, C, N, NIntersections, image_width, image_height
                 ]
             ](
-                image_width, image_height,
                 means2d_tensor,
                 conics_tensor,
                 colors_tensor,
