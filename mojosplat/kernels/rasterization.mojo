@@ -92,7 +92,10 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     # var pix_out: SIMD[dtype, CDIM] = SIMD[dtype, CDIM](0.0)
     var pix_out = tb[dtype]().row_major[CDIM]().alloc()
     for c in range(CDIM):
-        pix_out[c] = 0.0
+        if has_backgrounds:
+            pix_out[c] = backgrounds[camera_id, c]
+        else:
+            pix_out[c] = 0.0
     var last_id: Int32 = -1
 
 
@@ -208,7 +211,7 @@ struct RasterizeToPixels3DGSFwd:
         alias tile_grid_height = ceildiv(image_height, tile_size)
         alias tile_grid_width = ceildiv(image_width, tile_size)
 
-        has_backgrounds = False
+        has_backgrounds = True #FIXME: when mojo fix it, accept this bool as argument
 
         means2d_tensor = means2d.to_layout_tensor()
         conics_tensor = conics.to_layout_tensor()
