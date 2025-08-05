@@ -122,7 +122,7 @@ def project_gaussians_torch(
     # --- 2. Project to Pixels ---
     z_proj = torch.clamp(z, max=-1e-6) # Ensure z is negative and non-zero
 
-    means_cam_proj = means_cam @ camera.K.T
+    means_cam_proj = means_cam @ camera.Ks.transpose(0, 1)
     # Use z_proj for division
     means2d_x = means_cam_proj[:, 0] / z_proj
     means2d_y = means_cam_proj[:, 1] / z_proj
@@ -180,23 +180,31 @@ def project_gaussians_gsplat(
     """Projects 3D Gaussians to 2D image plane."""
     from gsplat import fully_fused_projection
 
+    view_matrix = camera.view_matrix.unsqueeze(0).unsqueeze(0)
+    Ks = camera.Ks.unsqueeze(0).unsqueeze(0)
+
+    means3d = means3d.unsqueeze(0)
+    scales = scales.unsqueeze(0)
+    quats = quats.unsqueeze(0)
+    opacities = opacities.unsqueeze(0).view(1, -1)
+
     proj_results = fully_fused_projection(
         means3d,
         None,
         quats,
         scales,
-        camera.view_matrix,
-        camera.Ks,
+        view_matrix,
+        Ks,
         camera.W,
         camera.H,
         packed=False,
-        camera_model="fisheye",
+        # camera_model="pinhole",
         opacities=opacities,  # use opacities to compute a tigher bound for radii.
     )
 
-    radii, means2d, depths, conics = proj_results
+    radii, means2d, depths, conics, _ = proj_results
 
-    return means2d, conics, depths, opacities, radii
+    return means2d, conics, depths, radii
 
 
 
@@ -230,6 +238,14 @@ def project_gaussians_mojo(
     depth = torch.zeros((1, means3d.shape[0], 1))
     radii = torch.zeros((1, means3d.shape[0], 1))
 
-    project_gaussians_kernel(means2d, conics, depth, radii, means3d, scales, quats, opacities, camera.view_matrix, camera.Ks)
+    view_matrix = camera.view_matrix.unsqueeze(0).unsqueeze(0)
+    Ks = camera.Ks.unsqueeze(0).unsqueeze(0)
+
+    means3d = means3d.unsqueeze(0)
+    scales = scales.unsqueeze(0)
+    quats = quats.unsqueeze(0)
+    opacities = opacities.unsqueeze(0).view(1, -1)
+
+    project_gaussians_kernel(means2d, conics, depth, radii, means3d, scales, quats, opacities, view_matrix, Ks)
 
     return means2d, conics, depth, radii
