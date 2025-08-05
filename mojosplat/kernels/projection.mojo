@@ -392,3 +392,5 @@ struct ProjectGaussians:
                 grid_dim=grid,
                 block_dim=block,
             )
+
+            gpu_ctx.synchronize()
