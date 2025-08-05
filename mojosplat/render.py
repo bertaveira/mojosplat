@@ -58,7 +58,7 @@ def rasterize_to_pixels_3dgs_fwd(
 def render_gaussians(
     means3d: torch.Tensor, # (N, 3) World coordinates
     scales: torch.Tensor, # (N, 3) Scale factors (log-space)
-    rotations: torch.Tensor, # (N, 4) Quaternions for orientation (w, x, y, z)
+    quats: torch.Tensor, # (N, 4) Quaternions for orientation (w, x, y, z)
     opacities: torch.Tensor, # (N, 1) Opacity features (often pre-activation)
     features: torch.Tensor, # (N, C) Color features (e.g., RGB or SH coefficients)
     camera: Camera, # Camera object with intrinsics/extrinsics, H, W, near, far
@@ -71,7 +71,7 @@ def render_gaussians(
 
     Orchestrates projection, rasterization, and blending.
     """
-    required_tensors = [means3d, scales, rotations, opacities, features]
+    required_tensors = [means3d, scales, quats, opacities, features]
     if not all(isinstance(t, torch.Tensor) and t.is_cuda for t in required_tensors):
         raise ValueError("All input gaussian tensors must be CUDA tensors.")
 
@@ -88,8 +88,8 @@ def render_gaussians(
          raise ValueError(f"Background color channels ({background_color_tensor.shape[0]}) must match gaussian color channels ({num_channels})")
 
     # --- 1. Projection ---
-    means2d, covs2d, depths, projected_opacities, radii = project_gaussians(
-        means3d, scales, rotations, opacities, camera
+    means2d, covs2d, depths, radii = project_gaussians(
+        means3d, scales, quats, opacities, camera, backend="gsplat"
     )
 
     # --- 2. Binning & Sorting ---
@@ -126,17 +126,16 @@ def render_gaussians(
     means2d = means2d.unsqueeze(0).contiguous()
     covs2d = covs2d.unsqueeze(0).contiguous()
     colors = colors.unsqueeze(0).contiguous()
-    projected_opacities = projected_opacities.unsqueeze(0).contiguous()
     background_color_tensor = background_color_tensor.unsqueeze(0).contiguous()
     tile_ranges = tile_ranges.unsqueeze(0).to(torch.int32).contiguous()
     sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0).to(torch.int32).contiguous()
-    print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, projected_opacities: {projected_opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
+    print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, opacities: {opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
 
     final_image = rasterize_to_pixels_3dgs_fwd(
         means2d,
         covs2d,
         colors,
-        projected_opacities,
+        opacities,
         background_color_tensor,
         tile_ranges,
         sorted_gaussian_indices,

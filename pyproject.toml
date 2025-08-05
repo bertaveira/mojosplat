@@ -1,3 +1,7 @@
+[build-system]
+requires = ['setuptools']
+build-backend = 'setuptools.build_meta'
+
 [project]
 name = "mojosplat"
 version = "0.0.0"
@@ -6,10 +10,16 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.6.0",
     "pillow>=11.2.1, <12",
-    "modular==25.5.0.dev2025071605",
+    "modular==25.5.0.dev2025072105",
+    "pytest>=8.4.1",
+    "gsplat@git+https://github.com/bertaveira/gsplat.git",
 ]
 
 
 [tool.uv]
 [[tool.uv.index]]
 url = "https://dl.modular.com/public/nightly/python/simple/"
+
+
+[tool.setuptools]
+packages = ["mojosplat"]

@@ -327,13 +327,14 @@ struct ProjectGaussians:
     fn execute[
         C: Int,
         N: Int,
+        image_width: Int,
+        image_height: Int,
         target: StaticString,
     ](
         # Outputs
         means2d: OutputTensor[dtype=DType.float32, rank=3],
         conics: OutputTensor[dtype=DType.float32, rank=3],
-        depths: OutputTensor[dtype=DType.float32, rank=2],
-        projected_opacities: OutputTensor[dtype=DType.float32, rank=2],
+        depths: OutputTensor[dtype=DType.float32, rank=3],
         radii: OutputTensor[dtype=DType.int32, rank=3],
         # Inputs
         means3d: InputTensor[dtype=DType.float32, rank=3],
@@ -342,8 +343,6 @@ struct ProjectGaussians:
         opacities: InputTensor[dtype=DType.float32, rank=2],
         view_matrices: InputTensor[dtype=DType.float32, rank=4],
         ks: InputTensor[dtype=DType.float32, rank=2],
-        image_width: Int,
-        image_height: Int,
         # Context
         ctx: DeviceContextPtr
     ) raises:
@@ -351,7 +350,6 @@ struct ProjectGaussians:
         means2d_tensor = means2d.to_layout_tensor()
         conics_tensor = conics.to_layout_tensor()
         depths_tensor = depths.to_layout_tensor()
-        projected_opacities_tensor = projected_opacities.to_layout_tensor()
         radii_tensor = radii.to_layout_tensor()
 
         # Inputs
