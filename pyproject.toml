@@ -10,15 +10,16 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.6.0",
     "pillow>=11.2.1, <12",
-    "modular==25.5.0.dev2025072105",
+    "modular==25.5.0",
     "pytest>=8.4.1",
     "gsplat@git+https://github.com/bertaveira/gsplat.git",
+    "matplotlib>=3.10.5",
 ]
 
 
-[tool.uv]
-[[tool.uv.index]]
-url = "https://dl.modular.com/public/nightly/python/simple/"
+# [tool.uv]
+# [[tool.uv.index]]
+# url = "https://dl.modular.com/public/nightly/python/simple/"
 
 
 [tool.setuptools]

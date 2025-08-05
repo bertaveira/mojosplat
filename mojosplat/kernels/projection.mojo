@@ -291,7 +291,7 @@ fn project_ewa_kernel[
     radii[camera_idx, gaussian_idx, 1] = Int(radius_y)
     means2d[camera_idx, gaussian_idx, 0] = mean2d[0]
     means2d[camera_idx, gaussian_idx, 1] = mean2d[1]
-    depths[camera_idx, gaussian_idx] = mean_c[2][0]
+    depths[camera_idx, gaussian_idx] = -mean_c[2][0]  # Depth is positive distance along viewing direction?
 
     if radius_x <= radius_clip and radius_y <= radius_clip:
         radii[camera_idx, gaussian_idx, 0] = 0
@@ -337,11 +337,11 @@ struct ProjectGaussians:
         depths: OutputTensor[dtype=DType.float32, rank=2],
         radii: OutputTensor[dtype=DType.int32, rank=3],
         # Inputs
-        means3d: InputTensor[dtype=DType.float32, rank=3],
-        scales: InputTensor[dtype=DType.float32, rank=3],
-        quats: InputTensor[dtype=DType.float32, rank=3],
-        opacities: InputTensor[dtype=DType.float32, rank=2],
-        view_matrices: InputTensor[dtype=DType.float32, rank=4],
+        means3d: InputTensor[dtype=DType.float32, rank=2],
+        scales: InputTensor[dtype=DType.float32, rank=2],
+        quats: InputTensor[dtype=DType.float32, rank=2],
+        opacities: InputTensor[dtype=DType.float32, rank=1],
+        view_matrices: InputTensor[dtype=DType.float32, rank=3],
         ks: InputTensor[dtype=DType.float32, rank=2],
         # Context
         ctx: DeviceContextPtr
