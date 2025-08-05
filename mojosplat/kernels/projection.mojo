@@ -100,7 +100,7 @@ alias block_size: Int = 256
 #             output[i, j] = 0.0
 #             for k in range(3):
 #                 output[i, j] += M[i, k] * M[j, k]  # M[j, k] is M^T[k, j]
-    
+
 
 fn project_ewa_kernel[
     C: Int,
@@ -304,14 +304,21 @@ fn project_ewa_kernel[
         return
     
     ########### Conic calculation ###########
-    # TODO: Implement conic calculation!!!!
-    var conic_x: Float32 = 0.0
-    var conic_y: Float32 = 0.0
-    var conic_z: Float32 = 0.0
+    var (a, b, c, d) = inverse_2x2(cov2d[0, 0][0], cov2d[0, 1][0], cov2d[1, 0][0], cov2d[1, 1][0])
+    conics[camera_idx, gaussian_idx, 0] = a
+    conics[camera_idx, gaussian_idx, 1] = b
+    conics[camera_idx, gaussian_idx, 2] = c
 
-    conics[camera_idx, gaussian_idx, 0] = conic_x
-    conics[camera_idx, gaussian_idx, 1] = conic_y
-    conics[camera_idx, gaussian_idx, 2] = conic_z
+
+fn inverse_2x2(
+    a: Float32,
+    b: Float32,
+    c: Float32,
+    d: Float32,
+) -> (Float32, Float32, Float32, Float32):
+    var det = a * d - b * c
+    var inv_det = 1.0 / det
+    return (d * inv_det, -b * inv_det, -c * inv_det, a * inv_det)
 
 
 @compiler.register("project_gaussians")
