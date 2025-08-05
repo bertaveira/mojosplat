@@ -294,13 +294,13 @@ fn project_ewa_kernel[
     depths[camera_idx, gaussian_idx] = mean_c[2][0]
 
     if radius_x <= radius_clip and radius_y <= radius_clip:
-        radii[camera_idx, gaussian_idx, 0] = 0.0
-        radii[camera_idx, gaussian_idx, 1] = 0.0
+        radii[camera_idx, gaussian_idx, 0] = 0
+        radii[camera_idx, gaussian_idx, 1] = 0
         return
 
     if mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height:
-        radii[camera_idx, gaussian_idx, 0] = 0.0
-        radii[camera_idx, gaussian_idx, 1] = 0.0
+        radii[camera_idx, gaussian_idx, 0] = 0
+        radii[camera_idx, gaussian_idx, 1] = 0
         return
     
     ########### Conic calculation ###########
@@ -334,7 +334,7 @@ struct ProjectGaussians:
         # Outputs
         means2d: OutputTensor[dtype=DType.float32, rank=3],
         conics: OutputTensor[dtype=DType.float32, rank=3],
-        depths: OutputTensor[dtype=DType.float32, rank=3],
+        depths: OutputTensor[dtype=DType.float32, rank=2],
         radii: OutputTensor[dtype=DType.int32, rank=3],
         # Inputs
         means3d: InputTensor[dtype=DType.float32, rank=3],
@@ -368,7 +368,8 @@ struct ProjectGaussians:
             var gpu_ctx = ctx.get_device_context()
 
             # Define grid and block dimensions for the kernel launch
-            var grid = (C * ceildiv(N, block_size))
+            # Kernel processes N * C threads total
+            var grid = (ceildiv(N * C, block_size))
             var block = (block_size)
 
             gpu_ctx.enqueue_function[

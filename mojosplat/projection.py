@@ -233,19 +233,22 @@ def project_gaussians_mojo(
         }
     ]
 
-    means2d = torch.zeros((1, means3d.shape[0], 2))
-    conics = torch.zeros((1, means3d.shape[0], 3))
-    depth = torch.zeros((1, means3d.shape[0], 1))
-    radii = torch.zeros((1, means3d.shape[0], 1))
+    means2d = torch.zeros((1, means3d.shape[0], 2), dtype=torch.float32).contiguous()
+    conics = torch.zeros((1, means3d.shape[0], 3), dtype=torch.float32).contiguous()
+    depth = torch.zeros((1, means3d.shape[0]), dtype=torch.float32).contiguous()  # Shape (C, N) not (C, N, 1)
+    radii = torch.zeros((1, means3d.shape[0], 2), dtype=torch.int32).contiguous()  # int32 and shape (C, N, 2)
 
-    view_matrix = camera.view_matrix.unsqueeze(0).unsqueeze(0)
-    Ks = camera.Ks.unsqueeze(0).unsqueeze(0)
+    view_matrix = camera.view_matrix.unsqueeze(0).unsqueeze(0).contiguous()
+    # Convert camera intrinsics to the format expected by Mojo kernel: [fx, fy, cx, cy, k1, k2, k3, k4, k5]
+    # For pinhole camera, distortion coefficients k1-k5 are zero
+    ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy, 0.0, 0.0, 0.0, 0.0, 0.0]], 
+                          device=means3d.device, dtype=torch.float32).contiguous()
 
-    means3d = means3d.unsqueeze(0)
-    scales = scales.unsqueeze(0)
-    quats = quats.unsqueeze(0)
-    opacities = opacities.unsqueeze(0).view(1, -1)
+    means3d = means3d.unsqueeze(0).contiguous()
+    scales = scales.unsqueeze(0).contiguous()
+    quats = quats.unsqueeze(0).contiguous()
+    opacities = opacities.unsqueeze(0).view(1, -1).contiguous()
 
-    project_gaussians_kernel(means2d, conics, depth, radii, means3d, scales, quats, opacities, view_matrix, Ks)
+    project_gaussians_kernel(means2d, conics, depth, radii, means3d, scales, quats, opacities, view_matrix, ks_flat)
 
     return means2d, conics, depth, radii
