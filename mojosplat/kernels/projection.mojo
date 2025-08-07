@@ -279,11 +279,15 @@ fn project_ewa_kernel[
     mean2d[0] = ks[camera_idx, 0] * mean_c[0] * rz + ks[camera_idx, 2]
     mean2d[1] = ks[camera_idx, 1] * mean_c[1] * rz + ks[camera_idx, 3]  
 
-    # TODO: add blur based on eps2D to prevent gaussians from being too small
+    # Add eps2d to diagonal to prevent gaussians from being too small (to match gsplat)
+    alias eps2d: Float32 = 0.3
+    cov2d[0, 0] += eps2d
+    cov2d[1, 1] += eps2d
 
     ########### Radius calculation ###########
-    var radius_x: Float32 = ceil(sqrt(cov2d[0, 0][0]))
-    var radius_y: Float32 = ceil(sqrt(cov2d[1, 1][0]))
+    # TODO: Compute opacity-aware bounding box https://arxiv.org/pdf/2402.00525 Section B.2
+    var radius_x: Float32 = ceil(3.33 * sqrt(cov2d[0, 0][0]))
+    var radius_y: Float32 = ceil(3.33 * sqrt(cov2d[1, 1][0]))
 
     ########### Assign to output tensors ###########
 
@@ -291,23 +295,25 @@ fn project_ewa_kernel[
     radii[camera_idx, gaussian_idx, 1] = Int(radius_y)
     means2d[camera_idx, gaussian_idx, 0] = mean2d[0]
     means2d[camera_idx, gaussian_idx, 1] = mean2d[1]
-    depths[camera_idx, gaussian_idx] = -mean_c[2][0]  # Depth is positive distance along viewing direction?
+    depths[camera_idx, gaussian_idx] = mean_c[2][0]  # Depth is positive distance along viewing direction?
 
     if radius_x <= radius_clip and radius_y <= radius_clip:
+        print("radius_x <= radius_clip and radius_y <= radius_clip")
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
         return
 
     if mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height:
+        print("mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height")
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
         return
     
     ########### Conic calculation ###########
     var (a, b, c, d) = inverse_2x2(cov2d[0, 0][0], cov2d[0, 1][0], cov2d[1, 0][0], cov2d[1, 1][0])
-    conics[camera_idx, gaussian_idx, 0] = a
-    conics[camera_idx, gaussian_idx, 1] = b
-    conics[camera_idx, gaussian_idx, 2] = c
+    conics[camera_idx, gaussian_idx, 0] = d  # cov2d[1,1] / det
+    conics[camera_idx, gaussian_idx, 1] = b  # -cov2d[0,1] / det  
+    conics[camera_idx, gaussian_idx, 2] = a  # cov2d[0,0] / det
 
 
 fn inverse_2x2(
@@ -362,6 +368,7 @@ struct ProjectGaussians:
 
         @parameter
         if target == "cpu":
+            print("does it reach here9?")
             raise Error("Rasterize3DGS CPU target not implemented yet.")
         elif target == "gpu":
             # Get GPU context

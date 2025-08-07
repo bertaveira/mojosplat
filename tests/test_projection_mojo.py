@@ -20,7 +20,7 @@ def default_camera(device):
     """Create a default camera for testing."""
     H, W = 64, 64
     R = torch.eye(3, device=device, dtype=torch.float32)
-    T = torch.tensor([0, 0, -5.0], device=device, dtype=torch.float32)
+    T = torch.tensor([0, 0, 0], device=device, dtype=torch.float32)  # Camera at origin for OpenGL convention
     fx, fy = 100.0, 100.0
     cx, cy = W / 2.0, H / 2.0
     near, far = 0.1, 100.0
@@ -29,11 +29,11 @@ def default_camera(device):
 
 @pytest.fixture
 def single_gaussian_params(device):
-    """Create parameters for a single Gaussian at the origin."""
-    means3d = torch.tensor([[0.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+    """Create parameters for a single Gaussian in front of camera (OpenGL convention)."""
+    means3d = torch.tensor([[0.0, 0.0, 2.0]], device=device, dtype=torch.float32)  # 2 units in front (+Z)
     scales = torch.log(torch.tensor([[0.1, 0.1, 0.1]], device=device, dtype=torch.float32))
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32)  # w,x,y,z
-    opacity_features = torch.tensor([[0.0]], device=device, dtype=torch.float32)  # logit space
+    opacity_features = torch.tensor([[1.0]], device=device, dtype=torch.float32)  # logit space
     return means3d, scales, quats, opacity_features
 
 
@@ -50,7 +50,7 @@ def multi_gaussian_params(device):
     N = means3d.shape[0]
     scales = torch.log(torch.tensor([[0.1, 0.1, 0.1]], device=device, dtype=torch.float32)).expand(N, -1)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32).expand(N, -1)
-    opacity_features = torch.tensor([[0.0]], device=device, dtype=torch.float32).expand(N, -1)
+    opacity_features = torch.tensor([[1.0]], device=device, dtype=torch.float32).expand(N, -1)
     
     return means3d, scales, quats, opacity_features
 
@@ -159,13 +159,6 @@ class TestProjectionMojo:
         if radii_2.dtype == torch.int32:
             radii_2 = radii_2.float()
         
-        # For Mojo radii shape (N, 2) vs others (N,), compare the max radius
-        if radii_1.shape != radii_2.shape:
-            if len(radii_1.shape) == 2 and radii_1.shape[1] == 2:
-                radii_1 = radii_1.max(dim=1)[0]
-            if len(radii_2.shape) == 2 and radii_2.shape[1] == 2:
-                radii_2 = radii_2.max(dim=1)[0]
-        
         # Compare outputs with reasonable tolerances
         atol, rtol = 1e-4, 1e-3
         
@@ -178,7 +171,7 @@ class TestProjectionMojo:
         # Conics might have different numerical precision, use looser tolerance
         assert torch.allclose(conics_1, conics_2, atol=1e-3, rtol=1e-2), \
             f"conics differ between {backend1} and {backend2}\n{backend1}: {conics_1}\n{backend2}: {conics_2}"
-        
+
         # Radii are often rounded, so use loose tolerance
         assert torch.allclose(radii_1, radii_2, atol=2.0, rtol=0.1), \
             f"radii differ between {backend1} and {backend2}\n{backend1}: {radii_1}\n{backend2}: {radii_2}"
