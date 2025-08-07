@@ -152,10 +152,19 @@ fn project_ewa_kernel[
             mean_c[i] += view_matrix[i, j] * mean[j]
         mean_c[i] += view_matrix[i, 3]
 
-    # var covar = tb[DType.float32]().row_major[3, 3]().alloc()
-    # quat_to_covar(quat, scale, covar)
-    # var covar_c = covar_world_to_camera(covar, view_matrix)
-
+    alias near_plane: Float32 = 0.1
+    if mean_c[2][0] <= near_plane:
+        radii[camera_idx, gaussian_idx, 0] = 0
+        radii[camera_idx, gaussian_idx, 1] = 0
+        # Set means2d to 0 instead of NaN for culled Gaussians  
+        means2d[camera_idx, gaussian_idx, 0] = 0.0
+        means2d[camera_idx, gaussian_idx, 1] = 0.0
+        depths[camera_idx, gaussian_idx] = mean_c[2][0]
+        # Set conics to 0 for culled Gaussians
+        conics[camera_idx, gaussian_idx, 0] = 0.0
+        conics[camera_idx, gaussian_idx, 1] = 0.0
+        conics[camera_idx, gaussian_idx, 2] = 0.0
+        return
 
     ########### Quaternion to Rotation Matrix ########### FIXME: Replace by function (not possible it seems right now)
     var R = tb[DType.float32]().row_major[3, 3]().alloc()
@@ -298,13 +307,11 @@ fn project_ewa_kernel[
     depths[camera_idx, gaussian_idx] = mean_c[2][0]  # Depth is positive distance along viewing direction?
 
     if radius_x <= radius_clip and radius_y <= radius_clip:
-        print("radius_x <= radius_clip and radius_y <= radius_clip")
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
         return
 
     if mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height:
-        print("mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height")
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
         return
@@ -368,7 +375,7 @@ struct ProjectGaussians:
 
         @parameter
         if target == "cpu":
-            print("does it reach here9?")
+            print("does it reach here14?")
             raise Error("Rasterize3DGS CPU target not implemented yet.")
         elif target == "gpu":
             # Get GPU context
