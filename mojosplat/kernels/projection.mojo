@@ -3,7 +3,7 @@ from gpu import thread_idx, block_idx, barrier
 from layout import Layout, LayoutTensor
 from layout.tensor_builder import LayoutTensorBuild as tb
 from utils.index import IndexList
-from math import sqrt, ceil, ceildiv
+from math import sqrt, ceil, ceildiv, log
 from runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor
 
@@ -166,6 +166,22 @@ fn project_ewa_kernel[
         conics[camera_idx, gaussian_idx, 2] = 0.0
         return
 
+    # Opacity-based culling (matches GSplat CUDA kernel)
+    alias ALPHA_THRESHOLD: Float32 = 1.0 / 255.0  # Standard 3DGS threshold
+    var opacity = opacities[gaussian_idx]
+    if opacity < ALPHA_THRESHOLD:
+        radii[camera_idx, gaussian_idx, 0] = 0
+        radii[camera_idx, gaussian_idx, 1] = 0
+        # Set means2d to 0 instead of NaN for culled Gaussians  
+        means2d[camera_idx, gaussian_idx, 0] = 0.0
+        means2d[camera_idx, gaussian_idx, 1] = 0.0
+        depths[camera_idx, gaussian_idx] = mean_c[2][0]
+        # Set conics to 0 for culled Gaussians
+        conics[camera_idx, gaussian_idx, 0] = 0.0
+        conics[camera_idx, gaussian_idx, 1] = 0.0
+        conics[camera_idx, gaussian_idx, 2] = 0.0
+        return
+
     ########### Quaternion to Rotation Matrix ########### FIXME: Replace by function (not possible it seems right now)
     var R = tb[DType.float32]().row_major[3, 3]().alloc()
     # Extract quaternion components
@@ -293,24 +309,34 @@ fn project_ewa_kernel[
     cov2d[0, 0] += eps2d
     cov2d[1, 1] += eps2d
 
-    ########### Radius calculation ###########
-    # TODO: Compute opacity-aware bounding box https://arxiv.org/pdf/2402.00525 Section B.2
-    var radius_x: Float32 = ceil(3.33 * sqrt(cov2d[0, 0][0]))
-    var radius_y: Float32 = ceil(3.33 * sqrt(cov2d[1, 1][0]))
-
-    ########### Assign to output tensors ###########
-
-    radii[camera_idx, gaussian_idx, 0] = Int(radius_x)
-    radii[camera_idx, gaussian_idx, 1] = Int(radius_y)
-    means2d[camera_idx, gaussian_idx, 0] = mean2d[0]
-    means2d[camera_idx, gaussian_idx, 1] = mean2d[1]
-    depths[camera_idx, gaussian_idx] = mean_c[2][0]  # Depth is positive distance along viewing direction?
+    ########### Opacity-aware radius calculation (matches CUDA kernel) ###########
+    var extend: Float32 = 3.33  # default extend
+    var opacity2 = opacities[gaussian_idx]  # Use different name to avoid duplicate
+    if opacity2 >= ALPHA_THRESHOLD:
+        # Compute opacity-aware bounding box: extend = min(extend, sqrt(2.0f * log(opacity / ALPHA_THRESHOLD)))
+        var log_ratio = log(opacity2 / ALPHA_THRESHOLD)
+        var opacity_extend = sqrt(2.0 * log_ratio)
+        # Manual min implementation since min is not available in Mojo math
+        # Extract scalar value from SIMD type
+        if opacity_extend[0] < extend:
+            extend = opacity_extend[0]
+    
+    var radius_x: Float32 = ceil(extend * sqrt(cov2d[0, 0][0]))
+    var radius_y: Float32 = ceil(extend * sqrt(cov2d[1, 1][0]))
 
     if radius_x <= radius_clip and radius_y <= radius_clip:
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
+        # Set all outputs to 0 for culled Gaussians (matches GSplat behavior)
+        means2d[camera_idx, gaussian_idx, 0] = 0.0
+        means2d[camera_idx, gaussian_idx, 1] = 0.0
+        depths[camera_idx, gaussian_idx] = 0.0  # Zero depth for culled Gaussians
+        conics[camera_idx, gaussian_idx, 0] = 0.0
+        conics[camera_idx, gaussian_idx, 1] = 0.0
+        conics[camera_idx, gaussian_idx, 2] = 0.0
         return
 
+    # Viewport culling
     if mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height:
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
@@ -321,6 +347,12 @@ fn project_ewa_kernel[
     conics[camera_idx, gaussian_idx, 0] = d  # cov2d[1,1] / det
     conics[camera_idx, gaussian_idx, 1] = b  # -cov2d[0,1] / det  
     conics[camera_idx, gaussian_idx, 2] = a  # cov2d[0,0] / det
+
+    radii[camera_idx, gaussian_idx, 0] = Int(radius_x)
+    radii[camera_idx, gaussian_idx, 1] = Int(radius_y)
+    means2d[camera_idx, gaussian_idx, 0] = mean2d[0]
+    means2d[camera_idx, gaussian_idx, 1] = mean2d[1]
+    depths[camera_idx, gaussian_idx] = mean_c[2][0]  # Depth is positive distance along viewing direction?
 
 
 fn inverse_2x2(
@@ -375,7 +407,7 @@ struct ProjectGaussians:
 
         @parameter
         if target == "cpu":
-            print("does it reach here14?")
+            print("does it reach here19?")
             raise Error("Rasterize3DGS CPU target not implemented yet.")
         elif target == "gpu":
             # Get GPU context
