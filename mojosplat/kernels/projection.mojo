@@ -159,7 +159,7 @@ fn project_ewa_kernel[
         # Set means2d to 0 instead of NaN for culled Gaussians  
         means2d[camera_idx, gaussian_idx, 0] = 0.0
         means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = mean_c[2][0]
+        depths[camera_idx, gaussian_idx] = 0.0
         # Set conics to 0 for culled Gaussians
         conics[camera_idx, gaussian_idx, 0] = 0.0
         conics[camera_idx, gaussian_idx, 1] = 0.0
@@ -175,7 +175,7 @@ fn project_ewa_kernel[
         # Set means2d to 0 instead of NaN for culled Gaussians  
         means2d[camera_idx, gaussian_idx, 0] = 0.0
         means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = mean_c[2][0]
+        depths[camera_idx, gaussian_idx] = 0.0
         # Set conics to 0 for culled Gaussians
         conics[camera_idx, gaussian_idx, 0] = 0.0
         conics[camera_idx, gaussian_idx, 1] = 0.0
