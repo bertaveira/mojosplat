@@ -1,58 +1,12 @@
 
-from pathlib import Path
 import torch
-
-from max.torch import CustomOpLibrary
+from typing_extensions import Literal
 
 from .projection import Camera, project_gaussians
 from .binning import bin_gaussians_to_tiles
+from .rasterization import rasterize_gaussians
 
 TILE_SIZE = 16
-
-# Register Mojo kernels in Torch
-mojo_kernels = Path(__file__).parent / "kernels"
-op_library = CustomOpLibrary(mojo_kernels)
-# rasterize_to_pixels_3dgs_fwd_kernel = op_library.rasterize_to_pixels_3dgs_fwd[
-#     {
-#         "tile_size": TILE_SIZE,
-#         "image_height": 512,
-#         "image_width": 512,
-#         "CDIM": 3,
-#         "C": 1,
-#         "N": 1,
-#         "NIntersections": 1,
-#         "image_width": 512,
-#         "image_height": 512,
-#     }
-# ]
-
-def rasterize_to_pixels_3dgs_fwd(
-    means2d: torch.Tensor,
-    covs2d: torch.Tensor,
-    colors: torch.Tensor,
-    projected_opacities: torch.Tensor,
-    background_color_tensor: torch.Tensor,
-    tile_ranges: torch.Tensor,
-    sorted_gaussian_indices: torch.Tensor,
-    camera: Camera,
-    num_channels: int,
-) -> torch.Tensor:
-    result = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=means2d.dtype)
-    rasterize_to_pixels_3dgs_fwd_kernel = op_library.rasterize_to_pixels_3dgs_fwd[
-        {
-            "tile_size": TILE_SIZE,
-            "image_height": camera.H,
-            "image_width": camera.W,
-            "CDIM": 3,
-            "C": 1,
-            "N": means2d.shape[1],
-            "NIntersections": sorted_gaussian_indices.shape[1],
-        }
-    ]
-    rasterize_to_pixels_3dgs_fwd_kernel(result, means2d, covs2d, colors, projected_opacities, background_color_tensor, tile_ranges, sorted_gaussian_indices)
-
-    print("Back in python")
-    return result
 
 @torch.no_grad()
 def render_gaussians(
@@ -66,7 +20,7 @@ def render_gaussians(
     sh_degree: int | None = None, # Degree of Spherical Harmonics if used
     background_color: torch.Tensor | None = None, # (C,) Background color
     tile_size: int = TILE_SIZE, # Allow overriding tile size
-    backend: str = "torch", # Backend to use for projection and binning
+    backend: Literal["torch", "gsplat", "mojo"] = "torch", # Backend to use for projection, binning, and rasterization
 ) -> torch.Tensor:
     """Main function to render 3D Gaussians.
 
@@ -82,7 +36,7 @@ def render_gaussians(
         sh_degree: Degree of Spherical Harmonics if used (optional)
         background_color: (C,) Background color tensor (optional)
         tile_size: Size of square tiles in pixels (default: 16)
-        backend: Backend to use for projection and binning ("torch", "gsplat", "mojo")
+        backend: Backend to use for projection, binning, and rasterization ("torch", "gsplat", "mojo")
         
     Returns:
         final_image: (H, W, C) Rendered image
@@ -105,12 +59,12 @@ def render_gaussians(
 
     # --- 1. Projection ---
     means2d, covs2d, depths, radii = project_gaussians(
-        means3d, scales, quats, opacities, camera, backend=backend
+        means3d, scales, quats, opacities, camera, backend="torch"
     )
 
     # --- 2. Binning & Sorting ---
     sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
-        means2d, radii, depths, camera.H, camera.W, tile_size, backend="gsplat"
+        means2d, radii, depths, camera.H, camera.W, tile_size, backend="torch"
     )
     
     # Validate binning outputs
@@ -131,17 +85,9 @@ def render_gaussians(
              colors = features[..., :3] # Crude approximation
 
     # --- 5. Rasterization & Blending --- 
-
-    # Prepare tensors for rasterization kernel
-    means2d = means2d.unsqueeze(0).contiguous()
-    covs2d = covs2d.unsqueeze(0).contiguous()
-    colors = colors.unsqueeze(0).contiguous()
-    background_color_tensor = background_color_tensor.unsqueeze(0).contiguous()
-    tile_ranges = tile_ranges.unsqueeze(0).to(torch.int32).contiguous()
-    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0).to(torch.int32).contiguous()
     print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, opacities: {opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
 
-    final_image = rasterize_to_pixels_3dgs_fwd(
+    final_image = rasterize_gaussians(
         means2d,
         covs2d,
         colors,
@@ -150,19 +96,11 @@ def render_gaussians(
         tile_ranges,
         sorted_gaussian_indices,
         camera,
-        num_channels,
+        backend="mojo",
     )
     print("Done")
     print(f"final_image: {final_image.shape}")
     print(f"max_val: {final_image.max()}")
-
-    # --- 6. Blending (Removed - Done in rasterizer) ---
-    # final_image = alpha_blend(rasterized_output, camera)
-
-    # Add background color (Removed - Applied in kernel)
-
-    # Remove batch dimension to return (H, W, C) instead of (1, H, W, C)
-    final_image = final_image.squeeze(0)
 
     return final_image
     
