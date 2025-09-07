@@ -98,6 +98,7 @@ def render_gaussians(
         tile_ranges,
         sorted_gaussian_indices,
         camera,
+        tile_size=tile_size,
         backend=backend,
     )
     print("Done")

@@ -95,7 +95,11 @@ def rasterize_gaussians_gsplat(
     means2d = means2d.unsqueeze(0)
     conics = conics.unsqueeze(0)
     colors = colors.unsqueeze(0)
-    opacities = opacities.unsqueeze(0)
+    # GSplat expects opacities to be (batch, N) not (batch, N, 1)
+    if opacities.dim() == 1:
+        opacities = opacities.unsqueeze(0)  # (N,) -> (1, N)
+    else:
+        opacities = opacities.squeeze(-1).unsqueeze(0)  # (N, 1) -> (N,) -> (1, N)
     background_color = background_color.unsqueeze(0)
     tile_ranges = tile_ranges.unsqueeze(0)
     sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)
@@ -117,7 +121,7 @@ def rasterize_gaussians_gsplat(
         absgrad=False,
     )
 
-    return render_colors
+    return render_colors.squeeze(0)
 
 
 def rasterize_gaussians_mojo(
@@ -129,6 +133,7 @@ def rasterize_gaussians_mojo(
     tile_ranges: torch.Tensor,
     sorted_gaussian_indices: torch.Tensor,
     camera: Camera,
+    tile_size: int = 16,
 ) -> torch.Tensor:
     """Mojo implementation of Gaussian rasterization."""
     # Ensure proper tensor shapes and types for Mojo kernel
@@ -138,6 +143,11 @@ def rasterize_gaussians_mojo(
         conics = conics.unsqueeze(0)    # Add batch dimension: (N, 3) -> (1, N, 3)
     if colors.dim() == 2:
         colors = colors.unsqueeze(0)    # Add batch dimension: (N, C) -> (1, N, C)
+    # Mojo kernel expects opacities to be (1, N) not (N,) or (N, 1)
+    if opacities.dim() == 1:
+        opacities = opacities.unsqueeze(0)  # (N,) -> (1, N)
+    elif opacities.dim() == 2:
+        opacities = opacities.squeeze(-1).unsqueeze(0)  # (N, 1) -> (N,) -> (1, N)
     if background_color.dim() == 1:
         background_color = background_color.unsqueeze(0)  # Add batch dimension: (C,) -> (1, C)
     if tile_ranges.dim() == 3:
@@ -158,7 +168,7 @@ def rasterize_gaussians_mojo(
     
     rasterize_to_pixels_3dgs_fwd_kernel = op_library.rasterize_to_pixels_3dgs_fwd[
         {
-            "tile_size": TILE_SIZE,
+            "tile_size": tile_size,
             "image_height": camera.H,
             "image_width": camera.W,
             "CDIM": 3,
