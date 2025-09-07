@@ -407,7 +407,6 @@ struct ProjectGaussians:
 
         @parameter
         if target == "cpu":
-            print("does it reach here19?")
             raise Error("Rasterize3DGS CPU target not implemented yet.")
         elif target == "gpu":
             # Get GPU context
@@ -439,4 +438,4 @@ struct ProjectGaussians:
                 block_dim=block,
             )
 
-            gpu_ctx.synchronize()
+            # gpu_ctx.synchronize()

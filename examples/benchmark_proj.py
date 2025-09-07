@@ -112,11 +112,12 @@ def warmup_backend(backend: str, means3d: torch.Tensor, log_scales: torch.Tensor
     for _ in range(warmup_iterations):
         project_gaussians(means3d, log_scales, rotations, opacities, camera, backend=backend)
         try:
-            project_gaussians(means3d, log_scales, rotations, opacities, camera, backend=backend)
+            # project_gaussians(means3d, log_scales, rotations, opacities, camera, backend=backend)
             torch.cuda.synchronize()  # Ensure CUDA operations complete
         except Exception as e:
             print(f"Warmup failed for {backend}: {e}")
             return False
+    print(f"        Warming up {backend} backend... done")
     return True
 
 
@@ -131,9 +132,7 @@ def benchmark_backend(backend: str, means3d: torch.Tensor, log_scales: torch.Ten
         start_time = time.perf_counter()
         
         try:
-            means2d, conics, depths, radii = project_gaussians(
-                means3d, log_scales, rotations, opacities, camera, backend=backend
-            )
+            project_gaussians(means3d, log_scales, rotations, opacities, camera, backend=backend)
             torch.cuda.synchronize()  # Wait for GPU operations to complete
             end_time = time.perf_counter()
             
@@ -278,7 +277,7 @@ def main():
                        choices=['torch', 'gsplat', 'mojo'],
                        help='Backends to benchmark')
     parser.add_argument('--gaussians', nargs='+', type=int, 
-                       default=[1000, 5000, 10000, 50000, 100000, 500000],
+                       default=[1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000],
                        help='Number of Gaussians to test')
     parser.add_argument('--width', type=int, default=1920, help='Image width')
     parser.add_argument('--height', type=int, default=1080, help='Image height')
