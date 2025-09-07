@@ -5,6 +5,7 @@ import torch
 import os
 from PIL import Image
 import numpy as np
+import time
 
 
 # Helper function for camera view matrix
@@ -50,9 +51,9 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "render_example.png")
 
-    img_height = 512
-    img_width = 512
-    num_gaussians = 100 # Number of Gaussians to render
+    img_height = 1080
+    img_width = 1920
+    num_gaussians = 10000 # Number of Gaussians to render
     num_channels = 3 # RGB
 
     # --- Camera Setup ---
@@ -95,16 +96,16 @@ def main():
     # Add some slight variation to make it more natural
     log_scales += torch.randn(num_gaussians, 3, device=device) * 0.1  # Smaller random variation
 
-    # Random rotations (unit quaternions w, x, y, z)
-    random_rots = torch.randn(num_gaussians, 4, device=device)
-    rotations = torch.nn.functional.normalize(random_rots, dim=1)
+    # Random quaternions (w, x, y, z format)
+    random_quats = torch.randn(num_gaussians, 4, device=device)
+    quats = torch.nn.functional.normalize(random_quats, dim=1)
 
     # Opacities (pre-activation, sigmoid is often applied later)
     # Let's provide values that would be reasonable post-sigmoid, e.g., 0.1 to 0.9
     # To achieve this with sigmoid, pre-activation needs to span roughly -2 to 2
     # Simpler: just use random values and apply sigmoid in projection if needed
     # Let's assume render_gaussians expects pre-sigmoid opacities
-    opacities_pre_sigmoid = torch.randn(num_gaussians, 1, device=device) # Centered around 0
+    opacities_pre_sigmoid = torch.randn(num_gaussians, device=device) # Centered around 0
     
     # RGB Colors
     colors = torch.rand(num_gaussians, num_channels, device=device)
@@ -112,26 +113,31 @@ def main():
     # Ensure correct dtypes
     means3d = means3d.float()
     log_scales = log_scales.float()
-    rotations = rotations.float()
+    quats = quats.float()
     opacities_pre_sigmoid = opacities_pre_sigmoid.float()
     colors = colors.float()
 
     # --- Rendering ---
     print("Rendering...")
+    print(f"Input shapes: means3d={means3d.shape}, scales={log_scales.shape}, quats={quats.shape}, opacities={opacities_pre_sigmoid.shape}, colors={colors.shape}")
+    
     rendered_image = render_gaussians(
         means3d=means3d,
         scales=log_scales, # Pass log-scales directly
-        rotations=rotations,
+        quats=quats, # Pass quaternions (w, x, y, z)
         opacities=opacities_pre_sigmoid, # Pass pre-activation opacities
         features=colors,
         camera=camera,
         background_color=torch.tensor([0.1, 0.1, 0.1], device=device), # Dark gray background
     )
+    
+    print(f"Rendered image shape: {rendered_image.shape}")
+    print(f"Rendered image range: [{rendered_image.min().item():.4f}, {rendered_image.max().item():.4f}]")
 
     # --- Save Output ---
     print(f"Saving image to {output_path}...")
     # Convert from torch tensor (H, W, C) on GPU to numpy array (H, W, C) on CPU
-    output_image_np = (rendered_image.cpu().numpy() * 255).astype(np.uint8)[0]
+    output_image_np = (rendered_image.cpu().numpy() * 255).astype(np.uint8)
     
     # Create PIL image and save
     pil_image = Image.fromarray(output_image_np)

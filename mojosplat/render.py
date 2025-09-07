@@ -13,14 +13,14 @@ def render_gaussians(
     means3d: torch.Tensor, # (N, 3) World coordinates
     scales: torch.Tensor, # (N, 3) Scale factors (log-space)
     quats: torch.Tensor, # (N, 4) Quaternions for orientation (w, x, y, z)
-    opacities: torch.Tensor, # (N, 1) Opacity features (often pre-activation)
+    opacities: torch.Tensor, # (N) Opacity features (often pre-activation)
     features: torch.Tensor, # (N, C) Color features (e.g., RGB or SH coefficients)
     camera: Camera, # Camera object with intrinsics/extrinsics, H, W, near, far
     # Optional args
     sh_degree: int | None = None, # Degree of Spherical Harmonics if used
     background_color: torch.Tensor | None = None, # (C,) Background color
     tile_size: int = TILE_SIZE, # Allow overriding tile size
-    backend: Literal["torch", "gsplat", "mojo"] = "torch", # Backend to use for projection, binning, and rasterization
+    backend: Literal["torch", "gsplat", "mojo"] = "mojo", # Backend to use for projection, binning, and rasterization
 ) -> torch.Tensor:
     """Main function to render 3D Gaussians.
 
@@ -57,14 +57,16 @@ def render_gaussians(
     if background_color_tensor.shape[0] != num_channels:
          raise ValueError(f"Background color channels ({background_color_tensor.shape[0]}) must match gaussian color channels ({num_channels})")
 
+    assert opacities.shape == (means3d.shape[0],)
+
     # --- 1. Projection ---
     means2d, covs2d, depths, radii = project_gaussians(
-        means3d, scales, quats, opacities, camera, backend="torch"
+        means3d, scales, quats, opacities, camera, backend=backend
     )
 
     # --- 2. Binning & Sorting ---
     sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
-        means2d, radii, depths, camera.H, camera.W, tile_size, backend="torch"
+        means2d, radii, depths, camera.H, camera.W, tile_size, backend=backend
     )
     
     # Validate binning outputs
@@ -96,7 +98,7 @@ def render_gaussians(
         tile_ranges,
         sorted_gaussian_indices,
         camera,
-        backend="mojo",
+        backend=backend,
     )
     print("Done")
     print(f"final_image: {final_image.shape}")

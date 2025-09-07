@@ -32,8 +32,7 @@ def bin_gaussians_to_tiles(
     elif backend == "gsplat":
         return bin_gaussians_to_tiles_gsplat(means2d, radii, depths, tile_size, n_tiles_w, n_tiles_h)
     elif backend == "mojo":
-        raise NotImplementedError("Mojo backend not implemented yet.")
-        return bin_gaussians_to_tiles_mojo(means2d, radii, depths, tile_size, tile_width, tile_height)
+        return bin_gaussians_to_tiles_mojo(means2d, radii, depths, tile_size, n_tiles_w, n_tiles_h)
     else:
         raise ValueError(f"Invalid backend: {backend}")
 
@@ -261,3 +260,16 @@ def bin_gaussians_to_tiles_torch(
     tile_ranges = tile_ranges.view(n_tiles_h, n_tiles_w, 2)
 
     return sorted_gaussian_indices, tile_ranges 
+
+def bin_gaussians_to_tiles_mojo(
+    means2d: torch.Tensor, # (N, 2) Pixel coordinates
+    radii: torch.Tensor,   # (N, 2) Pixel radius
+    depths: torch.Tensor,  # (N,) Camera-space Z depths (used for initial sorting)
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> tuple:
+    """Bin Gaussians to tiles."""
+    
+    print("Warning: Mojo backend for binning not implemented yet")
+    return bin_gaussians_to_tiles_gsplat(means2d, radii, depths, tile_size, tile_width, tile_height)
