@@ -1,6 +1,7 @@
 # MojoSplat
 
-**⚠️ Work in Progress - Experimental**
+> [!NOTE]
+> **Work in Progress - Experimental**
 
 MojoSplat is an experimental port of Gaussian Splatting kernels to [Mojo](https://www.modular.com/mojo), exploring the potential performance and multi-vendor support of Mojo for GPU acceleration.
 
@@ -11,12 +12,21 @@ This project implements the three core kernels of 3D Gaussian Splatting:
 
 You can call the render function or any of the individual kernels directly from python (using pytorch). The mojo kernels will be compiled on the fly.
 
-## ⚠️ Warnings
+## Implementation Status
 
-1. This is NOT production ready or even finished.
-2. Due to Mojo compiler limitations the compiler optimizes on tensor shapes. This causes some kernels to need to be recompiled if either the number of gaussians change or the view matrix changes.
-3. Performance is inferior to the GSplat CUDA version. Maybe some day we will be capable of surpassing it.
-4. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work. Particularly the Mojo interop with python/torch is a very novel thigns and the API is changing with every version.
+| Kernel | PyTorch | GSplat | Mojo |
+|--------|---------|--------|------|
+| **Projection** | ✅ | ✅ | ✅ |
+| **Binning** | ✅ | ✅ | ❌ (WIP) |
+| **Rasterization** | ❌* | ✅ | ✅ |
+
+*PyTorch rasterization falls back to GSplat implementation
+
+> [!WARNING]
+> 1. This is NOT production ready or even finished.
+> 2. Due to Mojo compiler limitations the compiler optimizes on tensor shapes. This causes some kernels to need to be recompiled if either the number of gaussians change or the view matrix changes.
+> 3. Performance is inferior to the GSplat CUDA version. Maybe some day we will be capable of surpassing it.
+> 4. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work. Particularly the Mojo interop with python/torch is a very novel thigns and the API is changing with every version.
 
 
 ## Installation
@@ -119,16 +129,6 @@ uv run python examples/benchmark_proj.py
 # Benchmark full rendering pipeline  
 uv run python examples/benchmark.py
 ```
-
-## Implementation Status
-
-| Kernel | PyTorch | GSplat | Mojo |
-|--------|---------|--------|------|
-| **Projection** | ✅ | ✅ | ✅ |
-| **Binning** | ✅ | ✅ | ❌ (WIP) |
-| **Rasterization** | ❌* | ✅ | ✅ |
-
-*PyTorch rasterization falls back to GSplat implementation
 
 ### Performance on RTX 2080
 
