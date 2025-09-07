@@ -66,10 +66,26 @@ def render_gaussians(
     sh_degree: int | None = None, # Degree of Spherical Harmonics if used
     background_color: torch.Tensor | None = None, # (C,) Background color
     tile_size: int = TILE_SIZE, # Allow overriding tile size
+    backend: str = "torch", # Backend to use for projection and binning
 ) -> torch.Tensor:
     """Main function to render 3D Gaussians.
 
-    Orchestrates projection, rasterization, and blending.
+    Orchestrates projection, binning, and rasterization with consistent backend usage.
+    
+    Args:
+        means3d: (N, 3) World coordinates of Gaussian centers
+        scales: (N, 3) Scale factors in log-space
+        quats: (N, 4) Quaternions for orientation (w, x, y, z)
+        opacities: (N, 1) Opacity features (often pre-activation)
+        features: (N, C) Color features (e.g., RGB or SH coefficients)
+        camera: Camera object with intrinsics/extrinsics
+        sh_degree: Degree of Spherical Harmonics if used (optional)
+        background_color: (C,) Background color tensor (optional)
+        tile_size: Size of square tiles in pixels (default: 16)
+        backend: Backend to use for projection and binning ("torch", "gsplat", "mojo")
+        
+    Returns:
+        final_image: (H, W, C) Rendered image
     """
     required_tensors = [means3d, scales, quats, opacities, features]
     if not all(isinstance(t, torch.Tensor) and t.is_cuda for t in required_tensors):
@@ -89,13 +105,19 @@ def render_gaussians(
 
     # --- 1. Projection ---
     means2d, covs2d, depths, radii = project_gaussians(
-        means3d, scales, quats, opacities, camera, backend="gsplat"
+        means3d, scales, quats, opacities, camera, backend=backend
     )
 
     # --- 2. Binning & Sorting ---
-    sorted_gaussian_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
-        means2d, radii, depths, camera.H, camera.W, tile_size
+    sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
+        means2d, radii, depths, camera.H, camera.W, tile_size, backend="gsplat"
     )
+    
+    # Validate binning outputs
+    if sorted_gaussian_indices.numel() == 0:
+        print("Warning: No Gaussian overlaps found. This might indicate all Gaussians are outside the image or culled.")
+        # Return black image
+        return torch.zeros(camera.H, camera.W, num_channels, device=means3d.device, dtype=features.dtype)
 
     # --- 3. Cull Gaussians (Optional - Placeholder) ---
     # Culling would ideally happen *before* projection/binning
@@ -109,20 +131,8 @@ def render_gaussians(
              colors = features[..., :3] # Crude approximation
 
     # --- 5. Rasterization & Blending --- 
-    # Call the kernel wrapper from kernels.py
-    # final_image = rasterize_gaussians_forward(
-    #     means2d=means2d,
-    #     covs2d=covs2d,
-    #     depths=depths,
-    #     opacities=projected_opacities,
-    #     colors=colors,
-    #     sorted_gaussian_indices=sorted_gaussian_indices,
-    #     tile_ranges=tile_ranges,
-    #     img_height=camera.H,
-    #     img_width=camera.W,
-    #     background_color=background_color_tensor,
-    #     tile_size=tile_size,
-    # )
+
+    # Prepare tensors for rasterization kernel
     means2d = means2d.unsqueeze(0).contiguous()
     covs2d = covs2d.unsqueeze(0).contiguous()
     colors = colors.unsqueeze(0).contiguous()
@@ -150,6 +160,9 @@ def render_gaussians(
     # final_image = alpha_blend(rasterized_output, camera)
 
     # Add background color (Removed - Applied in kernel)
+
+    # Remove batch dimension to return (H, W, C) instead of (1, H, W, C)
+    final_image = final_image.squeeze(0)
 
     return final_image
     
