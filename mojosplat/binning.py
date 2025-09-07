@@ -1,10 +1,103 @@
-# triton_splat/binning.py
 import torch
+from torch import Tensor
 import math
 
+from typing_extensions import Literal
+
+
 def bin_gaussians_to_tiles(
+    means2d: Tensor,  # [N, 2]
+    radii: Tensor,  # [N, 2]
+    depths: Tensor,  # [N]
+    img_height: int,
+    img_width: int,
+    tile_size: int,
+    backend: Literal["torch", "gsplat", "mojo"] = "gsplat",
+) -> tuple:
+    """Bin Gaussians to tiles.
+    
+    Args:
+        means2d: [N, 2]
+        radii: [N, 2]
+        depths: [N]
+        tile_size: int
+    """
+    N = means2d.shape[0]
+    n_tiles_h = math.ceil(img_height / tile_size)
+    n_tiles_w = math.ceil(img_width / tile_size)
+    n_tiles = n_tiles_h * n_tiles_w
+
+    if backend == "torch":
+        return bin_gaussians_to_tiles_torch(means2d, radii, depths, img_height, img_width, tile_size)
+    elif backend == "gsplat":
+        return bin_gaussians_to_tiles_gsplat(means2d, radii, depths, tile_size, n_tiles_w, n_tiles_h)
+    elif backend == "mojo":
+        raise NotImplementedError("Mojo backend not implemented yet.")
+        return bin_gaussians_to_tiles_mojo(means2d, radii, depths, tile_size, tile_width, tile_height)
+    else:
+        raise ValueError(f"Invalid backend: {backend}")
+
+
+
+def bin_gaussians_to_tiles_gsplat(
+    means2d: Tensor,  # [N, 2]
+    radii: Tensor,  # [N, 2]
+    depths: Tensor,  # [N]
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> tuple:
+    """Bin Gaussians to tiles.
+    
+    Args:
+        means2d: [N, 2]
+        radii: [N, 2]
+        depths: [N]
+        tile_size: int
+        tile_width: int
+        tile_height: int
+
+    Returns:
+        sorted_gaussian_indices: [M,]
+        tile_pointers: [n_tiles+1,]
+        tile_ranges: [n_tiles, 2]
+    """
+    from gsplat import isect_tiles, isect_offset_encode
+
+    means2d = means2d.unsqueeze(0).contiguous()
+    radii = radii.unsqueeze(0).contiguous()
+    depths = depths.unsqueeze(0).contiguous()
+    tile_size = tile_size.unsqueeze(0).contiguous()
+    tile_width = tile_width.unsqueeze(0).contiguous()
+    tile_height = tile_height.unsqueeze(0).contiguous()
+    segmented = False
+    packed = False
+
+    I = 1  # Single image
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d,
+        radii,
+        depths,
+        tile_size,
+        tile_width,
+        tile_height,
+        segmented=segmented,
+        packed=packed,
+    )
+    # print("rank", world_rank, "Before isect_offset_encode")
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)   
+
+    isect_offsets = isect_offsets.squeeze(0)
+
+    return flatten_ids, isect_offsets
+
+
+
+################################################################################
+
+def bin_gaussians_to_tiles_torch(
     means2d: torch.Tensor, # (N, 2) Pixel coordinates
-    radii: torch.Tensor,   # (N,) Pixel radius
+    radii: torch.Tensor,   # (N, 2) Pixel radius
     depths: torch.Tensor,  # (N,) Camera-space Z depths (used for initial sorting)
     img_height: int,
     img_width: int,
@@ -26,7 +119,7 @@ def bin_gaussians_to_tiles(
         - tile_pointers: (n_tiles+1,) Tensor where tile_pointers[i] is the start index
                          in sorted_gaussian_indices for tile i, and tile_pointers[i+1] is the end index.
                          The last element is the total number of overlaps M.
-        - tile_ranges: (n_tiles, 2) Start and end pointers derived from tile_pointers.
+        - tile_ranges: (tile_height, tile_width, 2) Start and end pointers derived from tile_pointers.
     """
     N = means2d.shape[0]
     device = means2d.device
@@ -36,10 +129,10 @@ def bin_gaussians_to_tiles(
     n_tiles = n_tiles_h * n_tiles_w
 
     # --- 1. Calculate Gaussian bounding boxes ---
-    min_x = means2d[:, 0] - radii
-    max_x = means2d[:, 0] + radii
-    min_y = means2d[:, 1] - radii
-    max_y = means2d[:, 1] + radii
+    min_x = means2d[:, 0] - radii[:, 0]
+    max_x = means2d[:, 0] + radii[:, 0]
+    min_y = means2d[:, 1] - radii[:, 1]
+    max_y = means2d[:, 1] + radii[:, 1]
 
     # --- 2. Determine tile overlap ranges ---
     # Clamp bounding box to image bounds
