@@ -67,9 +67,6 @@ def bin_gaussians_to_tiles_gsplat(
     means2d = means2d.unsqueeze(0).contiguous()
     radii = radii.unsqueeze(0).contiguous()
     depths = depths.unsqueeze(0).contiguous()
-    tile_size = tile_size.unsqueeze(0).contiguous()
-    tile_width = tile_width.unsqueeze(0).contiguous()
-    tile_height = tile_height.unsqueeze(0).contiguous()
     segmented = False
     packed = False
 
@@ -85,11 +82,25 @@ def bin_gaussians_to_tiles_gsplat(
         packed=packed,
     )
     # print("rank", world_rank, "Before isect_offset_encode")
-    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)   
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height).squeeze(0)
+    
+    # Convert to compatible format: sorted_gaussian_indices and tile_ranges
+    sorted_gaussian_indices = flatten_ids.squeeze(0) if flatten_ids.dim() > 1 else flatten_ids
+    start_offsets = isect_offsets.view(tile_height, tile_width)  # (n_tiles_h, n_tiles_w)
+    end_offsets = torch.zeros_like(start_offsets)
+    
+    # Flatten for easier computation
+    start_flat = start_offsets.view(-1)
+    end_flat = end_offsets.view(-1)
+    
+    # End of each tile is the start of the next tile
+    end_flat[:-1] = start_flat[1:]
+    end_flat[-1] = sorted_gaussian_indices.shape[0]  # Last tile ends at total count
+    
+    tile_ranges = torch.stack([start_flat, end_flat], dim=-1)
+    tile_ranges = tile_ranges.view(tile_height, tile_width, 2)
 
-    isect_offsets = isect_offsets.squeeze(0)
-
-    return flatten_ids, isect_offsets
+    return sorted_gaussian_indices, tile_ranges
 
 
 
@@ -116,10 +127,7 @@ def bin_gaussians_to_tiles_torch(
     Returns:
         A tuple containing:
         - sorted_gaussian_indices: (M,) Tensor of Gaussian indices sorted by tile_id and then depth.
-        - tile_pointers: (n_tiles+1,) Tensor where tile_pointers[i] is the start index
-                         in sorted_gaussian_indices for tile i, and tile_pointers[i+1] is the end index.
-                         The last element is the total number of overlaps M.
-        - tile_ranges: (tile_height, tile_width, 2) Start and end pointers derived from tile_pointers.
+        - tile_ranges: (tile_height, tile_width, 2) Start and end pointers for each tile.
     """
     N = means2d.shape[0]
     device = means2d.device
@@ -252,4 +260,4 @@ def bin_gaussians_to_tiles_torch(
     tile_ranges = torch.stack([tile_pointers[:-1], tile_pointers[1:]], dim=-1)
     tile_ranges = tile_ranges.view(n_tiles_h, n_tiles_w, 2)
 
-    return sorted_gaussian_indices, tile_pointers, tile_ranges 
+    return sorted_gaussian_indices, tile_ranges 

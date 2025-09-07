@@ -79,7 +79,7 @@ class TestBinningTorch:
         """Test that torch backend works and returns expected shapes."""
         means2d, radii, depths, img_height, img_width, tile_size = simple_binning_data
         
-        sorted_gaussian_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
             means2d, radii, depths, img_height, img_width, tile_size, backend="torch"
         )
         
@@ -89,18 +89,15 @@ class TestBinningTorch:
         
         # Verify shapes
         assert sorted_gaussian_indices.dtype == torch.int32
-        assert tile_pointers.shape == (n_tiles + 1,)
-        assert tile_pointers.dtype == torch.int32
         assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
         assert tile_ranges.dtype == torch.int32
         
         # Verify device
-        assert all(t.device == device for t in [sorted_gaussian_indices, tile_pointers, tile_ranges])
+        assert all(t.device == device for t in [sorted_gaussian_indices, tile_ranges])
         
-        # Basic sanity checks
-        assert tile_pointers[0] == 0  # First tile starts at index 0
-        assert tile_pointers[-1] == sorted_gaussian_indices.shape[0]  # Last pointer is total overlaps
-        assert (tile_pointers[1:] >= tile_pointers[:-1]).all()  # Pointers are non-decreasing
+        # Basic sanity checks - tile_ranges should have valid start/end indices
+        assert (tile_ranges[:, :, 0] <= tile_ranges[:, :, 1]).all()  # Start <= end for all tiles
+        assert tile_ranges[:, :, 1].max() <= sorted_gaussian_indices.shape[0]  # End indices within bounds
 
 
     def test_depth_sorting(self, device):
@@ -116,7 +113,7 @@ class TestBinningTorch:
         ], device=device, dtype=torch.float32)
         depths = torch.tensor([2.0, 1.0], device=device, dtype=torch.float32)  # Second is closer
         
-        sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
             means2d, radii, depths, 64, 64, 16, backend="torch"
         )
         
@@ -124,8 +121,8 @@ class TestBinningTorch:
         assert sorted_indices.shape[0] >= 2
         
         # Find overlaps for tile (0,0) which is tile_id = 0
-        tile_start = tile_pointers[0].item()
-        tile_end = tile_pointers[1].item()
+        tile_start = tile_ranges[0, 0, 0].item()
+        tile_end = tile_ranges[0, 0, 1].item()
         
         if tile_end > tile_start:
             # If there are Gaussians in this tile, check depth ordering
@@ -141,12 +138,12 @@ class TestBinningTorch:
         radii = torch.tensor([[8.0, 8.0]], device=device, dtype=torch.float32)     # Large radius
         depths = torch.tensor([1.0], device=device, dtype=torch.float32)
         
-        sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
             means2d, radii, depths, 64, 64, 16, backend="torch"
         )
         
         # This Gaussian should appear in multiple tiles
-        total_overlaps = tile_pointers[-1].item()
+        total_overlaps = sorted_indices.shape[0]
         assert total_overlaps > 1  # Should overlap multiple tiles
 
 
@@ -156,16 +153,16 @@ class TestBinningTorch:
         empty_radii = torch.empty(0, 2, device=device, dtype=torch.float32)
         empty_depths = torch.empty(0, device=device, dtype=torch.float32)
         
-        sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
             empty_means2d, empty_radii, empty_depths, 64, 64, 16, backend="torch"
         )
         
-        n_tiles = 4 * 4  # 64x64 with 16x16 tiles
+        n_tiles_h = n_tiles_w = 4  # 64x64 with 16x16 tiles
         
         # Should have empty results but correct structure
         assert sorted_indices.shape[0] == 0
-        assert tile_pointers.shape == (n_tiles + 1,)
-        assert (tile_pointers == 0).all()  # All pointers should be 0 for empty input
+        assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
+        assert (tile_ranges[:, :, 0] == tile_ranges[:, :, 1]).all()  # Start == end for empty input
 
 
     def test_batch_processing(self, device, batch_binning_data):
@@ -173,7 +170,7 @@ class TestBinningTorch:
         means2d, radii, depths, img_height, img_width, tile_size = batch_binning_data
         N = means2d.shape[0]
         
-        sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
             means2d, radii, depths, img_height, img_width, tile_size, backend="torch"
         )
         
@@ -187,13 +184,14 @@ class TestBinningTorch:
         means2d, radii, depths, img_height, img_width, tile_size = edge_case_data
         
         # Should not crash on edge cases
-        sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
             means2d, radii, depths, img_height, img_width, tile_size, backend="torch"
         )
         
         # Basic structure should be maintained
-        n_tiles = math.ceil(img_height / tile_size) * math.ceil(img_width / tile_size)
-        assert tile_pointers.shape[0] == n_tiles + 1
+        n_tiles_h = math.ceil(img_height / tile_size)
+        n_tiles_w = math.ceil(img_width / tile_size)
+        assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
 
 
 class TestBinningGsplat:
@@ -204,23 +202,26 @@ class TestBinningGsplat:
         means2d, radii, depths, img_height, img_width, tile_size = simple_binning_data
         
         try:
-            result = bin_gaussians_to_tiles(
+            sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
                 means2d, radii, depths, img_height, img_width, tile_size, backend="gsplat"
             )
         except Exception as e:
             pytest.skip(f"GSplat backend not available: {e}")
         
-        flatten_ids, isect_offsets = result
+        n_tiles_h = math.ceil(img_height / tile_size)
+        n_tiles_w = math.ceil(img_width / tile_size)
         
         # Verify basic properties
-        assert flatten_ids.device == device
-        assert isect_offsets.device == device
-        assert flatten_ids.dtype == torch.int32
-        assert isect_offsets.dtype == torch.int64  # GSplat typically uses int64
+        assert sorted_gaussian_indices.device == device
+        assert tile_ranges.device == device
+        assert sorted_gaussian_indices.dtype == torch.int32
+        assert tile_ranges.dtype == torch.int64  # GSplat typically uses int64
+        # GSplat tile_ranges now has same shape as torch: (n_tiles_h, n_tiles_w, 2) with [start, end] pairs
+        assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
         
         # Verify outputs are finite (no NaN/inf)
-        assert torch.isfinite(flatten_ids.float()).all()
-        assert torch.isfinite(isect_offsets.float()).all()
+        assert torch.isfinite(sorted_gaussian_indices.float()).all()
+        assert torch.isfinite(tile_ranges.float()).all()
 
 
     def test_batch_processing(self, device, batch_binning_data):
@@ -228,15 +229,15 @@ class TestBinningGsplat:
         means2d, radii, depths, img_height, img_width, tile_size = batch_binning_data
         
         try:
-            flatten_ids, isect_offsets = bin_gaussians_to_tiles(
+            sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
                 means2d, radii, depths, img_height, img_width, tile_size, backend="gsplat"
             )
         except Exception as e:
             pytest.skip(f"GSplat backend not available: {e}")
         
         # Basic checks
-        assert flatten_ids.device == device
-        assert isect_offsets.device == device
+        assert sorted_gaussian_indices.device == device
+        assert tile_ranges.device == device
 
 
     def test_empty_input_handling(self, device):
@@ -247,7 +248,7 @@ class TestBinningGsplat:
         
         try:
             # Empty inputs should either work or raise a clear error
-            flatten_ids, isect_offsets = bin_gaussians_to_tiles(
+            sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
                 empty_means2d, empty_radii, empty_depths, 64, 64, 16, backend="gsplat"
             )
         except Exception as e:
@@ -339,20 +340,19 @@ class TestBinningIntegration:
         depths = torch.rand(N, device=device, dtype=torch.float32) * 10 + 0.1
         
         # Should work with torch backend
-        sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
             means2d, radii, depths, img_height, img_width, tile_size, backend="torch"
         )
         
         # Verify realistic properties
-        n_tiles = math.ceil(img_height / tile_size) * math.ceil(img_width / tile_size)
-        assert tile_pointers.shape[0] == n_tiles + 1
+        n_tiles_h = math.ceil(img_height / tile_size)
+        n_tiles_w = math.ceil(img_width / tile_size)
+        assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
         assert sorted_indices.max().item() < N  # All indices should be valid
         
-        # Verify tile ranges are consistent with pointers
-        flat_tile_ranges = tile_ranges.view(-1, 2)
-        for i in range(n_tiles):
-            assert flat_tile_ranges[i, 0] == tile_pointers[i]
-            assert flat_tile_ranges[i, 1] == tile_pointers[i + 1]
+        # Verify tile ranges are valid
+        assert (tile_ranges[:, :, 0] <= tile_ranges[:, :, 1]).all()  # Start <= end
+        assert tile_ranges[:, :, 1].max() <= sorted_indices.shape[0]  # End indices within bounds
 
 
     def test_different_tile_sizes(self, device):
@@ -363,15 +363,13 @@ class TestBinningIntegration:
         img_height, img_width = 64, 64
         
         for tile_size in [8, 16, 32]:
-            sorted_indices, tile_pointers, tile_ranges = bin_gaussians_to_tiles(
+            sorted_indices, tile_ranges = bin_gaussians_to_tiles(
                 means2d, radii, depths, img_height, img_width, tile_size, backend="torch"
             )
             
             expected_tiles_h = math.ceil(img_height / tile_size)
             expected_tiles_w = math.ceil(img_width / tile_size)
-            expected_n_tiles = expected_tiles_h * expected_tiles_w
             
-            assert tile_pointers.shape[0] == expected_n_tiles + 1
             assert tile_ranges.shape == (expected_tiles_h, expected_tiles_w, 2)
 
 
