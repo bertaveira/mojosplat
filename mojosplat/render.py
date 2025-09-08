@@ -87,8 +87,6 @@ def render_gaussians(
              colors = features[..., :3] # Crude approximation
 
     # --- 5. Rasterization & Blending --- 
-    print(f"means2d: {means2d.shape}, covs2d: {covs2d.shape}, colors: {colors.shape}, opacities: {opacities.shape}, background_color_tensor: {background_color_tensor.shape}, tile_ranges: {tile_ranges.shape}, sorted_gaussian_indices: {sorted_gaussian_indices.shape}")
-
     final_image = rasterize_gaussians(
         means2d,
         covs2d,
@@ -101,9 +99,6 @@ def render_gaussians(
         tile_size=tile_size,
         backend=backend,
     )
-    print("Done")
-    print(f"final_image: {final_image.shape}")
-    print(f"max_val: {final_image.max()}")
 
     return final_image
     

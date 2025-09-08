@@ -92,17 +92,17 @@ def rasterize_gaussians_gsplat(
     """GSplat implementation of Gaussian rasterization."""
     from gsplat import rasterize_to_pixels
 
-    means2d = means2d.unsqueeze(0)
-    conics = conics.unsqueeze(0)
-    colors = colors.unsqueeze(0)
+    means2d = means2d.unsqueeze(0).contiguous()
+    conics = conics.unsqueeze(0).contiguous()
+    colors = colors.unsqueeze(0).contiguous()
     # GSplat expects opacities to be (batch, N) not (batch, N, 1)
     if opacities.dim() == 1:
-        opacities = opacities.unsqueeze(0)  # (N,) -> (1, N)
+        opacities = opacities.unsqueeze(0).contiguous()  # (N,) -> (1, N)
     else:
-        opacities = opacities.squeeze(-1).unsqueeze(0)  # (N, 1) -> (N,) -> (1, N)
-    background_color = background_color.unsqueeze(0)
-    tile_ranges = tile_ranges.unsqueeze(0)
-    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)
+        opacities = opacities.squeeze(-1).unsqueeze(0).contiguous()  # (N, 1) -> (N,) -> (1, N)
+    background_color = background_color.unsqueeze(0).contiguous()
+    tile_ranges = tile_ranges.unsqueeze(0).contiguous()
+    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0).contiguous()
 
     tile_ranges = tile_ranges[:, :, :, 0]
 
@@ -171,10 +171,10 @@ def rasterize_gaussians_mojo(
             "tile_size": tile_size,
             "image_height": camera.H,
             "image_width": camera.W,
-            "CDIM": 3,
+            "CDIM": num_channels,  # Use actual number of channels
             "C": 1,
-            "N": means2d.shape[1],
-            "NIntersections": sorted_gaussian_indices.shape[1],
+            "N": means2d.shape[1],  # After adding batch dimension: (1, N, 2)
+            "NIntersections": sorted_gaussian_indices.shape[1],  # After adding batch dimension: (1, M)
         }
     ]
     rasterize_to_pixels_3dgs_fwd_kernel(

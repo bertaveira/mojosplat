@@ -453,4 +453,10 @@ def project_gaussians_mojo(
 
     project_gaussians_kernel(means2d, conics, depth, radii, means3d, torch.exp(scales), quats, opacities, view_matrix, ks_flat)
 
+    # Remove batch dimension to match expected output format: (N, 2), (N, 3), (N), (N, 2)
+    means2d = means2d.squeeze(0)  # (1, N, 2) -> (N, 2)
+    conics = conics.squeeze(0)    # (1, N, 3) -> (N, 3)
+    depth = depth.squeeze(0)      # (1, N) -> (N)
+    radii = radii.squeeze(0)      # (1, N, 2) -> (N, 2)
+
     return means2d, conics, depth, radii
