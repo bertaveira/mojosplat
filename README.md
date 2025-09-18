@@ -141,7 +141,8 @@ Contributions are very welcome! This is an experimental project exploring the in
 Areas where help is needed:
 - **Mojo Binning Kernel**: Complete the binning implementation in Mojo
 - **PyTorch Rasterization**: Native PyTorch rasterization kernel
-- **Performance Optimization**: Improve existing Mojo kernels
+- **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. Also measure the overhead of the python to mojo connection.
+- **Backwards pass**: implement the mojo kernels for the backwards pass. This will allow the MojoSplat to be used in training the gaussian representation.
 - **Testing**: More comprehensive test coverage
 - **Unscented Projection**: Implmeent the Unscented projection from 3DGUT as an alternative to EWA
 
