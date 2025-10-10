@@ -223,6 +223,9 @@ fn project_ewa_kernel[
 
 
     ########### Rotation Matrix to Covariance Matrix ########### FIXME: Replace by function (not possible it seems right now)
+    # C = R * S * S * Rt
+
+    # create scaling matrix # TODO: avoid using tensor aloc for faster computation?
     var S = tb[DType.float32]().row_major[3, 3]().alloc()
     for i in range(3):
         for j in range(3):
@@ -231,6 +234,7 @@ fn project_ewa_kernel[
             else:
                 S[i, j] = 0.0
     
+    # M = R * S
     var M = tb[DType.float32]().row_major[3, 3]().alloc()
     for i in range(3):
         for j in range(3):
@@ -238,6 +242,7 @@ fn project_ewa_kernel[
             for k in range(3):
                 M[i, j] += R[i, k] * S[k, j]
     
+    # C = M * M^T
     var covar = tb[DType.float32]().row_major[3, 3]().alloc()
     for i in range(3):
         for j in range(3):
@@ -246,21 +251,23 @@ fn project_ewa_kernel[
                 covar[i, j] += M[i, k] * M[j, k]
     
     
-    ########### Covariance World to Camera ########### FIXME: Replace by function (not possible it seems right now)
-    # covar_c = R * covar * R^T
+    ########### Covariance World to Camera ###########
+    # Apply camera rotation to covariance: covar_c = R_view * covar * R_view^T
+    var R_view = tb[DType.float32]().row_major[3, 3]().alloc()
+    for i in range(3):
+        for j in range(3):
+            R_view[i, j] = view_matrix[i, j]
     var covar_c = tb[DType.float32]().row_major[3, 3]().alloc()
     for i in range(3):
         for j in range(3):
             var tmp: Float32 = 0.0
             for l in range(3):
-                # The inner part calculates (R*C)[i][l]
+                # (R_view * covar)[i, l]
                 var tmp2: Float32 = 0.0
                 for k in range(3):
-                    tmp2 += R[i, k][0] * covar[k, l][0] # FIXME: remove [0] if mojo ever supports direct SIMD[1] to Float32
-                
-                # Now multiply corresponding element from R^T
-                tmp += tmp2 * R[j, l][0]
-            
+                    tmp2 += R_view[i, k][0] * covar[k, l][0]
+                # Multiply by R_view^T
+                tmp += tmp2 * R_view[l, j][0]
             covar_c[i, j] = tmp
 
     ########### Pinhole Camera Projection ########### FIXME: Replace by function (not possible it seems right now)
