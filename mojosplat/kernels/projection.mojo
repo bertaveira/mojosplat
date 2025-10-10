@@ -287,16 +287,20 @@ fn project_ewa_kernel[
     var tx: Float32 = mean_c[2][0] * min(lim_x_pos, max(-lim_x_neg, mean_c[0][0] * rz))
     var ty: Float32 = mean_c[2][0] * min(lim_y_pos, max(-lim_y_neg, mean_c[1][0] * rz))
     
-    var J = tb[DType.float32]().row_major[3, 2]().alloc()
-    J[0, 0] = ks[camera_idx, 0] * rz
-    J[0, 1] = 0.0
-    J[1, 0] = 0.0
-    J[1, 1] = ks[camera_idx, 1] * rz
-    J[2, 0] = -ks[camera_idx, 0] * tx * rz2
-    J[2, 1] = -ks[camera_idx, 1] * ty * rz2
+    # Jacobian d([fx*x/z + cx, fy*y/z + cy]) / d([x, y, z]) has shape (2, 3)
+    var J = tb[DType.float32]().row_major[2, 3]().alloc()
+    # Row 0
+    J[0, 0] = ks[camera_idx, 0] * rz                 # fx / z
+    J[0, 1] = 0.0                                     # 0
+    J[0, 2] = -ks[camera_idx, 0] * tx * rz2           # -fx * x / z^2
+    # Row 1
+    J[1, 0] = 0.0                                     # 0
+    J[1, 1] = ks[camera_idx, 1] * rz                  # fy / z
+    J[1, 2] = -ks[camera_idx, 1] * ty * rz2           # -fy * y / z^2
 
-    var cov2d = tb[DType.float32]().row_major[2, 2]().alloc()
+
     # cov2d = J * covar_c * J^T
+    var cov2d = tb[DType.float32]().row_major[2, 2]().alloc()
     for i in range(2):
         for j in range(2):
             var total_sum: Float32 = 0.0
@@ -305,7 +309,6 @@ fn project_ewa_kernel[
                 for k in range(3):
                     temp_il += J[i, k][0] * covar_c[k, l][0]
                 total_sum += temp_il * J[j, l][0]
-            
             cov2d[i, j] = total_sum
 
     mean2d[0] = ks[camera_idx, 0] * mean_c[0] * rz + ks[camera_idx, 2]
