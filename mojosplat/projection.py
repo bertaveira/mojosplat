@@ -34,7 +34,6 @@ def project_gaussians(
         means2d: (N, 2) xy coordinates in pixel space.
         conics: (N, 3) inverse of the projected covariances. Return the flattend upper triangle
         depths: (N,) depth of each Gaussian center in camera space.
-        opacities: (N,) sigmoid applied opacity.
         radii: (N, 2) estimated radius in pixels for conservative rasterization bounds.
     """
     if backend == "torch":

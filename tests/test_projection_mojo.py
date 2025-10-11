@@ -2,6 +2,7 @@ import pytest
 import torch
 import numpy as np
 from typing import Literal
+import os
 
 from mojosplat.projection import project_gaussians
 from mojosplat.utils import Camera
@@ -38,7 +39,7 @@ def simple_gaussian(device):
 
 
 @pytest.fixture  
-def batch_gaussians(device):
+def multiple_gaussians(device):
     """Create a small batch of Gaussians for testing."""
     N = 5
     means3d = torch.randn(N, 3, device=device, dtype=torch.float32) * 2
@@ -65,10 +66,10 @@ class TestMojoProjection:
             pytest.skip(f"Mojo backend not available: {e}")
         
         # Verify basic properties
-        assert means2d.shape == (1, 1, 2)
-        assert conics.shape == (1, 1, 3) 
-        assert depths.shape == (1, 1)
-        assert radii.shape == (1, 1, 2)
+        assert means2d.shape == (1, 2)
+        assert conics.shape == (1, 3) 
+        assert depths.shape == (1,)
+        assert radii.shape == (1, 2)
         
         assert means2d.dtype == torch.float32
         assert conics.dtype == torch.float32
@@ -83,9 +84,9 @@ class TestMojoProjection:
         assert torch.isfinite(depths).all()
 
 
-    def test_batch_processing(self, device, camera, batch_gaussians):
+    def test_multiple_gaussians_processing(self, device, camera, multiple_gaussians):
         """Test that Mojo backend handles batches correctly."""
-        means3d, scales, quats, opacity_features = batch_gaussians
+        means3d, scales, quats, opacity_features = multiple_gaussians
         N = means3d.shape[0]
         
         means2d, conics, depths, radii = project_gaussians(
@@ -93,10 +94,10 @@ class TestMojoProjection:
         )
         
         # Check batch dimensions are handled correctly
-        assert means2d.shape == (1, N, 2)
-        assert conics.shape == (1, N, 3)
-        assert depths.shape == (1, N)
-        assert radii.shape == (1, N, 2)
+        assert means2d.shape == (N, 2)
+        assert conics.shape == (N, 3)
+        assert depths.shape == (N,)
+        assert radii.shape == (N, 2)
 
 
     def test_empty_input_handling(self, device, camera):
@@ -169,11 +170,11 @@ class TestMojoProjection:
             means3d, scales, quats, opacity_features, camera, backend="mojo"
         )
         
-        projected_x, projected_y = means2d[0, 0, 0].item(), means2d[0, 0, 1].item()
+        projected_x, projected_y = means2d[0, 0].item(), means2d[0, 1].item()
         
         # Should be reasonably close to image center (32, 32)
-        assert abs(projected_x - 32.0) < 5.0, f"X projection {projected_x} far from center"
-        assert abs(projected_y - 32.0) < 5.0, f"Y projection {projected_y} far from center"
+        assert abs(projected_x - 32.0) < 0.1, f"X projection {projected_x} far from center"
+        assert abs(projected_y - 32.0) < 0.1, f"Y projection {projected_y} far from center"
 
 
     def test_opacity_culling(self, device, camera):
@@ -189,11 +190,10 @@ class TestMojoProjection:
         )
         
         # Culled Gaussians should have zero radii and zero means2d
-        assert radii[0, 0, 0].item() == 0, "Culled Gaussian should have zero x radius"
-        assert radii[0, 0, 1].item() == 0, "Culled Gaussian should have zero y radius"
-        assert means2d[0, 0, 0].item() == 0.0, "Culled Gaussian should have zero x projection"
-        assert means2d[0, 0, 1].item() == 0.0, "Culled Gaussian should have zero y projection"
-
+        assert radii[0, 0].item() == 0, "Culled Gaussian should have zero x radius"
+        assert radii[0, 1].item() == 0, "Culled Gaussian should have zero y radius"
+        assert means2d[0, 0].item() == 0.0, "Culled Gaussian should have zero x projection"
+        assert means2d[0, 1].item() == 0.0, "Culled Gaussian should have zero y projection"
 
 if __name__ == "__main__":
     pytest.main([__file__])
