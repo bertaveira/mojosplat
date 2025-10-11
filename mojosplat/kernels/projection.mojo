@@ -122,7 +122,7 @@ fn project_ewa_kernel[
     conics: LayoutTensor[DType.float32, Layout.row_major(C, N, 3), MutableAnyOrigin],
 ):
     # This kernel is paralellized over N * C
-    var idx = thread_idx.x
+    var idx = thread_idx.x + block_idx.x * block_size
     var gaussian_idx = Int(idx % N)
     var camera_idx = Int(idx // N)
 
@@ -363,9 +363,9 @@ fn project_ewa_kernel[
     
     ########### Conic calculation ###########
     var (a, b, c, d) = inverse_2x2(cov2d[0, 0][0], cov2d[0, 1][0], cov2d[1, 0][0], cov2d[1, 1][0])
-    conics[camera_idx, gaussian_idx, 0] = d  # cov2d[1,1] / det
-    conics[camera_idx, gaussian_idx, 1] = b  # -cov2d[0,1] / det  
-    conics[camera_idx, gaussian_idx, 2] = a  # cov2d[0,0] / det
+    conics[camera_idx, gaussian_idx, 0] = a
+    conics[camera_idx, gaussian_idx, 1] = b
+    conics[camera_idx, gaussian_idx, 2] = d
 
     radii[camera_idx, gaussian_idx, 0] = Int(radius_x)
     radii[camera_idx, gaussian_idx, 1] = Int(radius_y)
