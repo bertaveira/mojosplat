@@ -134,12 +134,6 @@ class TestMojoProjection:
         means2d_1, conics_1, depths_1, radii_1 = result1
         means2d_2, conics_2, depths_2, radii_2 = result2
         
-        # Handle shape differences (Mojo adds batch dimension)
-        if backend1 == "mojo":
-            means2d_1, conics_1, depths_1, radii_1 = [t.squeeze(0) for t in result1]
-        if backend2 == "mojo":
-            means2d_2, conics_2, depths_2, radii_2 = [t.squeeze(0) for t in result2]
-        
         # Convert radii to float for comparison
         radii_1, radii_2 = radii_1.float(), radii_2.float()
         
