@@ -10,97 +10,6 @@ from tensor import InputTensor, OutputTensor
 alias radius_clip: Float32 = 0.0
 alias block_size: Int = 256
 
-# @always_inline
-# fn pos_world_to_camera[
-#     dtype: DType
-# ](
-#     world_pos: LayoutTensor[dtype, Layout.row_major(3), MutableAnyOrigin],
-#     world_to_camera: LayoutTensor[dtype, Layout.row_major(4, 4), MutableAnyOrigin],
-#     output: LayoutTensor[dtype, Layout.row_major(3), MutableAnyOrigin],
-# ) -> LayoutTensor[dtype, Layout.row_major(3), MutableAnyOrigin]:
-#     # Perform matrix multiplication: world_to_camera @ world_pos + world_to_camera[3]
-#     for i in range(3):
-#         output[i] = 0.0
-#         for j in range(3):
-#             output[i] += world_to_camera[i, j] * world_pos[j]
-#         output[i] += world_to_camera[i, 3]
-
-
-# @always_inline
-# fn quat_to_rotmat(
-#     quat: LayoutTensor[DType.float32, Layout.row_major(4), MutableAnyOrigin],
-#     output: LayoutTensor[DType.float32, Layout.row_major(3, 3), MutableAnyOrigin],
-# ):
-#     # Extract quaternion components
-#     var w = quat[0]
-#     var x = quat[1] 
-#     var y = quat[2]
-#     var z = quat[3]
-    
-#     # Normalize quaternion
-#     var norm_sq = x * x + y * y + z * z + w * w
-#     var inv_norm = 1.0 / sqrt(norm_sq)
-#     x *= inv_norm
-#     y *= inv_norm
-#     z *= inv_norm
-#     w *= inv_norm
-    
-#     # Compute intermediate values
-#     var x2 = x * x
-#     var y2 = y * y
-#     var z2 = z * z
-#     var xy = x * y
-#     var xz = x * z
-#     var yz = y * z
-#     var wx = w * x
-#     var wy = w * y
-#     var wz = w * z
-    
-#     # Create result matrix
-#     output[0, 0] = 1.0 - 2.0 * (y2 + z2)
-#     output[0, 1] = 2.0 * (xy + wz)
-#     output[0, 2] = 2.0 * (xz - wy)
-    
-#     output[1, 0] = 2.0 * (xy - wz)
-#     output[1, 1] = 1.0 - 2.0 * (x2 + z2)
-#     output[1, 2] = 2.0 * (yz + wx)
-    
-#     output[2, 0] = 2.0 * (xz + wy)
-#     output[2, 1] = 2.0 * (yz - wx)
-#     output[2, 2] = 1.0 - 2.0 * (x2 + y2)
-
-
-# fn quat_to_covar(
-#     quat: LayoutTensor[DType.float32, Layout.row_major(4), MutableAnyOrigin],
-#     scale: LayoutTensor[DType.float32, Layout.row_major(3), MutableAnyOrigin],
-#     output: LayoutTensor[DType.float32, Layout.row_major(3, 3), MutableAnyOrigin],
-# ):
-#     var R = quat_to_rotmat(quat, output)
-    
-#     # Create scaling matrix S
-#     var S = tb[DType.float32]().row_major[3, 3]().alloc()
-#     for i in range(3):
-#         for j in range(3):
-#             if i == j:
-#                 S[i, j] = scale[i]
-#             else:
-#                 S[i, j] = 0.0
-    
-#     # Compute M = R * S
-#     var M = tb[DType.float32]().row_major[3, 3]().alloc()
-#     for i in range(3):
-#         for j in range(3):
-#             M[i, j] = 0.0
-#             for k in range(3):
-#                 M[i, j] += R[i, k] * S[k, j]
-    
-#     # Compute covariance = M * M^T
-#     for i in range(3):
-#         for j in range(3):
-#             output[i, j] = 0.0
-#             for k in range(3):
-#                 output[i, j] += M[i, k] * M[j, k]  # M[j, k] is M^T[k, j]
-
 
 fn project_ewa_kernel[
     C: Int,
@@ -135,13 +44,13 @@ fn project_ewa_kernel[
     var mean = means3d.slice_1d[Slice(0, 3), IndexList[1](1)](gaussian_idx) # [3] LayoutTensor
     var scale = scales.slice_1d[Slice(0, 3), IndexList[1](1)](gaussian_idx) # [3] LayoutTensor
     var quat = quats.slice_1d[Slice(0, 4), IndexList[1](1)](gaussian_idx) # [4] LayoutTensor
+    var opacity = opacities[gaussian_idx]
     
     # Extract the 4x4 view matrix for the current camera
     var view_matrix = tb[DType.float32]().row_major[4, 4]().alloc()
     for i in range(4):
         for j in range(4):
             view_matrix[i, j] = view_matrices[camera_idx, i, j]
-
 
     ########### Gaussian Wolrd to Camera ########### FIXME: Replace by function (not possible it seems right now)
     # mean_c = R * mean + t
@@ -158,29 +67,13 @@ fn project_ewa_kernel[
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
         # Set means2d to 0 instead of NaN for culled Gaussians  
-        means2d[camera_idx, gaussian_idx, 0] = 0.0
-        means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = 0.0
-        # Set conics to 0 for culled Gaussians
-        conics[camera_idx, gaussian_idx, 0] = 0.0
-        conics[camera_idx, gaussian_idx, 1] = 0.0
-        conics[camera_idx, gaussian_idx, 2] = 0.0
-        return
-
-    # Opacity-based culling (matches GSplat CUDA kernel)
-    alias ALPHA_THRESHOLD: Float32 = 1.0 / 255.0  # Standard 3DGS threshold
-    var opacity = opacities[gaussian_idx]
-    if opacity < ALPHA_THRESHOLD:
-        radii[camera_idx, gaussian_idx, 0] = 0
-        radii[camera_idx, gaussian_idx, 1] = 0
-        # Set means2d to 0 instead of NaN for culled Gaussians  
-        means2d[camera_idx, gaussian_idx, 0] = 0.0
-        means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = 0.0
-        # Set conics to 0 for culled Gaussians
-        conics[camera_idx, gaussian_idx, 0] = 0.0
-        conics[camera_idx, gaussian_idx, 1] = 0.0
-        conics[camera_idx, gaussian_idx, 2] = 0.0
+        # means2d[camera_idx, gaussian_idx, 0] = 0.0
+        # means2d[camera_idx, gaussian_idx, 1] = 0.0
+        # depths[camera_idx, gaussian_idx] = 0.0
+        # # Set conics to 0 for culled Gaussians
+        # conics[camera_idx, gaussian_idx, 0] = 0.0
+        # conics[camera_idx, gaussian_idx, 1] = 0.0
+        # conics[camera_idx, gaussian_idx, 2] = 0.0
         return
 
     ########### Quaternion to Rotation Matrix ########### FIXME: Replace by function (not possible it seems right now)
@@ -322,7 +215,6 @@ fn project_ewa_kernel[
     cov2d[0, 0] += eps2d
     cov2d[1, 1] += eps2d
     var det_blur: Float32 = cov2d[0, 0][0] * cov2d[1, 1][0] - cov2d[0, 1][0] * cov2d[1, 0][0]
-    var compensations: Float32 = sqrt(max(Float32(0.0), det_orig / det_blur))
 
     if det_blur <= 0.0:
         radii[camera_idx, gaussian_idx, 0] = 0
@@ -330,9 +222,8 @@ fn project_ewa_kernel[
         return
 
     ########### Opacity-aware radius calculation (matches CUDA kernel) ###########
+    alias ALPHA_THRESHOLD: Float32 = 1.0 / 255.0  # Standard 3DGS threshold
     var extend: Float32 = 3.33  # default extend
-    # var opacity2 = opacities[gaussian_idx]  # Use different name to avoid duplicate
-    opacity *= compensations
     if opacity < ALPHA_THRESHOLD:
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
