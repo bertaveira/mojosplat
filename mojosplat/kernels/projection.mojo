@@ -153,7 +153,8 @@ fn project_ewa_kernel[
         mean_c[i] += view_matrix[i, 3]
 
     alias near_plane: Float32 = 0.1
-    if mean_c[2][0] <= near_plane:
+    alias far_plane: Float32 = 1e10
+    if mean_c[2][0] <= near_plane or mean_c[2][0] >= far_plane:
         radii[camera_idx, gaussian_idx, 0] = 0
         radii[camera_idx, gaussian_idx, 1] = 0
         # Set means2d to 0 instead of NaN for culled Gaussians  
@@ -314,22 +315,30 @@ fn project_ewa_kernel[
     mean2d[0] = ks[camera_idx, 0] * mean_c[0] * rz + ks[camera_idx, 2]
     mean2d[1] = ks[camera_idx, 1] * mean_c[1] * rz + ks[camera_idx, 3]  
 
+    ########### Add blur to covariance ###########
+    var det_orig: Float32 = cov2d[0, 0][0] * cov2d[1, 1][0] - cov2d[0, 1][0] * cov2d[1, 0][0]
     # Add eps2d to diagonal to prevent gaussians from being too small (to match gsplat)
     alias eps2d: Float32 = 0.3
     cov2d[0, 0] += eps2d
     cov2d[1, 1] += eps2d
+    var det_blur: Float32 = cov2d[0, 0][0] * cov2d[1, 1][0] - cov2d[0, 1][0] * cov2d[1, 0][0]
+    var compensations: Float32 = sqrt(max(Float32(0.0), det_orig / det_blur))
+
+    if det_blur <= 0.0:
+        radii[camera_idx, gaussian_idx, 0] = 0
+        radii[camera_idx, gaussian_idx, 1] = 0
+        return
 
     ########### Opacity-aware radius calculation (matches CUDA kernel) ###########
     var extend: Float32 = 3.33  # default extend
-    var opacity2 = opacities[gaussian_idx]  # Use different name to avoid duplicate
-    if opacity2 >= ALPHA_THRESHOLD:
-        # Compute opacity-aware bounding box: extend = min(extend, sqrt(2.0f * log(opacity / ALPHA_THRESHOLD)))
-        var log_ratio = log(opacity2 / ALPHA_THRESHOLD)
-        var opacity_extend = sqrt(2.0 * log_ratio)
-        # Manual min implementation since min is not available in Mojo math
-        # Extract scalar value from SIMD type
-        if opacity_extend[0] < extend:
-            extend = opacity_extend[0]
+    # var opacity2 = opacities[gaussian_idx]  # Use different name to avoid duplicate
+    opacity *= compensations
+    if opacity < ALPHA_THRESHOLD:
+        radii[camera_idx, gaussian_idx, 0] = 0
+        radii[camera_idx, gaussian_idx, 1] = 0
+        return
+    
+    extend = min(Float32(extend), sqrt(Float32(2.0) * log(opacity / ALPHA_THRESHOLD)[0]))
     
     var radius_x: Float32 = ceil(extend * sqrt(cov2d[0, 0][0]))
     var radius_y: Float32 = ceil(extend * sqrt(cov2d[1, 1][0]))
