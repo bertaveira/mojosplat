@@ -5,46 +5,39 @@ from utils.index import IndexList
 from math import sqrt, ceil, ceildiv, log
 from runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor
+from memory import UnsafePointer
 
 comptime radius_clip: Float32 = 0.0
 comptime block_size: Int = 256
 
 
-fn project_ewa_kernel[
-    C: Int,
+fn project_ewa_kernel(
+    means3d_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],      # [N * 3]
+    scales_ptr:  UnsafePointer[Scalar[DType.float32], MutAnyOrigin],      # [N * 3]
+    quats_ptr:   UnsafePointer[Scalar[DType.float32], MutAnyOrigin],      # [N * 4]
+    opacities_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],    # [N]
+    view_matrices_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin], # [C * 16]
+    ks_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],           # [C * 11]
+    radii_ptr:   UnsafePointer[Scalar[DType.int32], MutAnyOrigin],        # [C * N * 2]
+    means2d_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],      # [C * N * 2]
+    depths_ptr:  UnsafePointer[Scalar[DType.float32], MutAnyOrigin],      # [C * N]
+    conics_ptr:  UnsafePointer[Scalar[DType.float32], MutAnyOrigin],      # [C * N * 3]
     N: Int,
-    image_width: Int,
-    image_height: Int,
-](
-    means3d: LayoutTensor[DType.float32, Layout.row_major(N, 3), MutAnyOrigin],
-    scales: LayoutTensor[DType.float32, Layout.row_major(N, 3), MutAnyOrigin],
-    quats: LayoutTensor[DType.float32, Layout.row_major(N, 4), MutAnyOrigin],
-    opacities: LayoutTensor[DType.float32, Layout.row_major(N), MutAnyOrigin],
-    view_matrices: LayoutTensor[DType.float32, Layout.row_major(C, 4, 4), MutAnyOrigin],
-    ks: LayoutTensor[DType.float32, Layout.row_major(C, 9), MutAnyOrigin],
-    # Outputs
-    radii: LayoutTensor[DType.int32, Layout.row_major(C, N, 2), MutAnyOrigin],
-    means2d: LayoutTensor[DType.float32, Layout.row_major(C, N, 2), MutAnyOrigin],
-    depths: LayoutTensor[DType.float32, Layout.row_major(C, N), MutAnyOrigin],
-    conics: LayoutTensor[DType.float32, Layout.row_major(C, N, 3), MutAnyOrigin],
+    C: Int,
 ):
-    # This kernel is paralellized over N * C
+    # This kernel is parallelized over N * C
     var idx = block_idx.x * block_size + thread_idx.x
     var gaussian_idx = Int(idx % N)
-    var camera_idx = Int(idx // N)
+    var camera_idx   = Int(idx // N)
 
     if idx >= N * C:
         return
-
-    var mean = means3d.slice_1d[Slice(0, 3), IndexList[1](1)](IndexList[1](gaussian_idx)) # [3] LayoutTensor
-    var scale = scales.slice_1d[Slice(0, 3), IndexList[1](1)](IndexList[1](gaussian_idx)) # [3] LayoutTensor
-    var quat = quats.slice_1d[Slice(0, 4), IndexList[1](1)](IndexList[1](gaussian_idx)) # [4] LayoutTensor
 
     # Extract the 4x4 view matrix for the current camera
     var view_matrix = LayoutTensor[DType.float32, Layout.row_major(4, 4), MutAnyOrigin].stack_allocation()
     for i in range(4):
         for j in range(4):
-            view_matrix[i, j] = view_matrices[camera_idx, i, j]
+            view_matrix[i, j] = view_matrices_ptr[camera_idx * 16 + i * 4 + j]
 
 
     ########### Gaussian World to Camera ########### FIXME: Replace by function (not possible it seems right now)
@@ -53,46 +46,46 @@ fn project_ewa_kernel[
     for i in range(3):
         mean_c[i] = 0.0
         for j in range(3):
-            mean_c[i] += view_matrix[i, j] * mean[j]
+            mean_c[i] += view_matrix[i, j] * means3d_ptr[gaussian_idx * 3 + j]
         mean_c[i] += view_matrix[i, 3]
 
     comptime near_plane: Float32 = 0.1
     if mean_c[2][0] <= near_plane:
-        radii[camera_idx, gaussian_idx, 0] = 0
-        radii[camera_idx, gaussian_idx, 1] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0
         # Set means2d to 0 instead of NaN for culled Gaussians
-        means2d[camera_idx, gaussian_idx, 0] = 0.0
-        means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = 0.0
+        means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0.0
+        means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0.0
+        depths_ptr[camera_idx * N + gaussian_idx] = 0.0
         # Set conics to 0 for culled Gaussians
-        conics[camera_idx, gaussian_idx, 0] = 0.0
-        conics[camera_idx, gaussian_idx, 1] = 0.0
-        conics[camera_idx, gaussian_idx, 2] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 0] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 1] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 2] = 0.0
         return
 
     # Opacity-based culling (matches GSplat CUDA kernel)
     comptime ALPHA_THRESHOLD: Float32 = 1.0 / 255.0  # Standard 3DGS threshold
-    var opacity = opacities[gaussian_idx]
+    var opacity = opacities_ptr[gaussian_idx]
     if opacity < ALPHA_THRESHOLD:
-        radii[camera_idx, gaussian_idx, 0] = 0
-        radii[camera_idx, gaussian_idx, 1] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0
         # Set means2d to 0 instead of NaN for culled Gaussians
-        means2d[camera_idx, gaussian_idx, 0] = 0.0
-        means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = 0.0
+        means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0.0
+        means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0.0
+        depths_ptr[camera_idx * N + gaussian_idx] = 0.0
         # Set conics to 0 for culled Gaussians
-        conics[camera_idx, gaussian_idx, 0] = 0.0
-        conics[camera_idx, gaussian_idx, 1] = 0.0
-        conics[camera_idx, gaussian_idx, 2] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 0] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 1] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 2] = 0.0
         return
 
     ########### Quaternion to Rotation Matrix ########### FIXME: Replace by function (not possible it seems right now)
     var R = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
     # Extract quaternion components
-    var w = quat[0]
-    var x = quat[1]
-    var y = quat[2]
-    var z = quat[3]
+    var w = quats_ptr[gaussian_idx * 4 + 0]
+    var x = quats_ptr[gaussian_idx * 4 + 1]
+    var y = quats_ptr[gaussian_idx * 4 + 2]
+    var z = quats_ptr[gaussian_idx * 4 + 3]
 
     # Normalize quaternion
     var norm_sq = x * x + y * y + z * z + w * w
@@ -131,7 +124,7 @@ fn project_ewa_kernel[
     for i in range(3):
         for j in range(3):
             if i == j:
-                S[i, j] = scale[i]
+                S[i, j] = scales_ptr[gaussian_idx * 3 + i]
             else:
                 S[i, j] = 0.0
 
@@ -165,15 +158,25 @@ fn project_ewa_kernel[
             covar_c[i, j] = tmp
 
     ########### Pinhole Camera Projection ########### FIXME: Replace by function (not possible it seems right now)
+    # Read image dimensions from ks (indices 4 and 5)
+    var image_width  = Int(ks_ptr[camera_idx * 11 + 4])
+    var image_height = Int(ks_ptr[camera_idx * 11 + 5])
+
+    # Read camera intrinsics
+    var fx: Float32 = ks_ptr[camera_idx * 11 + 0]
+    var fy: Float32 = ks_ptr[camera_idx * 11 + 1]
+    var cx: Float32 = ks_ptr[camera_idx * 11 + 2]
+    var cy: Float32 = ks_ptr[camera_idx * 11 + 3]
+
     # 2D projection
     var mean2d = LayoutTensor[DType.float32, Layout.row_major(2), MutAnyOrigin].stack_allocation()
 
-    var tan_fov_x: Float32 = 0.5 * Float32(image_width) / ks[camera_idx, 0][0]
-    var tan_fov_y: Float32 = 0.5 * Float32(image_height) / ks[camera_idx, 1][0]
-    var lim_x_pos: Float32 = (Float32(image_width) - ks[camera_idx, 2][0]) / ks[camera_idx, 0][0] + 0.3 * tan_fov_x
-    var lim_x_neg: Float32 = ks[camera_idx, 2][0] / ks[camera_idx, 0][0] + 0.3 * tan_fov_x
-    var lim_y_pos: Float32 = (Float32(image_height) - ks[camera_idx, 3][0]) / ks[camera_idx, 1][0] + 0.3 * tan_fov_y
-    var lim_y_neg: Float32 = ks[camera_idx, 3][0] / ks[camera_idx, 1][0] + 0.3 * tan_fov_y
+    var tan_fov_x: Float32 = 0.5 * Float32(image_width) / fx
+    var tan_fov_y: Float32 = 0.5 * Float32(image_height) / fy
+    var lim_x_pos: Float32 = (Float32(image_width) - cx) / fx + 0.3 * tan_fov_x
+    var lim_x_neg: Float32 = cx / fx + 0.3 * tan_fov_x
+    var lim_y_pos: Float32 = (Float32(image_height) - cy) / fy + 0.3 * tan_fov_y
+    var lim_y_neg: Float32 = cy / fy + 0.3 * tan_fov_y
 
     var rz: Float32 = 1.0 / mean_c[2][0]
     var rz2: Float32 = rz * rz
@@ -182,12 +185,12 @@ fn project_ewa_kernel[
     var ty: Float32 = mean_c[2][0] * min(lim_y_pos, max(-lim_y_neg, mean_c[1][0] * rz))
 
     var J = LayoutTensor[DType.float32, Layout.row_major(2, 3), MutAnyOrigin].stack_allocation()
-    J[0, 0] = ks[camera_idx, 0] * rz
+    J[0, 0] = fx * rz
     J[0, 1] = 0.0
-    J[0, 2] = -ks[camera_idx, 0] * tx * rz2
+    J[0, 2] = -fx * tx * rz2
     J[1, 0] = 0.0
-    J[1, 1] = ks[camera_idx, 1] * rz
-    J[1, 2] = -ks[camera_idx, 1] * ty * rz2
+    J[1, 1] = fy * rz
+    J[1, 2] = -fy * ty * rz2
 
     # cov2d = J (2x3) * covar_c (3x3) * J^T (3x2) = (2x2)
     var cov2d = LayoutTensor[DType.float32, Layout.row_major(2, 2), MutAnyOrigin].stack_allocation()
@@ -202,8 +205,8 @@ fn project_ewa_kernel[
 
             cov2d[i, j] = total_sum
 
-    mean2d[0] = ks[camera_idx, 0] * mean_c[0] * rz + ks[camera_idx, 2]
-    mean2d[1] = ks[camera_idx, 1] * mean_c[1] * rz + ks[camera_idx, 3]
+    mean2d[0] = fx * mean_c[0] * rz + cx
+    mean2d[1] = fy * mean_c[1] * rz + cy
 
     # Add eps2d to diagonal to prevent gaussians from being too small (to match gsplat)
     comptime eps2d: Float32 = 0.3
@@ -212,7 +215,7 @@ fn project_ewa_kernel[
 
     ########### Opacity-aware radius calculation (matches CUDA kernel) ###########
     var extend: Float32 = 3.33  # default extend
-    var opacity2 = opacities[gaussian_idx]  # Use different name to avoid duplicate
+    var opacity2 = opacities_ptr[gaussian_idx]  # Use different name to avoid duplicate
     if opacity2 >= ALPHA_THRESHOLD:
         # Compute opacity-aware bounding box: extend = min(extend, sqrt(2.0f * log(opacity / ALPHA_THRESHOLD)))
         var log_ratio = log(opacity2 / ALPHA_THRESHOLD)
@@ -226,103 +229,91 @@ fn project_ewa_kernel[
     var radius_y: Float32 = ceil(extend * sqrt(cov2d[1, 1][0]))
 
     if radius_x <= radius_clip and radius_y <= radius_clip:
-        radii[camera_idx, gaussian_idx, 0] = 0
-        radii[camera_idx, gaussian_idx, 1] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0
         # Set all outputs to 0 for culled Gaussians (matches GSplat behavior)
-        means2d[camera_idx, gaussian_idx, 0] = 0.0
-        means2d[camera_idx, gaussian_idx, 1] = 0.0
-        depths[camera_idx, gaussian_idx] = 0.0  # Zero depth for culled Gaussians
-        conics[camera_idx, gaussian_idx, 0] = 0.0
-        conics[camera_idx, gaussian_idx, 1] = 0.0
-        conics[camera_idx, gaussian_idx, 2] = 0.0
+        means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0.0
+        means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0.0
+        depths_ptr[camera_idx * N + gaussian_idx] = 0.0  # Zero depth for culled Gaussians
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 0] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 1] = 0.0
+        conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 2] = 0.0
         return
 
     # Viewport culling
-    if mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= image_width or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= image_height:
-        radii[camera_idx, gaussian_idx, 0] = 0
-        radii[camera_idx, gaussian_idx, 1] = 0
+    if mean2d[0] + radius_x <= 0 or mean2d[0] - radius_x >= Float32(image_width) or mean2d[1] + radius_y <= 0 or mean2d[1] - radius_y >= Float32(image_height):
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = 0
+        radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = 0
         return
 
     ########### Conic calculation (inlined 2x2 matrix inverse) ###########
     var det_val: Float32 = cov2d[0, 0][0] * cov2d[1, 1][0] - cov2d[0, 1][0] * cov2d[1, 0][0]
     var inv_det: Float32 = Float32(1.0) / det_val
-    conics[camera_idx, gaussian_idx, 0] = cov2d[1, 1][0] * inv_det   # cov2d[1,1] / det
-    conics[camera_idx, gaussian_idx, 1] = -cov2d[0, 1][0] * inv_det  # -cov2d[0,1] / det
-    conics[camera_idx, gaussian_idx, 2] = cov2d[0, 0][0] * inv_det   # cov2d[0,0] / det
+    conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 0] = cov2d[1, 1][0] * inv_det   # cov2d[1,1] / det
+    conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 1] = -cov2d[0, 1][0] * inv_det  # -cov2d[0,1] / det
+    conics_ptr[camera_idx * N * 3 + gaussian_idx * 3 + 2] = cov2d[0, 0][0] * inv_det   # cov2d[0,0] / det
 
-    radii[camera_idx, gaussian_idx, 0] = Int(radius_x)
-    radii[camera_idx, gaussian_idx, 1] = Int(radius_y)
-    means2d[camera_idx, gaussian_idx, 0] = mean2d[0]
-    means2d[camera_idx, gaussian_idx, 1] = mean2d[1]
-    depths[camera_idx, gaussian_idx] = mean_c[2][0]  # Depth is positive distance along viewing direction?
+    radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = radius_x.cast[DType.int32]()
+    radii_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = radius_y.cast[DType.int32]()
+    means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 0] = mean2d[0][0]
+    means2d_ptr[camera_idx * N * 2 + gaussian_idx * 2 + 1] = mean2d[1][0]
+    depths_ptr[camera_idx * N + gaussian_idx] = mean_c[2][0]  # Depth is positive distance along viewing direction
 
 
 @compiler.register("project_gaussians")
 struct ProjectGaussians:
     @staticmethod
     fn execute[
-        C: Int,
-        N: Int,
-        image_width: Int,
-        image_height: Int,
         target: StaticString,
     ](
         # Outputs
         means2d: OutputTensor[dtype=DType.float32, rank=3],
-        conics: OutputTensor[dtype=DType.float32, rank=3],
-        depths: OutputTensor[dtype=DType.float32, rank=2],
-        radii: OutputTensor[dtype=DType.int32, rank=3],
+        conics:  OutputTensor[dtype=DType.float32, rank=3],
+        depths:  OutputTensor[dtype=DType.float32, rank=2],
+        radii:   OutputTensor[dtype=DType.int32,   rank=3],
         # Inputs
-        means3d: InputTensor[dtype=DType.float32, rank=2],
-        scales: InputTensor[dtype=DType.float32, rank=2],
-        quats: InputTensor[dtype=DType.float32, rank=2],
-        opacities: InputTensor[dtype=DType.float32, rank=1],
+        means3d:       InputTensor[dtype=DType.float32, rank=2],
+        scales:        InputTensor[dtype=DType.float32, rank=2],
+        quats:         InputTensor[dtype=DType.float32, rank=2],
+        opacities:     InputTensor[dtype=DType.float32, rank=1],
         view_matrices: InputTensor[dtype=DType.float32, rank=3],
-        ks: InputTensor[dtype=DType.float32, rank=2],
+        ks:            InputTensor[dtype=DType.float32, rank=2],  # (C, 11) now
         # Context
         ctx: DeviceContextPtr
     ) raises:
-        # Outputs
-        means2d_tensor = means2d.to_layout_tensor()
-        conics_tensor = conics.to_layout_tensor()
-        depths_tensor = depths.to_layout_tensor()
-        radii_tensor = radii.to_layout_tensor()
+        var N = means3d.dim_size(0)
+        var C = view_matrices.dim_size(0)
 
-        # Inputs
-        means3d_tensor = means3d.to_layout_tensor()
-        scales_tensor = scales.to_layout_tensor()
-        quats_tensor = quats.to_layout_tensor()
-        opacities_tensor = opacities.to_layout_tensor()
-        view_matrices_tensor = view_matrices.to_layout_tensor()
-        ks_tensor = ks.to_layout_tensor()
+        # Get raw pointers from tensors
+        var means3d_ptr       = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](means3d.to_layout_tensor().ptr)
+        var scales_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](scales.to_layout_tensor().ptr)
+        var quats_ptr         = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](quats.to_layout_tensor().ptr)
+        var opacities_ptr     = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](opacities.to_layout_tensor().ptr)
+        var view_matrices_ptr = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](view_matrices.to_layout_tensor().ptr)
+        var ks_ptr            = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](ks.to_layout_tensor().ptr)
+        var radii_ptr         = rebind[UnsafePointer[Scalar[DType.int32], MutAnyOrigin]](radii.to_layout_tensor().ptr)
+        var means2d_ptr       = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](means2d.to_layout_tensor().ptr)
+        var depths_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](depths.to_layout_tensor().ptr)
+        var conics_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](conics.to_layout_tensor().ptr)
 
         @parameter
         if target == "cpu":
-            raise Error("Rasterize3DGS CPU target not implemented yet.")
+            raise Error("ProjectGaussians CPU target not implemented yet.")
         elif target == "gpu":
             # Get GPU context
             var gpu_ctx = ctx.get_device_context()
 
             # Define grid and block dimensions for the kernel launch
             # Kernel processes N * C threads total
-            var grid = (ceildiv(N * C, block_size))
+            var grid  = (ceildiv(N * C, block_size))
             var block = (block_size)
 
-            gpu_ctx.enqueue_function_unchecked[
-                project_ewa_kernel[C, N, image_width, image_height]
-            ](
-                means3d_tensor,
-                scales_tensor,
-                quats_tensor,
-                opacities_tensor,
-                view_matrices_tensor,
-                ks_tensor,
-                radii_tensor,
-                means2d_tensor,
-                depths_tensor,
-                conics_tensor,
-                grid_dim=grid,
-                block_dim=block,
+            gpu_ctx.enqueue_function_unchecked[project_ewa_kernel](
+                means3d_ptr, scales_ptr, quats_ptr, opacities_ptr,
+                view_matrices_ptr, ks_ptr,
+                radii_ptr, means2d_ptr, depths_ptr, conics_ptr,
+                N, C,
+                grid_dim=grid, block_dim=block,
             )
 
             # gpu_ctx.synchronize()

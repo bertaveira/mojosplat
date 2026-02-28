@@ -426,14 +426,7 @@ def project_gaussians_mojo(
 ) -> tuple:
     """Projects 3D Gaussians to 2D image plane."""
 
-    project_gaussians_kernel = op_library.project_gaussians[
-        {
-            "C": 1,
-            "N": means3d.shape[0],
-            "image_width": camera.W,
-            "image_height": camera.H,
-        }
-    ]
+    project_gaussians_kernel = op_library.project_gaussians
 
     means2d = torch.zeros((1, means3d.shape[0], 2), dtype=torch.float32, device=means3d.device).contiguous()
     conics = torch.zeros((1, means3d.shape[0], 3), dtype=torch.float32, device=means3d.device).contiguous()
@@ -443,8 +436,10 @@ def project_gaussians_mojo(
     view_matrix = camera.view_matrix.unsqueeze(0).contiguous()  # Shape: (1, 4, 4)
     # Convert camera intrinsics to the format expected by Mojo kernel: [fx, fy, cx, cy, k1, k2, k3, k4, k5]
     # For pinhole camera, distortion coefficients k1-k5 are zero
-    ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy, 0.0, 0.0, 0.0, 0.0, 0.0]], 
-                          device=means3d.device, dtype=torch.float32).view(1, -1).contiguous()
+    ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy,
+                             float(camera.W), float(camera.H),
+                             0.0, 0.0, 0.0, 0.0, 0.0]],
+                           device=means3d.device, dtype=torch.float32).view(1, -1).contiguous()
 
     means3d = means3d.contiguous()
     scales = scales.contiguous()
