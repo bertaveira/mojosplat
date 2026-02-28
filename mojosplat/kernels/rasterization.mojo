@@ -91,10 +91,10 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
 
     # Pixel Transmittance
     var T: FloatType = 1.0
-    # Pixel Color
+    # Pixel Color (start at zero; background blended at the end weighted by remaining T)
     var pix_out = LayoutTensor[dtype, Layout.row_major(CDIM), MutAnyOrigin].stack_allocation()
     for c in range(CDIM):
-        pix_out[c] = backgrounds[camera_id, c]
+        pix_out[c] = 0.0
     var last_id: Int32 = -1
 
 
@@ -107,32 +107,23 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
         var batch_start = range_start + thread_count * batch
         var idx = batch_start + thread_id
 
-        # Add comprehensive bounds checking
         if idx < range_end:
-            # Check idx bounds for flatten_ids access
-            if Int(idx) >= flatten_ids.dim[1]() or Int(idx) < 0:
-                return  # Early return instead of continue
-
-            g = Int(flatten_ids[camera_id, Int(idx)])
-            if g < 0 or g >= N:
-                print("ERROR: g < 0 or g >= N... g:", g, "N:", N, "camera_id:", camera_id, "idx:", idx)
-                return  # Early return instead of continue
-
-            sh_gaussian_ids[thread_id] = g
-            # Copy individual elements instead of assigning tensor slices
-            sh_means[thread_id, 0] = means2d[camera_id, g, 0]
-            sh_means[thread_id, 1] = means2d[camera_id, g, 1]
-            sh_conics[thread_id, 0] = conics[camera_id, g, 0]
-            sh_conics[thread_id, 1] = conics[camera_id, g, 1]
-            sh_conics[thread_id, 2] = conics[camera_id, g, 2]
-            sh_opacities[thread_id] = opacities[camera_id, g]
+            var g = Int(flatten_ids[camera_id, Int(idx)])
+            if g >= 0 and g < N:
+                sh_gaussian_ids[thread_id] = g
+                sh_means[thread_id, 0] = means2d[camera_id, g, 0]
+                sh_means[thread_id, 1] = means2d[camera_id, g, 1]
+                sh_conics[thread_id, 0] = conics[camera_id, g, 0]
+                sh_conics[thread_id, 1] = conics[camera_id, g, 1]
+                sh_conics[thread_id, 2] = conics[camera_id, g, 2]
+                sh_opacities[thread_id] = opacities[camera_id, g]
 
         # Wait for all threads in block to load gaussians
         barrier()
 
         # Rasterize gaussians for this pixel
         # We iterate over the gaussians in the current batch
-        if inside:
+        if inside and not done:
             var batch_size = min(thread_count, range_end - batch_start)
             for t in range(batch_size):
                 var g = Int(sh_gaussian_ids[t])
@@ -168,7 +159,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
 
     if inside:
         for c in range(CDIM):
-            render_colors[camera_id, i, j, c] = pix_out[c]
+            render_colors[camera_id, i, j, c] = pix_out[c] + T * backgrounds[camera_id, c][0]
 
 
 # --------------------------------------------------------------------------
