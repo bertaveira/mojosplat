@@ -114,15 +114,15 @@ fn project_ewa_kernel[
     var wz = w * z
 
     R[0, 0] = 1.0 - 2.0 * (y2 + z2)
-    R[0, 1] = 2.0 * (xy + wz)
-    R[0, 2] = 2.0 * (xz - wy)
+    R[0, 1] = 2.0 * (xy - wz)
+    R[0, 2] = 2.0 * (xz + wy)
 
-    R[1, 0] = 2.0 * (xy - wz)
+    R[1, 0] = 2.0 * (xy + wz)
     R[1, 1] = 1.0 - 2.0 * (x2 + z2)
-    R[1, 2] = 2.0 * (yz + wx)
+    R[1, 2] = 2.0 * (yz - wx)
 
-    R[2, 0] = 2.0 * (xz + wy)
-    R[2, 1] = 2.0 * (yz - wx)
+    R[2, 0] = 2.0 * (xz - wy)
+    R[2, 1] = 2.0 * (yz + wx)
     R[2, 2] = 1.0 - 2.0 * (x2 + y2)
 
 
@@ -150,20 +150,17 @@ fn project_ewa_kernel[
                 covar[i, j] += M[i, k] * M[j, k]
 
 
-    ########### Covariance World to Camera ########### FIXME: Replace by function (not possible it seems right now)
-    # covar_c = R * covar * R^T
+    ########### Covariance World to Camera ###########
+    # covar_c = R_view * covar * R_view^T (using the 3x3 rotation part of the view matrix)
     var covar_c = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
     for i in range(3):
         for j in range(3):
             var tmp: Float32 = 0.0
             for l in range(3):
-                # The inner part calculates (R*C)[i][l]
                 var tmp2: Float32 = 0.0
                 for k in range(3):
-                    tmp2 += R[i, k][0] * covar[k, l][0] # FIXME: remove [0] if mojo ever supports direct SIMD[1] to Float32
-
-                # Now multiply corresponding element from R^T
-                tmp += tmp2 * R[j, l][0]
+                    tmp2 += view_matrix[i, k][0] * covar[k, l][0]
+                tmp += tmp2 * view_matrix[j, l][0]
 
             covar_c[i, j] = tmp
 
@@ -184,16 +181,16 @@ fn project_ewa_kernel[
     var tx: Float32 = mean_c[2][0] * min(lim_x_pos, max(-lim_x_neg, mean_c[0][0] * rz))
     var ty: Float32 = mean_c[2][0] * min(lim_y_pos, max(-lim_y_neg, mean_c[1][0] * rz))
 
-    var J = LayoutTensor[DType.float32, Layout.row_major(3, 2), MutAnyOrigin].stack_allocation()
+    var J = LayoutTensor[DType.float32, Layout.row_major(2, 3), MutAnyOrigin].stack_allocation()
     J[0, 0] = ks[camera_idx, 0] * rz
     J[0, 1] = 0.0
+    J[0, 2] = -ks[camera_idx, 0] * tx * rz2
     J[1, 0] = 0.0
     J[1, 1] = ks[camera_idx, 1] * rz
-    J[2, 0] = -ks[camera_idx, 0] * tx * rz2
-    J[2, 1] = -ks[camera_idx, 1] * ty * rz2
+    J[1, 2] = -ks[camera_idx, 1] * ty * rz2
 
+    # cov2d = J (2x3) * covar_c (3x3) * J^T (3x2) = (2x2)
     var cov2d = LayoutTensor[DType.float32, Layout.row_major(2, 2), MutAnyOrigin].stack_allocation()
-    # cov2d = J * covar_c * J^T
     for i in range(2):
         for j in range(2):
             var total_sum: Float32 = 0.0
