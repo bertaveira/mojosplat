@@ -33,11 +33,13 @@ fn project_ewa_kernel(
     if idx >= N * C:
         return
 
-    # Extract the 4x4 view matrix for the current camera
-    var view_matrix = LayoutTensor[DType.float32, Layout.row_major(4, 4), MutAnyOrigin].stack_allocation()
-    for i in range(4):
-        for j in range(4):
-            view_matrix[i, j] = view_matrices_ptr[camera_idx * 16 + i * 4 + j]
+    # Extract R (3x3) and t (3) from the view matrix — skip the unused bottom row
+    var R_view = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
+    var t_view = LayoutTensor[DType.float32, Layout.row_major(3), MutAnyOrigin].stack_allocation()
+    for i in range(3):
+        for j in range(3):
+            R_view[i, j] = view_matrices_ptr[camera_idx * 16 + i * 4 + j]
+        t_view[i] = view_matrices_ptr[camera_idx * 16 + i * 4 + 3]
 
 
     ########### Gaussian World to Camera ########### FIXME: Replace by function (not possible it seems right now)
@@ -46,8 +48,8 @@ fn project_ewa_kernel(
     for i in range(3):
         mean_c[i] = 0.0
         for j in range(3):
-            mean_c[i] += view_matrix[i, j] * means3d_ptr[gaussian_idx * 3 + j]
-        mean_c[i] += view_matrix[i, 3]
+            mean_c[i] += R_view[i, j] * means3d_ptr[gaussian_idx * 3 + j]
+        mean_c[i] += t_view[i]
 
     comptime near_plane: Float32 = 0.1
     if mean_c[2][0] <= near_plane:
@@ -120,20 +122,11 @@ fn project_ewa_kernel(
 
 
     ########### Rotation Matrix to Covariance Matrix ########### FIXME: Replace by function (not possible it seems right now)
-    var S = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
-    for i in range(3):
-        for j in range(3):
-            if i == j:
-                S[i, j] = scales_ptr[gaussian_idx * 3 + i]
-            else:
-                S[i, j] = 0.0
-
+    # S is diagonal so M = R * S simplifies to M[i,j] = R[i,j] * scale[j]
     var M = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
     for i in range(3):
         for j in range(3):
-            M[i, j] = 0.0
-            for k in range(3):
-                M[i, j] += R[i, k] * S[k, j]
+            M[i, j] = R[i, j] * scales_ptr[gaussian_idx * 3 + j]
 
     var covar = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
     for i in range(3):
@@ -144,7 +137,7 @@ fn project_ewa_kernel(
 
 
     ########### Covariance World to Camera ###########
-    # covar_c = R_view * covar * R_view^T (using the 3x3 rotation part of the view matrix)
+    # covar_c = R_view * covar * R_view^T
     var covar_c = LayoutTensor[DType.float32, Layout.row_major(3, 3), MutAnyOrigin].stack_allocation()
     for i in range(3):
         for j in range(3):
@@ -152,8 +145,8 @@ fn project_ewa_kernel(
             for l in range(3):
                 var tmp2: Float32 = 0.0
                 for k in range(3):
-                    tmp2 += view_matrix[i, k][0] * covar[k, l][0]
-                tmp += tmp2 * view_matrix[j, l][0]
+                    tmp2 += R_view[i, k][0] * covar[k, l][0]
+                tmp += tmp2 * R_view[j, l][0]
 
             covar_c[i, j] = tmp
 

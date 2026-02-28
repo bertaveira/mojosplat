@@ -6,11 +6,47 @@ import torch.nn.functional as F
 from typing_extensions import Literal
 
 from pathlib import Path
-from max.torch import CustomOpLibrary
+from max.torch import graph_op
+from max.graph import ops as graph_ops, TensorType as GraphTensorType, DeviceRef
+from max.dtype import DType as MaxDType
 from .utils import Camera
 
 mojo_kernels = Path(__file__).parent / "kernels"
-op_library = CustomOpLibrary(mojo_kernels)
+_gpu = DeviceRef.GPU()
+
+@graph_op(
+    name="project_gaussians_op",
+    kernel_library=mojo_kernels,
+    input_types=[
+        GraphTensorType(MaxDType.float32, ("N", 3), device=_gpu),
+        GraphTensorType(MaxDType.float32, ("N", 3), device=_gpu),
+        GraphTensorType(MaxDType.float32, ("N", 4), device=_gpu),
+        GraphTensorType(MaxDType.float32, ("N",), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, 4, 4), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, 11), device=_gpu),
+    ],
+    output_types=[
+        GraphTensorType(MaxDType.float32, (1, "N", 2), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, "N", 3), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, "N"), device=_gpu),
+        GraphTensorType(MaxDType.int32, (1, "N", 2), device=_gpu),
+    ],
+)
+def _project_gaussians_graph(means3d, scales, quats, opacities, view_matrices, ks):
+    N = means3d.shape[0]
+    results = graph_ops.custom(
+        name="project_gaussians",
+        device=_gpu,
+        values=[means3d, scales, quats, opacities, view_matrices, ks],
+        out_types=[
+            GraphTensorType(MaxDType.float32, (1, N, 2), device=_gpu),
+            GraphTensorType(MaxDType.float32, (1, N, 3), device=_gpu),
+            GraphTensorType(MaxDType.float32, (1, N), device=_gpu),
+            GraphTensorType(MaxDType.int32, (1, N, 2), device=_gpu),
+        ],
+    )
+    return results
+
 
 def project_gaussians(
     means3d: torch.Tensor, # (N, 3)
@@ -425,33 +461,32 @@ def project_gaussians_mojo(
     camera: Camera,
 ) -> tuple:
     """Projects 3D Gaussians to 2D image plane."""
+    N = means3d.shape[0]
 
-    project_gaussians_kernel = op_library.project_gaussians
-
-    means2d = torch.zeros((1, means3d.shape[0], 2), dtype=torch.float32, device=means3d.device).contiguous()
-    conics = torch.zeros((1, means3d.shape[0], 3), dtype=torch.float32, device=means3d.device).contiguous()
-    depth = torch.zeros((1, means3d.shape[0]), dtype=torch.float32, device=means3d.device).contiguous()  # Shape (C, N) not (C, N, 1)
-    radii = torch.zeros((1, means3d.shape[0], 2), dtype=torch.int32, device=means3d.device).contiguous()  # int32 and shape (C, N, 2)
+    means2d = torch.zeros((1, N, 2), dtype=torch.float32, device=means3d.device).contiguous()
+    conics = torch.zeros((1, N, 3), dtype=torch.float32, device=means3d.device).contiguous()
+    depth = torch.zeros((1, N), dtype=torch.float32, device=means3d.device).contiguous()
+    radii = torch.zeros((1, N, 2), dtype=torch.int32, device=means3d.device).contiguous()
 
     view_matrix = camera.view_matrix.unsqueeze(0).contiguous()  # Shape: (1, 4, 4)
-    # Convert camera intrinsics to the format expected by Mojo kernel: [fx, fy, cx, cy, k1, k2, k3, k4, k5]
-    # For pinhole camera, distortion coefficients k1-k5 are zero
     ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy,
                              float(camera.W), float(camera.H),
                              0.0, 0.0, 0.0, 0.0, 0.0]],
-                           device=means3d.device, dtype=torch.float32).view(1, -1).contiguous()
+                           device=means3d.device, dtype=torch.float32).contiguous()
 
-    means3d = means3d.contiguous()
-    scales = scales.contiguous()
-    quats = quats.contiguous()
-    opacities = opacities.view(-1).contiguous()
+    _project_gaussians_graph(
+        means2d, conics, depth, radii,
+        means3d.contiguous(),
+        torch.exp(scales).contiguous(),
+        quats.contiguous(),
+        opacities.view(-1).contiguous(),
+        view_matrix,
+        ks_flat,
+    )
 
-    project_gaussians_kernel(means2d, conics, depth, radii, means3d, torch.exp(scales), quats, opacities, view_matrix, ks_flat)
-
-    # Remove batch dimension to match expected output format: (N, 2), (N, 3), (N), (N, 2)
-    means2d = means2d.squeeze(0)  # (1, N, 2) -> (N, 2)
-    conics = conics.squeeze(0)    # (1, N, 3) -> (N, 3)
-    depth = depth.squeeze(0)      # (1, N) -> (N)
-    radii = radii.squeeze(0)      # (1, N, 2) -> (N, 2)
+    means2d = means2d.squeeze(0)
+    conics = conics.squeeze(0)
+    depth = depth.squeeze(0)
+    radii = radii.squeeze(0)
 
     return means2d, conics, depth, radii
