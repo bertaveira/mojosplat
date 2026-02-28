@@ -16,13 +16,12 @@ def look_at(eye, target, up):
     up = up.float()
     device = eye.device
 
-    z_axis = torch.nn.functional.normalize(eye - target, dim=0)
-    x_axis = torch.nn.functional.normalize(torch.cross(up, z_axis, dim=0), dim=0)
-    y_axis = torch.nn.functional.normalize(torch.cross(z_axis, x_axis, dim=0), dim=0)
+    forward = torch.nn.functional.normalize(target - eye, dim=0)
+    right = torch.nn.functional.normalize(torch.cross(forward, up, dim=0), dim=0)
+    down = torch.cross(right, forward, dim=0)
 
-    # World-to-camera rotation
-    R_t = torch.stack([x_axis, y_axis, z_axis], dim=0)
-    # World-to-camera translation
+    # gsplat convention: +X right, +Y down, +Z forward (into scene)
+    R_t = torch.stack([right, down, forward], dim=0)
     t = -torch.matmul(R_t, eye)
 
     view_matrix = torch.eye(4, device=device, dtype=eye.dtype)
@@ -63,8 +62,7 @@ def main():
     cam_up = torch.tensor([0., 1., 0.], device=device)
     view_matrix = look_at(cam_pos, cam_target, cam_up)
 
-    # Approximate perspective projection
-    focal_length = 80.0 # Adjust for zoom FIXME: 30 causes weird squares to appear
+    focal_length = 500.0
     fx = focal_length
     fy = focal_length
     cx = img_width / 2.0
@@ -85,27 +83,20 @@ def main():
     )
 
     # --- Generate Random Gaussian Data ---
+    torch.manual_seed(42)
     print(f"Generating {num_gaussians} random Gaussians...")
 
     # Means centered around origin, spread out
     means3d = torch.randn(num_gaussians, 3, device=device) * 2.0
 
-    # Log-scales, mostly small
-    # Use small, fixed scales instead of random ones
-    log_scales = torch.ones(num_gaussians, 3, device=device) * -3.0  # exp(-3) ~= 0.05, even smaller
-    # Add some slight variation to make it more natural
-    log_scales += torch.randn(num_gaussians, 3, device=device) * 0.1  # Smaller random variation
+    log_scales = torch.ones(num_gaussians, 3, device=device) * -2.0  # exp(-2) ≈ 0.14
+    log_scales += torch.randn(num_gaussians, 3, device=device) * 0.3
 
     # Random quaternions (w, x, y, z format)
     random_quats = torch.randn(num_gaussians, 4, device=device)
     quats = torch.nn.functional.normalize(random_quats, dim=1)
 
-    # Opacities (pre-activation, sigmoid is often applied later)
-    # Let's provide values that would be reasonable post-sigmoid, e.g., 0.1 to 0.9
-    # To achieve this with sigmoid, pre-activation needs to span roughly -2 to 2
-    # Simpler: just use random values and apply sigmoid in projection if needed
-    # Let's assume render_gaussians expects pre-sigmoid opacities
-    opacities_pre_sigmoid = torch.randn(num_gaussians, device=device) # Centered around 0
+    opacities = torch.sigmoid(torch.randn(num_gaussians, device=device) + 1.0)
     
     # RGB Colors
     colors = torch.rand(num_gaussians, num_channels, device=device)
@@ -114,18 +105,18 @@ def main():
     means3d = means3d.float()
     log_scales = log_scales.float()
     quats = quats.float()
-    opacities_pre_sigmoid = opacities_pre_sigmoid.float()
+    opacities = opacities.float()
     colors = colors.float()
 
     # --- Rendering ---
     print("Rendering...")
-    print(f"Input shapes: means3d={means3d.shape}, scales={log_scales.shape}, quats={quats.shape}, opacities={opacities_pre_sigmoid.shape}, colors={colors.shape}")
+    print(f"Input shapes: means3d={means3d.shape}, scales={log_scales.shape}, quats={quats.shape}, opacities={opacities.shape}, colors={colors.shape}")
     
     rendered_image = render_gaussians(
         means3d=means3d,
         scales=log_scales, # Pass log-scales directly
         quats=quats, # Pass quaternions (w, x, y, z)
-        opacities=opacities_pre_sigmoid, # Pass pre-activation opacities
+        opacities=opacities,
         features=colors,
         camera=camera,
         background_color=torch.tensor([0.1, 0.1, 0.1], device=device), # Dark gray background
