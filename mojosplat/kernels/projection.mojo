@@ -29,7 +29,7 @@ fn project_ewa_kernel[
     conics: LayoutTensor[DType.float32, Layout.row_major(C, N, 3), MutAnyOrigin],
 ):
     # This kernel is paralellized over N * C
-    var idx = thread_idx.x
+    var idx = block_idx.x * block_size + thread_idx.x
     var gaussian_idx = Int(idx % N)
     var camera_idx = Int(idx // N)
 
