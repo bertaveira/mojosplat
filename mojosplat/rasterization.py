@@ -102,7 +102,7 @@ def rasterize_gaussians_gsplat(
         opacities = opacities.squeeze(-1).unsqueeze(0).contiguous()  # (N, 1) -> (N,) -> (1, N)
     background_color = background_color.unsqueeze(0).contiguous()
     tile_ranges = tile_ranges.unsqueeze(0).contiguous()
-    sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0).contiguous()
+    sorted_gaussian_indices = sorted_gaussian_indices.contiguous()  # gsplat expects 1D [n_isects]
 
     tile_ranges = tile_ranges[:, :, :, 0]
 
