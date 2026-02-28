@@ -1,30 +1,17 @@
 import compiler
 from gpu import thread_idx, block_idx, barrier
 from gpu.host import DeviceBuffer
+from gpu.memory import AddressSpace
 from layout import Layout, LayoutTensor, UNKNOWN_VALUE
-from layout.tensor_builder import LayoutTensorBuild as tb
 from runtime.asyncrt import DeviceContextPtr
 from math import exp, ceildiv
-from sys import sizeof
-from memory import UnsafePointer
 
-from python import Python, PythonObject
-from os import abort
+from tensor import InputTensor, OutputTensor
 
+comptime dtype = DType.float32
 
-from tensor import InputTensor, OutputTensor, ManagedTensorSlice
+comptime ALPHA_THRESHOLD = 1.0 / 255.0
 
-# alias Dyn1DLayout = Layout.row_major(UNKNOWN_VALUE)
-# alias Dyn2DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE)
-# alias Dyn3DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE)
-# alias Dyn4DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE)
-alias dtype = DType.float32
-
-alias ALPHA_THRESHOLD = 1.0 / 255.0
-
-# alias Means3DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, 2)
-# alias Conics3DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, 3)
-# alias TileRanges4DLayout = Layout.row_major(UNKNOWN_VALUE, UNKNOWN_VALUE, UNKNOWN_VALUE, 2)
 
 fn rasterize_to_pixels_3dgs_fwd_kernel[
     tile_size: Int,
@@ -34,29 +21,47 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     C: Int, # Number of cameras
     N: Int, # Number of gaussians
     NIntersections: Int, # Number of intersections
-    image_width: UInt,
-    image_height: UInt,
-    # packed: Bool,
+    image_width: Int,
+    image_height: Int,
 ](
-    means2d: LayoutTensor[dtype, Layout.row_major(C, N, 2), MutableAnyOrigin],         # [C, N, 2]
-    conics: LayoutTensor[dtype, Layout.row_major(C, N, 3), MutableAnyOrigin],          # [C, N, 3]
-    colors: LayoutTensor[dtype, Layout.row_major(C, N, CDIM), MutableAnyOrigin],      # [C, N, CDIM]
-    opacities: LayoutTensor[dtype, Layout.row_major(C, N), MutableAnyOrigin],   # [C, N]
-    backgrounds: LayoutTensor[dtype, Layout.row_major(C, CDIM), MutableAnyOrigin], # Optional [C, CDIM] - Handle optionality
-    has_backgrounds: Bool,                      # Flag for optional backgrounds
-    tile_ranges: LayoutTensor[DType.int32, Layout.row_major(C, tile_grid_height, tile_grid_width, 2), MutableAnyOrigin], # [C, tile_height, tile_width, 2]
-    flatten_ids: LayoutTensor[DType.int32, Layout.row_major(C, NIntersections), MutableAnyOrigin],  # [C, n_isects]
-    # Outputs - Using placeholder LayoutTensors
-    render_colors: LayoutTensor[dtype, Layout.row_major(C, image_height, image_width, CDIM), MutableAnyOrigin], # [C, image_height, image_width, CDIM]
-    # render_alphas: LayoutTensor[dtype, Dyn3DLayout, MutableAnyOrigin], # [C, image_height, image_width]
+    means2d: LayoutTensor[dtype, Layout.row_major(C, N, 2), MutAnyOrigin],        # [C, N, 2]
+    conics: LayoutTensor[dtype, Layout.row_major(C, N, 3), MutAnyOrigin],         # [C, N, 3]
+    colors: LayoutTensor[dtype, Layout.row_major(C, N, CDIM), MutAnyOrigin],      # [C, N, CDIM]
+    opacities: LayoutTensor[dtype, Layout.row_major(C, N), MutAnyOrigin],         # [C, N]
+    backgrounds: LayoutTensor[dtype, Layout.row_major(C, CDIM), MutAnyOrigin],    # [C, CDIM]
+    # has_backgrounds always True: Bool is not DevicePassable in Mojo 26
+    tile_ranges: LayoutTensor[DType.int32, Layout.row_major(C, tile_grid_height, tile_grid_width, 2), MutAnyOrigin], # [C, tile_height, tile_width, 2]
+    flatten_ids: LayoutTensor[DType.int32, Layout.row_major(C, NIntersections), MutAnyOrigin],  # [C, n_isects]
+    # Outputs
+    render_colors: LayoutTensor[dtype, Layout.row_major(C, image_height, image_width, CDIM), MutAnyOrigin], # [C, image_height, image_width, CDIM]
 ):
-    sh_gaussian_ids = tb[DType.int32]().row_major[tile_size * tile_size]().shared().alloc()
-    sh_means = tb[dtype]().row_major[tile_size * tile_size, 2]().shared().alloc()
-    sh_conics = tb[dtype]().row_major[tile_size * tile_size, 3]().shared().alloc()
-    sh_opacities = tb[dtype]().row_major[tile_size * tile_size]().shared().alloc()
+    sh_gaussian_ids = LayoutTensor[
+        DType.int32,
+        Layout.row_major(tile_size * tile_size),
+        MutAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    sh_means = LayoutTensor[
+        dtype,
+        Layout.row_major(tile_size * tile_size, 2),
+        MutAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    sh_conics = LayoutTensor[
+        dtype,
+        Layout.row_major(tile_size * tile_size, 3),
+        MutAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    sh_opacities = LayoutTensor[
+        dtype,
+        Layout.row_major(tile_size * tile_size),
+        MutAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
 
-    alias FloatType = opacities.element_type
-    
+    comptime FloatType = opacities.element_type
+
     # Get block and thread IDs
     camera_id = block_idx.x # Corresponds to grid.x
     tile_row = block_idx.y # Tile id row
@@ -64,16 +69,14 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
 
     thread_row = thread_idx.y # Pixel row within tile #TODO: Double check this order!
     thread_col = thread_idx.x # Pixel column within tile
-    thread_count = tile_size * tile_size
-    thread_id = thread_row * tile_size + thread_col # Flat thread id within tile
+    thread_count = Int32(tile_size * tile_size)
+    thread_id = Int32(thread_row * tile_size + thread_col) # Flat thread id within tile
 
-    # var tile_id: UInt32 = block_row * tile_grid_width + block_col
     i = tile_row * tile_size + thread_row # Absolute image row
     j = tile_col * tile_size + thread_col # Absolute image column
 
     px = Float32(j) + 0.5
     py = Float32(i) + 0.5
-    # pix_id = i * image_width + j # Flat pixel index within the camera's image
 
     # Return if out of bounds
     var inside: Bool = (i < image_height) and (j < image_width)
@@ -82,20 +85,16 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     # Have all threads in tile process the same gaussians in batches
     # First collect gaussians between range.x and range.y in batches
     # Which gaussians to look through in this tile
-    range_start = tile_ranges[camera_id, tile_row, tile_col, 0]
-    range_end = tile_ranges[camera_id, tile_row, tile_col, 1]
+    range_start = tile_ranges[camera_id, tile_row, tile_col, 0][0]
+    range_end = tile_ranges[camera_id, tile_row, tile_col, 1][0]
     num_batches = (range_end - range_start + thread_count - 1) / thread_count
 
     # Pixel Transmittance
     var T: FloatType = 1.0
     # Pixel Color
-    # var pix_out: SIMD[dtype, CDIM] = SIMD[dtype, CDIM](0.0)
-    var pix_out = tb[dtype]().row_major[CDIM]().alloc()
+    var pix_out = LayoutTensor[dtype, Layout.row_major(CDIM), MutAnyOrigin].stack_allocation()
     for c in range(CDIM):
-        if has_backgrounds:
-            pix_out[c] = backgrounds[camera_id, c]
-        else:
-            pix_out[c] = 0.0
+        pix_out[c] = backgrounds[camera_id, c]
     var last_id: Int32 = -1
 
 
@@ -107,20 +106,18 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
         # Each thread loads one gaussian from front to back
         var batch_start = range_start + thread_count * batch
         var idx = batch_start + thread_id
-        
+
         # Add comprehensive bounds checking
         if idx < range_end:
             # Check idx bounds for flatten_ids access
             if Int(idx) >= flatten_ids.dim[1]() or Int(idx) < 0:
-                # print("ERROR: idx out of bounds for flatten_ids... idx:", idx, "flatten_ids.dim[1]():", flatten_ids.dim[1](), "camera_id:", camera_id)
-                # print("  batch:", batch, "thread_id:", thread_id, "thread_count:", thread_count, "range_start:", range_start, "range_end:", range_end)
                 return  # Early return instead of continue
-                
+
             g = Int(flatten_ids[camera_id, Int(idx)])
             if g < 0 or g >= N:
                 print("ERROR: g < 0 or g >= N... g:", g, "N:", N, "camera_id:", camera_id, "idx:", idx)
                 return  # Early return instead of continue
-                
+
             sh_gaussian_ids[thread_id] = g
             # Copy individual elements instead of assigning tensor slices
             sh_means[thread_id, 0] = means2d[camera_id, g, 0]
@@ -172,8 +169,6 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     if inside:
         for c in range(CDIM):
             render_colors[camera_id, i, j, c] = pix_out[c]
-        # render_alphas[camera_id, i, j] = T
-            
 
 
 # --------------------------------------------------------------------------
@@ -195,7 +190,6 @@ struct RasterizeToPixels3DGSFwd:
     ](
         # Outputs
         render_colors: OutputTensor[dtype=DType.float32, rank=4],
-        # render_alphas: OutputTensor[dtype=DType.float32, rank=4],
         # Inputs
         means2d: InputTensor[dtype=DType.float32, rank=3],
         conics: InputTensor[dtype=DType.float32, rank=3],
@@ -208,8 +202,8 @@ struct RasterizeToPixels3DGSFwd:
         ctx: DeviceContextPtr
     ) raises:
         # Determine grid and block dimensions based on output image and tile size
-        alias tile_grid_height = ceildiv(image_height, tile_size)
-        alias tile_grid_width = ceildiv(image_width, tile_size)
+        comptime tile_grid_height = ceildiv(image_height, tile_size)
+        comptime tile_grid_width = ceildiv(image_width, tile_size)
 
         has_backgrounds = True #FIXME: when mojo fix it, accept this bool as argument
 
@@ -222,7 +216,6 @@ struct RasterizeToPixels3DGSFwd:
         flatten_ids_tensor = flatten_ids.to_layout_tensor()
 
         render_colors_tensor = render_colors.to_layout_tensor()
-        # render_alphas_tensor = render_alphas.to_layout_tensor()
 
         @parameter
         if target == "cpu":
@@ -235,7 +228,7 @@ struct RasterizeToPixels3DGSFwd:
             var grid = (C, tile_grid_height, tile_grid_width)
             var block = (tile_size, tile_size, 1)
 
-            gpu_ctx.enqueue_function[
+            gpu_ctx.enqueue_function_unchecked[
                 rasterize_to_pixels_3dgs_fwd_kernel[
                     tile_size, tile_grid_width, tile_grid_height, CDIM, C, N, NIntersections, image_width, image_height
                 ]
@@ -245,11 +238,9 @@ struct RasterizeToPixels3DGSFwd:
                 colors_tensor,
                 opacities_tensor,
                 backgrounds_tensor,
-                has_backgrounds,
                 tile_ranges_tensor,
                 flatten_ids_tensor,
                 render_colors_tensor,
-                # render_alphas_tensor,
                 grid_dim=grid,
                 block_dim=block,
             )
