@@ -2,6 +2,12 @@
 
 MojoSplat is an experimental port of Gaussian Splatting kernels to [Mojo](https://www.modular.com/mojo), exploring the potential performance and multi-vendor support of Mojo for GPU acceleration.
 
+
+
+https://github.com/user-attachments/assets/ae4409a3-a656-4635-bb57-f22aca2f6141
+
+
+
 This project implements the three core kernels of 3D Gaussian Splatting:
 - **Projection**: Transform 3D Gaussians to 2D image space
 - **Binning**: Sort and assign Gaussians to screen tiles  
