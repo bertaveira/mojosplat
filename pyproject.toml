@@ -14,6 +14,7 @@ dependencies = [
     "pytest>=8.4.1",
     "gsplat@git+https://github.com/bertaveira/gsplat.git",
     "matplotlib>=3.10.5",
+    "viser>=1.0.24",
 ]
 
 
