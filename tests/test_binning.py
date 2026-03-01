@@ -257,65 +257,107 @@ class TestBinningGsplat:
 
 class TestBinningMojo:
     """Tests for mojo backend binning."""
-    
-    def test_not_implemented(self, device, simple_binning_data):
-        """Test that mojo backend raises NotImplementedError."""
-        means2d, radii, depths, img_height, img_width, tile_size = simple_binning_data
-        
-        with pytest.raises(NotImplementedError, match="Mojo backend not implemented yet"):
-            bin_gaussians_to_tiles(
-                means2d, radii, depths, img_height, img_width, tile_size, backend="mojo"
-            )
 
-
-    def test_basic_functionality_placeholder(self, device, simple_binning_data):
-        """Placeholder test for when mojo backend is implemented."""
+    def test_basic_functionality(self, device, simple_binning_data):
+        """Test that mojo backend works and returns expected shapes/dtypes."""
         means2d, radii, depths, img_height, img_width, tile_size = simple_binning_data
-        
-        # This test will be skipped until mojo backend is implemented
-        try:
-            result = bin_gaussians_to_tiles(
-                means2d, radii, depths, img_height, img_width, tile_size, backend="mojo"
-            )
-            
-            # When implemented, verify basic properties
-            assert len(result) >= 2  # Should return at least 2 outputs
-            assert all(hasattr(r, 'device') for r in result if torch.is_tensor(r))
-            assert all(r.device == device for r in result if torch.is_tensor(r))
-            
-        except NotImplementedError:
-            pytest.skip("Mojo backend not implemented yet")
+
+        sorted_gaussian_indices, tile_ranges = bin_gaussians_to_tiles(
+            means2d, radii, depths, img_height, img_width, tile_size, backend="mojo"
+        )
+
+        n_tiles_h = math.ceil(img_height / tile_size)
+        n_tiles_w = math.ceil(img_width / tile_size)
+
+        assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
+        assert sorted_gaussian_indices.dtype == torch.int32
+        assert tile_ranges.dtype == torch.int32
+        assert sorted_gaussian_indices.device == device
+        assert tile_ranges.device == device
+        assert (tile_ranges[:, :, 0] <= tile_ranges[:, :, 1]).all()
+        if sorted_gaussian_indices.shape[0] > 0:
+            assert (sorted_gaussian_indices >= 0).all()
+            assert (sorted_gaussian_indices < means2d.shape[0]).all()
+
+    def test_depth_sorting(self, device):
+        """Test that Gaussians in the same tile are ordered by depth (closer first)."""
+        means2d = torch.tensor([[8.0, 8.0], [8.0, 8.0]], device=device, dtype=torch.float32)
+        radii = torch.tensor([[4.0, 4.0], [4.0, 4.0]], device=device, dtype=torch.float32)
+        depths = torch.tensor([2.0, 1.0], device=device, dtype=torch.float32)  # g1 closer
+
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
+            means2d, radii, depths, 64, 64, 16, backend="mojo"
+        )
+
+        tile_start = tile_ranges[0, 0, 0].item()
+        tile_end = tile_ranges[0, 0, 1].item()
+        assert tile_end > tile_start, "Expected Gaussians in tile (0, 0)"
+
+        tile_gaussians = sorted_indices[tile_start:tile_end].tolist()
+        # Gaussian 1 (depth 1.0) should appear before Gaussian 0 (depth 2.0)
+        assert tile_gaussians.index(1) < tile_gaussians.index(0)
+
+    def test_tile_assignment(self, device):
+        """Test that a large Gaussian spanning multiple tiles appears multiple times."""
+        means2d = torch.tensor([[15.5, 15.5]], device=device, dtype=torch.float32)
+        radii = torch.tensor([[8.0, 8.0]], device=device, dtype=torch.float32)
+        depths = torch.tensor([1.0], device=device, dtype=torch.float32)
+
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
+            means2d, radii, depths, 64, 64, 16, backend="mojo"
+        )
+
+        assert sorted_indices.shape[0] > 1, "Gaussian should overlap multiple tiles"
+
+    def test_empty_input(self, device):
+        """Test N=0 returns empty sorted_indices and zero tile_ranges."""
+        empty_means2d = torch.empty(0, 2, device=device, dtype=torch.float32)
+        empty_radii = torch.empty(0, 2, device=device, dtype=torch.float32)
+        empty_depths = torch.empty(0, device=device, dtype=torch.float32)
+
+        sorted_indices, tile_ranges = bin_gaussians_to_tiles(
+            empty_means2d, empty_radii, empty_depths, 64, 64, 16, backend="mojo"
+        )
+
+        n_tiles_h = n_tiles_w = 4
+        assert sorted_indices.shape[0] == 0
+        assert tile_ranges.shape == (n_tiles_h, n_tiles_w, 2)
 
 
 @pytest.mark.parametrize("backend1,backend2", [
     ("torch", "gsplat"),
-    # ("torch", "mojo"),  # Skip until mojo is implemented
-    # ("gsplat", "mojo"), # Skip until mojo is implemented
+    ("torch", "mojo"),
+    ("gsplat", "mojo"),
 ])
 class TestBinningConsistency:
     """Test consistency between different backends."""
     
     def test_basic_consistency(self, device, simple_binning_data, backend1, backend2):
-        """Test that different backends produce similar results."""
+        """Test that different backends produce consistent intersection counts and tile ranges."""
         means2d, radii, depths, img_height, img_width, tile_size = simple_binning_data
-        
-        # Get results from both backends
+
         try:
-            result1 = bin_gaussians_to_tiles(
+            sorted1, ranges1 = bin_gaussians_to_tiles(
                 means2d, radii, depths, img_height, img_width, tile_size, backend=backend1
             )
-            result2 = bin_gaussians_to_tiles(
+            sorted2, ranges2 = bin_gaussians_to_tiles(
                 means2d, radii, depths, img_height, img_width, tile_size, backend=backend2
             )
         except Exception as e:
             pytest.skip(f"Backend not available: {e}")
-        
-        # Note: Different backends may have different output formats
-        # For now, just verify they both run without errors
-        assert result1 is not None
-        assert result2 is not None
-        
-        # More detailed consistency checks can be added when output formats are standardized
+
+        # Total intersection count should match
+        assert sorted1.shape[0] == sorted2.shape[0], (
+            f"Total intersections differ: {backend1}={sorted1.shape[0]}, {backend2}={sorted2.shape[0]}"
+        )
+
+        # Tile range shapes must match
+        assert ranges1.shape == ranges2.shape
+
+        # Per-tile counts (end - start) should be identical
+        counts1 = (ranges1[:, :, 1] - ranges1[:, :, 0]).long()
+        counts2 = (ranges2[:, :, 1] - ranges2[:, :, 0]).long()
+        assert torch.equal(counts1, counts2), "Per-tile Gaussian counts differ between backends"
 
 
 class TestBinningIntegration:
