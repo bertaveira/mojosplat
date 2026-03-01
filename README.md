@@ -72,32 +72,33 @@ dependencies:
 
 ## Usage
 
-### Generate a random image
-```bash
-uv run render_sample.py
-```
-
 ### Basic Rendering
+
+All inputs must be CUDA tensors (`float32`). `scales` are in log-space; `quats` are `(w, x, y, z)`; `opacities` shape is `(N,)`.
 
 ```python
 import torch
 from mojosplat.render import render_gaussians
-from mojosplat.projection import Camera
+from mojosplat.utils import Camera
 
-# Your 3D Gaussian data
-means3d = torch.randn(1000, 3, device='cuda')
-scales = torch.randn(1000, 3, device='cuda') 
-quats = torch.randn(1000, 4, device='cuda')
-opacities = torch.randn(1000, 1, device='cuda')
-features = torch.randn(1000, 3, device='cuda')  # RGB colors
+# 3D Gaussian data (e.g. from your scene or .splat file)
+N = 1000
+device = "cuda"
+means3d = torch.randn(N, 3, device=device, dtype=torch.float32)
+scales = torch.randn(N, 3, device=device, dtype=torch.float32)   # log-space
+quats = torch.randn(N, 4, device=device, dtype=torch.float32)     # (w, x, y, z)
+quats = quats / quats.norm(dim=1, keepdim=True)
+opacities = torch.randn(N, device=device, dtype=torch.float32)   # (N,) not (N, 1)
+features = torch.randn(N, 3, device=device, dtype=torch.float32) # RGB
 
-# Set up camera
-camera = Camera(...)  # Configure your camera parameters
+# Camera: R (3,3) world-to-camera, T (3,) world-to-camera, H, W, fx, fy, cx, cy
+R = torch.eye(3, device=device, dtype=torch.float32)
+T = torch.tensor([0.0, 0.0, 5.0], device=device, dtype=torch.float32)
+camera = Camera(R=R, T=T, H=720, W=1280, fx=1152.0, fy=1152.0, cx=640.0, cy=360.0)
 
-# Render with different backends
-image_mojo = render_gaussians(means3d, scales, quats, opacities, features, camera, backend="mojo")
-image_gsplat = render_gaussians(means3d, scales, quats, opacities, features, camera, backend="gsplat")  
-image_torch = render_gaussians(means3d, scales, quats, opacities, features, camera, backend="torch")
+# Render (backend: "mojo", "gsplat", or "torch")
+image = render_gaussians(means3d, scales, quats, opacities, features, camera, backend="mojo")
+# image shape: (H, W, C)
 ```
 
 ### Running Tests
@@ -119,16 +120,34 @@ uv run pytest -v
 ### Benchmarking
 
 ```bash
-# Benchmark projection kernels
-uv run python examples/benchmark_proj.py
+# Benchmark with a real .splat scene (e.g. bicycle)
+# First download a .splat file (antimatter15 binary format):
+curl -L -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
 
-# Benchmark full rendering pipeline  
-uv run python examples/benchmark.py
+# Then run the benchmark (defaults to examples/bicycle.splat if present)
+uv run python examples/benchmark_render.py examples/bicycle.splat
 ```
 
-### Performance on RTX 2080
+### Interactive viewer
 
-*Benchmarks coming soon - performance data will be added once comprehensive testing is complete.*
+You can view a `.splat` scene in the browser with the interactive viewer (drag to orbit, scroll to zoom). Use the same `bicycle.splat` file as above:
+
+```bash
+# Ensure you have the scene file (see Benchmarking above for download URL)
+uv run python examples/viewer.py examples/bicycle.splat
+```
+
+Then open the URL printed in the terminal in your browser. The first render triggers JIT compilation (~30–60 s); subsequent renders are fast.
+
+### Performance (RTX 5090, bicycle.splat, 6.1M Gaussians, 1280×720)
+
+Benchmark: `uv run python examples/benchmark_render.py examples/bicycle.splat` (1000 runs full pipeline, 200 runs per kernel).
+
+| Backend | Full pipeline | Projection | Binning | Rasterization |
+|---------|---------------|------------|---------|---------------|
+| **gsplat** | 2.41 ms (414.7 FPS) | 0.43 ms | 0.46 ms | 1.56 ms |
+| **mojo**   | 6.96 ms (143.7 FPS) | 2.15 ms | 0.87 ms | 4.03 ms |
+
 
 ## Contributing
 
