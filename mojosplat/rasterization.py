@@ -2,12 +2,56 @@ from pathlib import Path
 import torch
 from typing_extensions import Literal
 
-from max.torch import CustomOpLibrary
+from max.torch import graph_op
+from max.graph import ops as graph_ops, TensorType as GraphTensorType, DeviceRef
+from max.dtype import DType as MaxDType
 from .utils import Camera
 
-# Register Mojo kernels in Torch
 mojo_kernels = Path(__file__).parent / "kernels"
-op_library = CustomOpLibrary(mojo_kernels)
+_gpu = DeviceRef.GPU()
+
+_rasterize_graph_ops: dict = {}
+
+
+def _get_rasterize_graph_op(tile_size: int, cdim: int):
+    key = (tile_size, cdim)
+    if key in _rasterize_graph_ops:
+        return _rasterize_graph_ops[key]
+
+    _N = "N"
+    _M = "M"
+    _TGH = "TGH"
+    _TGW = "TGW"
+    _H = "ImgH"
+    _W = "ImgW"
+
+    @graph_op(
+        name=f"rasterize_to_pixels_3dgs_fwd_ts{tile_size}_c{cdim}",
+        kernel_library=mojo_kernels,
+        input_types=[
+            GraphTensorType(MaxDType.float32, (1, _N, 2),       device=_gpu),  # means2d
+            GraphTensorType(MaxDType.float32, (1, _N, 3),       device=_gpu),  # conics
+            GraphTensorType(MaxDType.float32, (1, _N, cdim),    device=_gpu),  # colors
+            GraphTensorType(MaxDType.float32, (1, _N),          device=_gpu),  # opacities
+            GraphTensorType(MaxDType.float32, (1, cdim),        device=_gpu),  # backgrounds
+            GraphTensorType(MaxDType.int32,   (1, _TGH, _TGW, 2), device=_gpu),  # tile_ranges
+            GraphTensorType(MaxDType.int32,   (1, _M),          device=_gpu),  # flatten_ids
+        ],
+        output_types=[
+            GraphTensorType(MaxDType.float32, (1, _H, _W, cdim), device=_gpu),  # render_colors
+        ],
+    )
+    def _rasterize_graph(means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids):
+        return graph_ops.custom(
+            "rasterize_to_pixels_3dgs_fwd",
+            _gpu,
+            [means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids],
+            out_types=[GraphTensorType(MaxDType.float32, (1, _H, _W, cdim), device=_gpu)],
+            parameters={"tile_size": tile_size, "CDIM": cdim},
+        )
+
+    _rasterize_graph_ops[key] = _rasterize_graph
+    return _rasterize_graph
 
 
 def rasterize_gaussians(
@@ -23,7 +67,7 @@ def rasterize_gaussians(
     backend: Literal["torch", "gsplat", "mojo"] = "mojo",
 ) -> torch.Tensor:
     """Rasterizes 2D Gaussians to pixels.
-    
+
     Args:
         means2d: 2D projected means in pixel coordinates
         conics: 2D covariance matrices (flattened upper triangle)
@@ -34,13 +78,13 @@ def rasterize_gaussians(
         sorted_gaussian_indices: Sorted Gaussian indices from binning step
         camera: Camera object with image dimensions
         backend: Backend to use ("torch", "gsplat", "mojo")
-        
+
     Returns:
         rendered_image: (H, W, C) Rendered image
     """
     if backend == "torch":
         return rasterize_gaussians_torch(
-            means2d, conics, colors, opacities, background_color, 
+            means2d, conics, colors, opacities, background_color,
             tile_ranges, sorted_gaussian_indices, camera, tile_size
         )
     elif backend == "gsplat":
@@ -138,23 +182,22 @@ def rasterize_gaussians_mojo(
     """Mojo implementation of Gaussian rasterization."""
     # Ensure proper tensor shapes and types for Mojo kernel
     if means2d.dim() == 2:
-        means2d = means2d.unsqueeze(0)  # Add batch dimension: (N, 2) -> (1, N, 2)
+        means2d = means2d.unsqueeze(0)  # (N, 2) -> (1, N, 2)
     if conics.dim() == 2:
-        conics = conics.unsqueeze(0)    # Add batch dimension: (N, 3) -> (1, N, 3)
+        conics = conics.unsqueeze(0)    # (N, 3) -> (1, N, 3)
     if colors.dim() == 2:
-        colors = colors.unsqueeze(0)    # Add batch dimension: (N, C) -> (1, N, C)
-    # Mojo kernel expects opacities to be (1, N) not (N,) or (N, 1)
+        colors = colors.unsqueeze(0)    # (N, C) -> (1, N, C)
     if opacities.dim() == 1:
         opacities = opacities.unsqueeze(0)  # (N,) -> (1, N)
     elif opacities.dim() == 2:
         opacities = opacities.squeeze(-1).unsqueeze(0)  # (N, 1) -> (N,) -> (1, N)
     if background_color.dim() == 1:
-        background_color = background_color.unsqueeze(0)  # Add batch dimension: (C,) -> (1, C)
+        background_color = background_color.unsqueeze(0)  # (C,) -> (1, C)
     if tile_ranges.dim() == 3:
-        tile_ranges = tile_ranges.unsqueeze(0)  # Add batch dimension: (H, W, 2) -> (1, H, W, 2)
+        tile_ranges = tile_ranges.unsqueeze(0)  # (TGH, TGW, 2) -> (1, TGH, TGW, 2)
     if sorted_gaussian_indices.dim() == 1:
-        sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)  # Add batch dimension if needed
-    
+        sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)  # (M,) -> (1, M)
+
     # Ensure contiguous tensors and correct dtypes
     means2d = means2d.contiguous()
     conics = conics.contiguous()
@@ -162,25 +205,14 @@ def rasterize_gaussians_mojo(
     background_color = background_color.contiguous()
     tile_ranges = tile_ranges.to(torch.int32).contiguous()
     sorted_gaussian_indices = sorted_gaussian_indices.to(torch.int32).contiguous()
-    
+
     num_channels = colors.shape[-1]
     result = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=means2d.dtype)
-    
-    rasterize_to_pixels_3dgs_fwd_kernel = op_library.rasterize_to_pixels_3dgs_fwd[
-        {
-            "tile_size": tile_size,
-            "image_height": camera.H,
-            "image_width": camera.W,
-            "CDIM": num_channels,  # Use actual number of channels
-            "C": 1,
-            "N": means2d.shape[1],  # After adding batch dimension: (1, N, 2)
-            "NIntersections": sorted_gaussian_indices.shape[1],  # After adding batch dimension: (1, M)
-        }
-    ]
-    rasterize_to_pixels_3dgs_fwd_kernel(
-        result, means2d, conics, colors, opacities, background_color, 
+
+    rasterize_kernel = _get_rasterize_graph_op(tile_size, num_channels)
+    rasterize_kernel(
+        result, means2d, conics, colors, opacities, background_color,
         tile_ranges, sorted_gaussian_indices
     )
 
-    # Remove batch dimension to return (H, W, C) instead of (1, H, W, C)
     return result.squeeze(0)
