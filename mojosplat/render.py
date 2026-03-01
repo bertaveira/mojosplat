@@ -42,8 +42,8 @@ def render_gaussians(
         final_image: (H, W, C) Rendered image
     """
     required_tensors = [means3d, scales, quats, opacities, features]
-    if not all(isinstance(t, torch.Tensor) and t.is_cuda for t in required_tensors):
-        raise ValueError("All input gaussian tensors must be CUDA tensors.")
+    if any(not isinstance(t, torch.Tensor) or t.device.type == 'cpu' for t in required_tensors):
+        raise ValueError("All input gaussian tensors must be on a GPU.")
 
     # Prepare background color tensor
     num_channels = features.shape[-1]

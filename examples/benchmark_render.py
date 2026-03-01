@@ -21,9 +21,17 @@ from mojosplat.render import render_gaussians
 from mojosplat.projection import project_gaussians
 from mojosplat.binning import bin_gaussians_to_tiles
 from mojosplat.rasterization import rasterize_gaussians
-from mojosplat.utils import Camera
+from mojosplat.utils import Camera, detect_device
 
 TILE_SIZE = 16
+
+
+def device_synchronize(device: torch.device):
+    """Synchronize the given device (works across CUDA, MPS, etc.)."""
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    elif device.type == "mps":
+        torch.mps.synchronize()
 
 
 # ---------------------------------------------------------------------------
@@ -69,55 +77,55 @@ def make_camera(device, H=720, W=1280):
 # ---------------------------------------------------------------------------
 
 def benchmark_full_pipeline(backend, means3d, scales, quats, opacities, features,
-                            camera, bg, num_runs):
+                            camera, bg, num_runs, device):
     """Time `num_runs` full render_gaussians calls; return list of per-frame seconds."""
     times = []
     for _ in range(num_runs):
-        torch.cuda.synchronize()
+        device_synchronize(device)
         t0 = time.perf_counter()
         render_gaussians(
             means3d, scales, quats, opacities, features,
             camera, background_color=bg, backend=backend,
         )
-        torch.cuda.synchronize()
+        device_synchronize(device)
         times.append(time.perf_counter() - t0)
     return times
 
 
-def benchmark_projection(backend, means3d, scales, quats, opacities, camera, num_runs):
+def benchmark_projection(backend, means3d, scales, quats, opacities, camera, num_runs, device):
     times = []
     for _ in range(num_runs):
-        torch.cuda.synchronize()
+        device_synchronize(device)
         t0 = time.perf_counter()
         project_gaussians(means3d, scales, quats, opacities, camera, backend=backend)
-        torch.cuda.synchronize()
+        device_synchronize(device)
         times.append(time.perf_counter() - t0)
     return times
 
 
-def benchmark_binning(backend, means2d, radii, depths, camera, num_runs):
+def benchmark_binning(backend, means2d, radii, depths, camera, num_runs, device):
     times = []
     for _ in range(num_runs):
-        torch.cuda.synchronize()
+        device_synchronize(device)
         t0 = time.perf_counter()
         bin_gaussians_to_tiles(means2d, radii, depths, camera.H, camera.W,
                                TILE_SIZE, backend=backend)
-        torch.cuda.synchronize()
+        device_synchronize(device)
         times.append(time.perf_counter() - t0)
     return times
 
 
 def benchmark_rasterization(backend, means2d, conics, colors, opacities, bg,
-                            tile_ranges, sorted_ids, camera, num_runs):
+                            tile_ranges, sorted_ids, camera, num_runs, device):
     times = []
     for _ in range(num_runs):
-        torch.cuda.synchronize()
+        device_synchronize(device)
         t0 = time.perf_counter()
         rasterize_gaussians(
             means2d, conics, colors, opacities, bg,
             tile_ranges, sorted_ids, camera, tile_size=TILE_SIZE, backend=backend,
         )
-        torch.cuda.synchronize()
+        device_synchronize(device)
         times.append(time.perf_counter() - t0)
     return times
 
@@ -156,9 +164,10 @@ def main():
                         help="Number of timed runs per individual kernel")
     args = parser.parse_args()
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA GPU required")
-    device = torch.device("cuda:0")
+    device = detect_device()
+    if device.type == "cpu":
+        raise RuntimeError("No GPU found. A CUDA, ROCm, or Apple Silicon GPU is required.")
+    print(f"Using device: {device}")
 
     # -- Load scene -----------------------------------------------------------
     print(f"Loading {args.splat} ...")
@@ -182,7 +191,7 @@ def main():
         for _ in range(args.warmup):
             render_gaussians(means3d, scales, quats, opacities, features,
                              camera, background_color=bg, backend=backend)
-            torch.cuda.synchronize()
+            device_synchronize(device)
         print(f"  {backend} warm.")
 
     # =========================================================================
@@ -196,7 +205,7 @@ def main():
     for backend in backends:
         times = benchmark_full_pipeline(
             backend, means3d, scales, quats, opacities, features,
-            camera, bg, args.num_runs,
+            camera, bg, args.num_runs, device,
         )
         print(fmt_stats(times, backend))
 
@@ -207,18 +216,18 @@ def main():
     print(f"PER-KERNEL BENCHMARKS  ({args.kernel_runs} runs each)")
     print(f"{'='*80}")
 
-    # Pre-compute intermediate tensors with gsplat so both backends get the
-    # same inputs for binning & rasterization.
+    # Pre-compute intermediate tensors per backend for binning & rasterization.
+    intermediate = {}
     with torch.no_grad():
-        means2d_gs, conics_gs, depths_gs, radii_gs = project_gaussians(
-            means3d, scales, quats, opacities, camera, backend="gsplat")
-        sorted_ids_gs, tile_ranges_gs = bin_gaussians_to_tiles(
-            means2d_gs, radii_gs, depths_gs, camera.H, camera.W, TILE_SIZE, backend="gsplat")
-
-        means2d_mo, conics_mo, depths_mo, radii_mo = project_gaussians(
-            means3d, scales, quats, opacities, camera, backend="mojo")
-        sorted_ids_mo, tile_ranges_mo = bin_gaussians_to_tiles(
-            means2d_mo, radii_mo, depths_mo, camera.H, camera.W, TILE_SIZE, backend="mojo")
+        for backend in backends:
+            means2d, conics, depths, radii = project_gaussians(
+                means3d, scales, quats, opacities, camera, backend=backend)
+            sorted_ids, tile_ranges = bin_gaussians_to_tiles(
+                means2d, radii, depths, camera.H, camera.W, TILE_SIZE, backend=backend)
+            intermediate[backend] = {
+                "means2d": means2d, "conics": conics, "depths": depths,
+                "radii": radii, "sorted_ids": sorted_ids, "tile_ranges": tile_ranges,
+            }
 
     # -- Projection -----------------------------------------------------------
     print(f"\n  Projection:")
@@ -226,36 +235,35 @@ def main():
         # warmup
         for _ in range(10):
             project_gaussians(means3d, scales, quats, opacities, camera, backend=backend)
-            torch.cuda.synchronize()
+            device_synchronize(device)
         times = benchmark_projection(backend, means3d, scales, quats, opacities,
-                                     camera, args.kernel_runs)
+                                     camera, args.kernel_runs, device)
         print(f"    {fmt_stats(times, backend)}")
 
     # -- Binning --------------------------------------------------------------
     print(f"\n  Binning:")
     for backend in backends:
-        m2d = means2d_gs if backend == "gsplat" else means2d_mo
-        rad = radii_gs if backend == "gsplat" else radii_mo
-        dep = depths_gs if backend == "gsplat" else depths_mo
+        d = intermediate[backend]
         for _ in range(10):
-            bin_gaussians_to_tiles(m2d, rad, dep, camera.H, camera.W, TILE_SIZE, backend=backend)
-            torch.cuda.synchronize()
-        times = benchmark_binning(backend, m2d, rad, dep, camera, args.kernel_runs)
+            bin_gaussians_to_tiles(d["means2d"], d["radii"], d["depths"],
+                                   camera.H, camera.W, TILE_SIZE, backend=backend)
+            device_synchronize(device)
+        times = benchmark_binning(backend, d["means2d"], d["radii"], d["depths"],
+                                  camera, args.kernel_runs, device)
         print(f"    {fmt_stats(times, backend)}")
 
     # -- Rasterization --------------------------------------------------------
     print(f"\n  Rasterization:")
     for backend in backends:
-        m2d   = means2d_gs if backend == "gsplat" else means2d_mo
-        con   = conics_gs  if backend == "gsplat" else conics_mo
-        sids  = sorted_ids_gs if backend == "gsplat" else sorted_ids_mo
-        tranges = tile_ranges_gs if backend == "gsplat" else tile_ranges_mo
+        d = intermediate[backend]
         for _ in range(10):
-            rasterize_gaussians(m2d, con, features, opacities, bg,
-                                tranges, sids, camera, tile_size=TILE_SIZE, backend=backend)
-            torch.cuda.synchronize()
-        times = benchmark_rasterization(backend, m2d, con, features, opacities, bg,
-                                        tranges, sids, camera, args.kernel_runs)
+            rasterize_gaussians(d["means2d"], d["conics"], features, opacities, bg,
+                                d["tile_ranges"], d["sorted_ids"], camera,
+                                tile_size=TILE_SIZE, backend=backend)
+            device_synchronize(device)
+        times = benchmark_rasterization(backend, d["means2d"], d["conics"],
+                                        features, opacities, bg, d["tile_ranges"],
+                                        d["sorted_ids"], camera, args.kernel_runs, device)
         print(f"    {fmt_stats(times, backend)}")
 
     print()

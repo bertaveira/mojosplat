@@ -29,3 +29,12 @@ class Camera:
             self.view_matrix[:3, 3] = self.T     # World-to-camera translation
         if self.Ks is None:
             self.Ks = torch.tensor([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]], device=self.R.device, dtype=self.R.dtype)
+
+
+def detect_device() -> torch.device:
+    """Return the best available compute device: CUDA > MPS > CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda:0")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
