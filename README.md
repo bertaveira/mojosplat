@@ -24,9 +24,8 @@ You can call the render function or any of the individual kernels directly from 
 
 > [!WARNING]
 > 1. This is NOT production ready or even finished.
-> 2. Due to Mojo compiler limitations the compiler optimizes on tensor shapes. This causes some kernels to need to be recompiled if either the number of gaussians change or the view matrix changes.
-> 3. Performance is inferior to the GSplat CUDA version. Maybe some day we will be capable of surpassing it.
-> 4. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work. Particularly the Mojo interop with python/torch is a very novel thigns and the API is changing with every version.
+> 2. Performance is inferior to the GSplat CUDA version. Maybe some day we will be capable of surpassing it.
+> 3. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work. Particularly the Mojo interop with python/torch is a very novel thigns and the API is changing with every version.
 
 
 ## Installation
