@@ -1,8 +1,5 @@
 # MojoSplat
 
-> [!NOTE]
-> **Work in Progress - Experimental**
-
 MojoSplat is an experimental port of Gaussian Splatting kernels to [Mojo](https://www.modular.com/mojo), exploring the potential performance and multi-vendor support of Mojo for GPU acceleration.
 
 This project implements the three core kernels of 3D Gaussian Splatting:
@@ -17,13 +14,13 @@ You can call the render function or any of the individual kernels directly from 
 | Kernel | PyTorch | GSplat | Mojo |
 |--------|---------|--------|------|
 | **Projection** | ✅ | ✅ | ✅ |
-| **Binning** | ✅ | ✅ | ❌ (WIP) |
+| **Binning** | ✅ | ✅ | ✅ |
 | **Rasterization** | ❌* | ✅ | ✅ |
 
 *PyTorch rasterization falls back to GSplat implementation
 
 > [!WARNING]
-> 1. This is NOT production ready or even finished.
+> 1. This is NOT production ready.
 > 2. Performance is inferior to the GSplat CUDA version. Maybe some day we will be capable of surpassing it.
 > 3. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work. Particularly the Mojo interop with python/torch is a very novel thigns and the API is changing with every version.
 
@@ -138,7 +135,6 @@ uv run python examples/benchmark.py
 Contributions are very welcome! This is an experimental project exploring the intersection of Mojo and high-performance graphics.
 
 Areas where help is needed:
-- **Mojo Binning Kernel**: Complete the binning implementation in Mojo
 - **PyTorch Rasterization**: Native PyTorch rasterization kernel
 - **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. Also measure the overhead of the python to mojo connection.
 - **Backwards pass**: implement the mojo kernels for the backwards pass. This will allow the MojoSplat to be used in training the gaussian representation.
@@ -153,7 +149,7 @@ To contribute:
 
 ## License
 
-[License information to be added]
+[MIT License](LICENSE)
 
 ## Acknowledgments
 
