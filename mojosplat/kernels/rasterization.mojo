@@ -2,10 +2,11 @@ import compiler
 from gpu import thread_idx, block_idx, barrier
 from gpu.memory import AddressSpace
 from layout import Layout, LayoutTensor
+from collections import InlineArray
 from runtime.asyncrt import DeviceContextPtr
 from math import exp, ceildiv
 from memory import UnsafePointer
-
+from os import Atomic
 from tensor import InputTensor, OutputTensor
 
 comptime dtype = DType.float32
@@ -15,7 +16,7 @@ comptime ALPHA_THRESHOLD = 1.0 / 255.0
 
 fn rasterize_to_pixels_3dgs_fwd_kernel[
     tile_size: Int,
-    CDIM: Int,  # kept compile-time — pix_out and shared memory need it
+    CDIM: Int,  # kept compile-time — shared memory and pix_out need it
 ](
     means2d_ptr:       UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * N * 2]
     conics_ptr:        UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * N * 3]
@@ -53,6 +54,12 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
         MutAnyOrigin,
         address_space = AddressSpace.SHARED,
     ].stack_allocation()
+    sh_done_count = LayoutTensor[
+        DType.int32,
+        Layout.row_major(1),
+        MutAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
 
     # Get block and thread IDs
     camera_id = block_idx.x  # Corresponds to grid.x
@@ -82,21 +89,24 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
 
     # Pixel Transmittance
     var T: Float32 = 1.0
-    # Pixel Color (start at zero; background blended at the end weighted by remaining T)
-    var pix_out = LayoutTensor[dtype, Layout.row_major(CDIM), MutAnyOrigin].stack_allocation()
-    for c in range(CDIM):
-        pix_out[c] = 0.0
+    # Pixel Color: InlineArray stays in registers (no AddressSpace.GENERIC spilling)
+    var pix_out = InlineArray[Float32, CDIM](0.0)
     var last_id: Int32 = -1
+
+    if thread_id == 0:
+        sh_done_count[0] = 0
+    barrier()
 
     # Collect gaussians in batches
     for batch in range(num_batches):
-        # Sync all threads before starting next batch
-        barrier()
-
-        # Each thread loads one gaussian from front to back
         var batch_start = range_start + thread_count * batch
-        var idx = batch_start + thread_id
 
+        # Phase 1 (overlapped): done threads increment the counter AND every
+        # thread loads its gaussian. This reduces what would be 2 barriers per batch to 1.
+        if done:
+            _ = Atomic[DType.int32].fetch_add(sh_done_count.ptr, Int32(1))
+
+        var idx = batch_start + thread_id
         if idx < range_end:
             var g = Int(flatten_ids_ptr[camera_id * NIntersections + Int(idx)])
             if g >= 0 and g < N:
@@ -108,8 +118,12 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
                 sh_conics[thread_id, 2] = conics_ptr[(camera_id * N + g) * 3 + 2]
                 sh_opacities[thread_id] = opacities_ptr[camera_id * N + g]
 
-        # Wait for all threads in block to load gaussians
+        # Barrier 1 of 2: synchronises both the done-count atomics and the
+        # shared-memory gaussian loads in one shot.
         barrier()
+
+        if sh_done_count[0][0] >= thread_count:
+            break
 
         # Rasterize gaussians for this pixel
         if inside and not done:
@@ -129,26 +143,40 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
                                             conic_yy * delta_y * delta_y) +
                                             conic_xy * delta_x * delta_y
                 var alpha = min(opacity * exp(-sigma), 0.999)
-                if sigma < 0.0 or alpha < ALPHA_THRESHOLD:
-                    continue
 
-                var next_T = T * (1.0 - alpha)
-                if next_T <= 1e-4:
-                    done = True
-                    break
+                # Nested if instead of `continue` — avoids the double-label PTX
+                # pattern where the compiler emits a second loop header to
+                # recompute 5 address-arithmetic instructions for every gaussian
+                # that actually contributes (the fast-path skip jumps to the
+                # inner label directly, bypassing the recompute; the slow path
+                # always falls through the outer label and pays the penalty).
+                if sigma >= 0.0 and alpha >= ALPHA_THRESHOLD:
+                    var next_T = T * (1.0 - alpha)
+                    if next_T <= 1e-4:
+                        done = True
+                        break
 
-                var vis = alpha * T
+                    var vis = alpha * T
 
-                for c in range(CDIM):
-                    pix_out[c] = pix_out[c][0] + colors_ptr[(camera_id * N + g) * CDIM + c] * vis
+                    @parameter
+                    for c in range(CDIM):
+                        pix_out[c] = pix_out[c] + colors_ptr[(camera_id * N + g) * CDIM + c] * vis
 
-                T = next_T
-                last_id = last_id + 1
+                    T = next_T
+                    last_id = last_id + 1
+
+        # Barrier 2 of 2: reset done counter for the next batch.  This barrier
+        # doubles as the "previous-batch done" sync that the next iteration
+        # needs before it writes atomics, so no extra barrier is required there.
+        if thread_id == 0:
+            sh_done_count[0] = 0
+        barrier()
 
     if inside:
         var pixel_base = (camera_id * image_height + i) * image_width * CDIM + j * CDIM
+        @parameter
         for c in range(CDIM):
-            render_colors_ptr[pixel_base + c] = pix_out[c][0] + T * backgrounds_ptr[camera_id * CDIM + c]
+            render_colors_ptr[pixel_base + c] = pix_out[c] + T * backgrounds_ptr[camera_id * CDIM + c]
 
 
 # --------------------------------------------------------------------------
