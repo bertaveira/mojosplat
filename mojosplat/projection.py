@@ -463,16 +463,16 @@ def project_gaussians_mojo(
     """Projects 3D Gaussians to 2D image plane."""
     N = means3d.shape[0]
 
-    means2d = torch.zeros((1, N, 2), dtype=torch.float32, device=means3d.device).contiguous()
-    conics = torch.zeros((1, N, 3), dtype=torch.float32, device=means3d.device).contiguous()
-    depth = torch.zeros((1, N), dtype=torch.float32, device=means3d.device).contiguous()
-    radii = torch.zeros((1, N, 2), dtype=torch.int32, device=means3d.device).contiguous()
+    means2d = torch.empty((1, N, 2), dtype=torch.float32, device=means3d.device)
+    conics = torch.empty((1, N, 3), dtype=torch.float32, device=means3d.device)
+    depth = torch.empty((1, N), dtype=torch.float32, device=means3d.device)
+    radii = torch.empty((1, N, 2), dtype=torch.int32, device=means3d.device)
 
     view_matrix = camera.view_matrix.unsqueeze(0).contiguous()  # Shape: (1, 4, 4)
     ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy,
                              float(camera.W), float(camera.H),
                              0.0, 0.0, 0.0, 0.0, 0.0]],
-                           device=means3d.device, dtype=torch.float32).contiguous()
+                           device=means3d.device, dtype=torch.float32)
 
     _project_gaussians_graph(
         means2d, conics, depth, radii,

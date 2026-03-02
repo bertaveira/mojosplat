@@ -18,13 +18,13 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     tile_size: Int,
     CDIM: Int,  # kept compile-time — shared memory and pix_out need it
 ](
-    means2d_ptr:       UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * N * 2]
-    conics_ptr:        UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * N * 3]
-    colors_ptr:        UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * N * CDIM]
-    opacities_ptr:     UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * N]
-    backgrounds_ptr:   UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * CDIM]
-    tile_ranges_ptr:   UnsafePointer[Scalar[DType.int32],   MutAnyOrigin],  # [C * TGH * TGW * 2]
-    flatten_ids_ptr:   UnsafePointer[Scalar[DType.int32],   MutAnyOrigin],  # [C * NIntersections]
+    means2d_ptr:       UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],  # [C * N * 2]
+    conics_ptr:        UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],  # [C * N * 3]
+    colors_ptr:        UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],  # [C * N * CDIM]
+    opacities_ptr:     UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],  # [C * N]
+    backgrounds_ptr:   UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],  # [C * CDIM]
+    tile_ranges_ptr:   UnsafePointer[Scalar[DType.int32],   ImmutAnyOrigin],  # [C * TGH * TGW * 2]
+    flatten_ids_ptr:   UnsafePointer[Scalar[DType.int32],   ImmutAnyOrigin],  # [C * NIntersections]
     render_colors_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [C * H * W * CDIM]
     N: Int, C: Int, NIntersections: Int,
     image_width: Int, image_height: Int,
@@ -213,13 +213,13 @@ struct RasterizeToPixels3DGSFwd:
         var tile_grid_width  = tile_ranges.dim_size(2)
 
         # Extract UnsafePointers (same rebind pattern as projection.mojo)
-        var means2d_ptr       = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](means2d.to_layout_tensor().ptr)
-        var conics_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](conics.to_layout_tensor().ptr)
-        var colors_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](colors.to_layout_tensor().ptr)
-        var opacities_ptr     = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](opacities.to_layout_tensor().ptr)
-        var backgrounds_ptr   = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](backgrounds.to_layout_tensor().ptr)
-        var tile_ranges_ptr   = rebind[UnsafePointer[Scalar[DType.int32], MutAnyOrigin]](tile_ranges.to_layout_tensor().ptr)
-        var flatten_ids_ptr   = rebind[UnsafePointer[Scalar[DType.int32], MutAnyOrigin]](flatten_ids.to_layout_tensor().ptr)
+        var means2d_ptr       = rebind[UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin]](means2d.to_layout_tensor().ptr)
+        var conics_ptr        = rebind[UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin]](conics.to_layout_tensor().ptr)
+        var colors_ptr        = rebind[UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin]](colors.to_layout_tensor().ptr)
+        var opacities_ptr     = rebind[UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin]](opacities.to_layout_tensor().ptr)
+        var backgrounds_ptr   = rebind[UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin]](backgrounds.to_layout_tensor().ptr)
+        var tile_ranges_ptr   = rebind[UnsafePointer[Scalar[DType.int32], ImmutAnyOrigin]](tile_ranges.to_layout_tensor().ptr)
+        var flatten_ids_ptr   = rebind[UnsafePointer[Scalar[DType.int32], ImmutAnyOrigin]](flatten_ids.to_layout_tensor().ptr)
         var render_colors_ptr = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](render_colors.to_layout_tensor().ptr)
 
         @parameter
