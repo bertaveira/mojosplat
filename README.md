@@ -27,9 +27,8 @@ You can call the render function or any of the individual kernels directly from 
 
 > [!WARNING]
 > 1. This is NOT production ready.
-> 2. Performance is inferior to the GSplat CUDA version. Maybe some day we will be capable of surpassing it.
-> 3. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work. Particularly the Mojo interop with python/torch is a very novel thigns and the API is changing with every version.
-
+> 2. Performance is inferior to the GSplat CUDA version. But this gap is closing as the Mojo language and library mature. Performance improvements are welcome!
+> 3. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work.
 
 ## Installation
 
@@ -49,12 +48,15 @@ uv sync
 ### As a Dependency in Your Project
 
 #### Using pip with GitHub
+
 ```bash
 pip install git+https://github.com/bertaveira/mojosplat.git
 ```
 
 #### Using uv in your project
+
 Add to your `pyproject.toml`:
+
 ```toml
 dependencies = [
     "mojosplat @ git+https://github.com/bertaveira/mojosplat.git",
@@ -63,12 +65,15 @@ dependencies = [
 ```
 
 #### Using pip requirements.txt
+
 Add to your `requirements.txt`:
+
 ```
 git+https://github.com/bertaveira/mojosplat.git
 ```
 
 #### Using conda/mamba environment.yml
+
 ```yaml
 dependencies:
   - pip
@@ -149,17 +154,21 @@ Then open the URL printed in the terminal in your browser. The first render trig
 
 Benchmark: `uv run python examples/benchmark_render.py examples/bicycle.splat` (1000 runs full pipeline, 200 runs per kernel).
 
-| Backend | Full pipeline | Projection | Binning | Rasterization |
-|---------|---------------|------------|---------|---------------|
-| **gsplat** | 2.41 ms (414.7 FPS) | 0.43 ms | 0.46 ms | 1.56 ms |
-| **mojo**   | 6.96 ms (143.7 FPS) | 2.15 ms | 0.87 ms | 4.03 ms |
 
+| Backend    | Full pipeline       | Projection | Binning | Rasterization |
+| ---------- | ------------------- | ---------- | ------- | ------------- |
+| **gsplat** | 2.41 ms (414.9 FPS) | 0.43 ms    | 0.46 ms | 1.56 ms       |
+| **mojo**   | 3.21 ms (311.2 FPS) | 0.91 ms    | 0.87 ms | 1.55 ms       |
+
+
+There is still a gap between the performance of the Mojo and GSplat kernels. Some extra work is needed to get closer to the GSplat performance. In some cases the Mojo library does not expose certain instructions that are used in the GSplat kernels, so one can expect to see a performance boost as the language and library mature.
 
 ## Contributing
 
 Contributions are very welcome! This is an experimental project exploring the intersection of Mojo and high-performance graphics.
 
 Areas where help is needed:
+
 - **PyTorch Rasterization**: Native PyTorch rasterization kernel
 - **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. Also measure the overhead of the python to mojo connection.
 - **Backwards pass**: implement the mojo kernels for the backwards pass. This will allow the MojoSplat to be used in training the gaussian representation.
@@ -167,6 +176,7 @@ Areas where help is needed:
 - **Unscented Projection**: Implmeent the Unscented projection from 3DGUT as an alternative to EWA
 
 To contribute:
+
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
@@ -181,3 +191,4 @@ To contribute:
 - [GSplat](https://github.com/nerfstudio-project/gsplat) for the reference implementation
 - [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) for the original method
 - [Modular](https://www.modular.com/) for the Mojo language
+
