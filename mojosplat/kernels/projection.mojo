@@ -250,6 +250,67 @@ fn project_ewa_kernel(
     depths_ptr[camera_idx * N + gaussian_idx] = mc2  # Depth is positive distance along viewing direction
 
 
+@compiler.register("project_gaussians_inplace")
+struct ProjectGaussiansInplace:
+    """Projection kernel with 1 tiny dummy DPS output to prevent DCE.
+
+    Real "output" tensors are passed as InputTensor and written via rebind
+    to mutable pointers. This avoids the 4 large DPS buffer_store copy
+    kernels (~240µs), replacing them with 1 negligible scalar copy.
+    """
+
+    @staticmethod
+    fn execute[
+        target: StaticString,
+    ](
+        # Dummy DPS output (1 scalar) — prevents dead code elimination
+        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        # "Outputs" passed as InputTensor (written in-place via rebind)
+        means2d: InputTensor[dtype=DType.float32, rank=3],
+        conics:  InputTensor[dtype=DType.float32, rank=3],
+        depths:  InputTensor[dtype=DType.float32, rank=2],
+        radii:   InputTensor[dtype=DType.int32,   rank=3],
+        # Inputs
+        means3d:       InputTensor[dtype=DType.float32, rank=2],
+        scales:        InputTensor[dtype=DType.float32, rank=2],
+        quats:         InputTensor[dtype=DType.float32, rank=2],
+        opacities:     InputTensor[dtype=DType.float32, rank=1],
+        view_matrices: InputTensor[dtype=DType.float32, rank=3],
+        ks:            InputTensor[dtype=DType.float32, rank=2],
+        # Context
+        ctx: DeviceContextPtr
+    ) raises:
+        var N = means3d.dim_size(0)
+        var C = view_matrices.dim_size(0)
+
+        var means3d_ptr       = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](means3d.to_layout_tensor().ptr)
+        var scales_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](scales.to_layout_tensor().ptr)
+        var quats_ptr         = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](quats.to_layout_tensor().ptr)
+        var opacities_ptr     = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](opacities.to_layout_tensor().ptr)
+        var view_matrices_ptr = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](view_matrices.to_layout_tensor().ptr)
+        var ks_ptr            = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](ks.to_layout_tensor().ptr)
+        var radii_ptr         = rebind[UnsafePointer[Scalar[DType.int32], MutAnyOrigin]](radii.to_layout_tensor().ptr)
+        var means2d_ptr       = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](means2d.to_layout_tensor().ptr)
+        var depths_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](depths.to_layout_tensor().ptr)
+        var conics_ptr        = rebind[UnsafePointer[Scalar[DType.float32], MutAnyOrigin]](conics.to_layout_tensor().ptr)
+
+        @parameter
+        if target == "cpu":
+            raise Error("ProjectGaussiansInplace CPU target not implemented yet.")
+        elif target == "gpu":
+            var gpu_ctx = ctx.get_device_context()
+            var grid  = (ceildiv(N * C, block_size))
+            var block = (block_size)
+
+            gpu_ctx.enqueue_function_unchecked[project_ewa_kernel](
+                means3d_ptr, scales_ptr, quats_ptr, opacities_ptr,
+                view_matrices_ptr, ks_ptr,
+                radii_ptr, means2d_ptr, depths_ptr, conics_ptr,
+                N, C,
+                grid_dim=grid, block_dim=block,
+            )
+
+
 @compiler.register("project_gaussians")
 struct ProjectGaussians:
     @staticmethod

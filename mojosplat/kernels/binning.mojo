@@ -104,8 +104,10 @@ struct IsectCount:
         tile_size: Int,
         target: StaticString,
     ](
-        # Output
-        tiles_per_gauss: OutputTensor[dtype=DType.int32, rank=1],  # (N,)
+        # Dummy DPS output (1 scalar) — prevents dead code elimination
+        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        # "Output" passed as InputTensor (written in-place via rebind)
+        tiles_per_gauss: InputTensor[dtype=DType.int32, rank=1],  # (N,)
         # Inputs
         means2d:   InputTensor[dtype=DType.float32, rank=2],  # (N, 2)
         radii:     InputTensor[dtype=DType.int32,   rank=2],  # (N, 2)
@@ -142,9 +144,11 @@ struct IsectWrite:
         tile_size: Int,
         target: StaticString,
     ](
-        # Outputs
-        isect_ids:   OutputTensor[dtype=DType.int64, rank=1],  # (M,)
-        flatten_ids: OutputTensor[dtype=DType.int32, rank=1],  # (M,)
+        # Dummy DPS output (1 scalar) — prevents dead code elimination
+        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        # "Outputs" passed as InputTensor (written in-place via rebind)
+        isect_ids:   InputTensor[dtype=DType.int64, rank=1],  # (M,)
+        flatten_ids: InputTensor[dtype=DType.int32, rank=1],  # (M,)
         # Inputs
         means2d:   InputTensor[dtype=DType.float32, rank=2],  # (N, 2)
         radii:     InputTensor[dtype=DType.int32,   rank=2],  # (N, 2)
