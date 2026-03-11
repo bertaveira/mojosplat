@@ -191,8 +191,10 @@ struct RasterizeToPixels3DGSFwd:
         CDIM: Int,
         target: StaticString,
     ](
-        # Outputs
-        render_colors: OutputTensor[dtype=DType.float32, rank=4],  # (C, H, W, CDIM)
+        # Dummy DPS output (1 scalar) — prevents dead code elimination
+        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        # "Output" passed as InputTensor (written in-place via rebind)
+        render_colors: InputTensor[dtype=DType.float32, rank=4],  # (C, H, W, CDIM)
         # Inputs
         means2d:     InputTensor[dtype=DType.float32, rank=3],
         conics:      InputTensor[dtype=DType.float32, rank=3],
