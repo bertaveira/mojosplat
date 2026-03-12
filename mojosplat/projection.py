@@ -510,9 +510,15 @@ def project_gaussians_mojo(
     dummy = torch.empty(1, dtype=torch.float32, device=device)
 
     view_matrix = camera.view_matrix.unsqueeze(0).contiguous()  # Shape: (1, 4, 4)
+    tan_fov_x = 0.5 * camera.W / camera.fx
+    tan_fov_y = 0.5 * camera.H / camera.fy
+    lim_x_pos = (camera.W - camera.cx) / camera.fx + 0.3 * tan_fov_x
+    lim_x_neg = camera.cx / camera.fx + 0.3 * tan_fov_x
+    lim_y_pos = (camera.H - camera.cy) / camera.fy + 0.3 * tan_fov_y
+    lim_y_neg = camera.cy / camera.fy + 0.3 * tan_fov_y
     ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy,
                              float(camera.W), float(camera.H),
-                             0.0, 0.0, 0.0, 0.0, 0.0]],
+                             lim_x_pos, lim_x_neg, lim_y_pos, lim_y_neg, camera.far]],
                            device=means3d.device, dtype=torch.float32).contiguous()
 
     _project_gaussians_inplace(
