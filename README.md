@@ -158,7 +158,7 @@ Benchmark: `uv run python examples/benchmark_render.py examples/bicycle.splat` (
 | Backend    | Full pipeline       | Projection | Binning | Rasterization |
 | ---------- | ------------------- | ---------- | ------- | ------------- |
 | **gsplat** | 2.41 ms (414.9 FPS) | 0.43 ms    | 0.46 ms | 1.56 ms       |
-| **mojo**   | 3.21 ms (311.2 FPS) | 0.91 ms    | 0.87 ms | 1.55 ms       |
+| **mojo**   | 2.75 ms (363.6 FPS) | 0.48 ms    | 0.87 ms | 1.55 ms       |
 
 
 There is still a gap between the performance of the Mojo and GSplat kernels. Some extra work is needed to get closer to the GSplat performance. In some cases the Mojo library does not expose certain instructions that are used in the GSplat kernels, so one can expect to see a performance boost as the language and library mature.
