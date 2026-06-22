@@ -29,6 +29,9 @@ def _get_rasterize_graph_op(tile_size: int, cdim: int):
         name=f"rasterize_to_pixels_3dgs_fwd_ts{tile_size}_c{cdim}",
         kernel_library=mojo_kernels,
         input_types=[
+            # "Output" passed as input (written in-place via rebind)
+            GraphTensorType(MaxDType.float32, (1, _H, _W, cdim), device=_gpu),  # render_colors
+            # Regular inputs
             GraphTensorType(MaxDType.float32, (1, _N, 2),       device=_gpu),  # means2d
             GraphTensorType(MaxDType.float32, (1, _N, 3),       device=_gpu),  # conics
             GraphTensorType(MaxDType.float32, (1, _N, cdim),    device=_gpu),  # colors
@@ -38,15 +41,15 @@ def _get_rasterize_graph_op(tile_size: int, cdim: int):
             GraphTensorType(MaxDType.int32,   (1, _M),          device=_gpu),  # flatten_ids
         ],
         output_types=[
-            GraphTensorType(MaxDType.float32, (1, _H, _W, cdim), device=_gpu),  # render_colors
+            GraphTensorType(MaxDType.float32, (1,), device=_gpu),  # dummy to prevent DCE
         ],
     )
-    def _rasterize_graph(means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids):
+    def _rasterize_graph(render_colors, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids):
         return graph_ops.custom(
             "rasterize_to_pixels_3dgs_fwd",
             _gpu,
-            [means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids],
-            out_types=[GraphTensorType(MaxDType.float32, (1, _H, _W, cdim), device=_gpu)],
+            [render_colors, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids],
+            out_types=[GraphTensorType(MaxDType.float32, (1,), device=_gpu)],
             parameters={"tile_size": tile_size, "CDIM": cdim},
         )
 
@@ -208,10 +211,11 @@ def rasterize_gaussians_mojo(
 
     num_channels = colors.shape[-1]
     result = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=means2d.dtype)
+    dummy = torch.empty(1, dtype=torch.float32, device=means2d.device)
 
     rasterize_kernel = _get_rasterize_graph_op(tile_size, num_channels)
     rasterize_kernel(
-        result, means2d, conics, colors, opacities, background_color,
+        dummy, result, means2d, conics, colors, opacities, background_color,
         tile_ranges, sorted_gaussian_indices
     )
 

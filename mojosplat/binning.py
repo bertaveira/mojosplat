@@ -26,20 +26,23 @@ def _get_isect_count_op(tile_size: int):
         name=f"isect_count_ts{tile_size}",
         kernel_library=mojo_kernels,
         input_types=[
+            # "Output" passed as input (written in-place via rebind)
+            GraphTensorType(MaxDType.int32, (_N,), device=_gpu),      # tiles_per_gauss
+            # Regular inputs
             GraphTensorType(MaxDType.float32, (_N, 2), device=_gpu),  # means2d
             GraphTensorType(MaxDType.int32,   (_N, 2), device=_gpu),  # radii
             GraphTensorType(MaxDType.int32,   (2,),    device=_gpu),  # tile_dims
         ],
         output_types=[
-            GraphTensorType(MaxDType.int32, (_N,), device=_gpu),
+            GraphTensorType(MaxDType.float32, (1,), device=_gpu),  # dummy to prevent DCE
         ],
     )
-    def _graph(means2d, radii, tile_dims):
+    def _graph(tiles_per_gauss, means2d, radii, tile_dims):
         return graph_ops.custom(
             "isect_count",
             _gpu,
-            [means2d, radii, tile_dims],
-            out_types=[GraphTensorType(MaxDType.int32, (_N,), device=_gpu)],
+            [tiles_per_gauss, means2d, radii, tile_dims],
+            out_types=[GraphTensorType(MaxDType.float32, (1,), device=_gpu)],
             parameters={"tile_size": tile_size},
         )
 
@@ -58,6 +61,10 @@ def _get_isect_write_op(tile_size: int):
         name=f"isect_write_ts{tile_size}",
         kernel_library=mojo_kernels,
         input_types=[
+            # "Outputs" passed as inputs (written in-place via rebind)
+            GraphTensorType(MaxDType.int64, (_M,), device=_gpu),      # isect_ids
+            GraphTensorType(MaxDType.int32, (_M,), device=_gpu),      # flatten_ids
+            # Regular inputs
             GraphTensorType(MaxDType.float32, (_N, 2), device=_gpu),  # means2d
             GraphTensorType(MaxDType.int32,   (_N, 2), device=_gpu),  # radii
             GraphTensorType(MaxDType.float32, (_N,),   device=_gpu),  # depths
@@ -65,18 +72,16 @@ def _get_isect_write_op(tile_size: int):
             GraphTensorType(MaxDType.int32,   (2,),    device=_gpu),  # tile_dims
         ],
         output_types=[
-            GraphTensorType(MaxDType.int64, (_M,), device=_gpu),
-            GraphTensorType(MaxDType.int32, (_M,), device=_gpu),
+            GraphTensorType(MaxDType.float32, (1,), device=_gpu),  # dummy to prevent DCE
         ],
     )
-    def _graph(means2d, radii, depths, offsets, tile_dims):
+    def _graph(isect_ids, flatten_ids, means2d, radii, depths, offsets, tile_dims):
         return graph_ops.custom(
             "isect_write",
             _gpu,
-            [means2d, radii, depths, offsets, tile_dims],
+            [isect_ids, flatten_ids, means2d, radii, depths, offsets, tile_dims],
             out_types=[
-                GraphTensorType(MaxDType.int64, (_M,), device=_gpu),
-                GraphTensorType(MaxDType.int32, (_M,), device=_gpu),
+                GraphTensorType(MaxDType.float32, (1,), device=_gpu),
             ],
             parameters={"tile_size": tile_size},
         )
@@ -339,7 +344,7 @@ def bin_gaussians_to_tiles_torch(
     tile_ranges = torch.stack([tile_pointers[:-1], tile_pointers[1:]], dim=-1)
     tile_ranges = tile_ranges.view(n_tiles_h, n_tiles_w, 2)
 
-    return sorted_gaussian_indices, tile_ranges 
+    return sorted_gaussian_indices, tile_ranges
 
 def bin_gaussians_to_tiles_mojo(
     means2d: torch.Tensor,  # (N, 2) Pixel coordinates
@@ -368,19 +373,21 @@ def bin_gaussians_to_tiles_mojo(
     radii_i32 = radii.to(torch.int32).contiguous()
     depths_c = depths.contiguous()
     tile_dims = torch.tensor([tile_width, tile_height], dtype=torch.int32, device=device).contiguous()
+    dummy = torch.empty(1, dtype=torch.float32, device=device)
 
     # Step 1: Count how many tiles each Gaussian overlaps
-    tiles_per_gauss = torch.zeros(N, dtype=torch.int32, device=device)
-    _get_isect_count_op(tile_size)(tiles_per_gauss, means2d_c, radii_i32, tile_dims)
+    # Kernel writes every element (0 for culled gaussians)
+    tiles_per_gauss = torch.empty(N, dtype=torch.int32, device=device)
+    _get_isect_count_op(tile_size)(dummy, tiles_per_gauss, means2d_c, radii_i32, tile_dims)
 
     # Step 2: Exclusive prefix sum → per-Gaussian write offsets
-    # Note: torch.cumsum on int32 may return int64; cast back to int32
     cum_tiles = torch.cumsum(tiles_per_gauss, dim=0).to(torch.int32)
     M = int(cum_tiles[-1].item())
-    offsets = torch.cat([
-        torch.zeros(1, dtype=torch.int32, device=device),
-        cum_tiles[:-1],
-    ]).contiguous()
+
+    # Slice assignment avoids torch.cat + extra allocation
+    offsets = torch.empty(N, dtype=torch.int32, device=device)
+    offsets[0] = 0
+    offsets[1:] = cum_tiles[:-1]
 
     if M == 0:
         return (
@@ -391,18 +398,20 @@ def bin_gaussians_to_tiles_mojo(
     # Step 3: Write (tile_id << 32 | depth_bits) and gaussian index per intersection
     isect_ids = torch.empty(M, dtype=torch.int64, device=device)
     flatten_ids = torch.empty(M, dtype=torch.int32, device=device)
-    _get_isect_write_op(tile_size)(isect_ids, flatten_ids, means2d_c, radii_i32, depths_c, offsets, tile_dims)
+    _get_isect_write_op(tile_size)(dummy, isect_ids, flatten_ids, means2d_c, radii_i32, depths_c, offsets, tile_dims)
 
-    # Step 4: Sort by (tile_id, depth) — int64 key encodes both
-    sort_perm = torch.argsort(isect_ids)
+    # Step 4: Sort by (tile_id, depth) — torch.sort returns both sorted values and indices
+    sorted_keys, sort_perm = torch.sort(isect_ids)
     sorted_gaussian_indices = flatten_ids[sort_perm]
-    sorted_keys = isect_ids[sort_perm]
 
-    # Step 5: Compute per-tile [start, end) ranges via searchsorted
+    # Step 5: Compute per-tile [start, end) ranges — single searchsorted with n_tiles+1
     tile_ids_sorted = (sorted_keys >> 32).to(torch.int32)
-    arange = torch.arange(n_tiles, dtype=torch.int32, device=device)
-    tile_starts = torch.searchsorted(tile_ids_sorted, arange, right=False)
-    tile_ends = torch.searchsorted(tile_ids_sorted, arange, right=True)
-    tile_ranges = torch.stack([tile_starts, tile_ends], dim=-1).view(tile_height, tile_width, 2)
+    tile_offsets = torch.searchsorted(
+        tile_ids_sorted,
+        torch.arange(n_tiles + 1, dtype=torch.int32, device=device),
+    )
+    tile_ranges = torch.stack(
+        [tile_offsets[:-1], tile_offsets[1:]], dim=-1
+    ).view(tile_height, tile_width, 2)
 
     return sorted_gaussian_indices.to(torch.int32), tile_ranges.to(torch.int32)

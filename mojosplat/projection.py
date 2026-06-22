@@ -48,6 +48,43 @@ def _project_gaussians_graph(means3d, scales, quats, opacities, view_matrices, k
     return results
 
 
+@graph_op(
+    name="project_gaussians_inplace_op",
+    kernel_library=mojo_kernels,
+    input_types=[
+        # "Outputs" passed as regular tensor inputs (kernel writes in-place)
+        GraphTensorType(MaxDType.float32, (1, "N", 2), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, "N", 3), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, "N"), device=_gpu),
+        GraphTensorType(MaxDType.int32, (1, "N", 2), device=_gpu),
+        # Regular inputs
+        GraphTensorType(MaxDType.float32, ("N", 3), device=_gpu),
+        GraphTensorType(MaxDType.float32, ("N", 3), device=_gpu),
+        GraphTensorType(MaxDType.float32, ("N", 4), device=_gpu),
+        GraphTensorType(MaxDType.float32, ("N",), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, 4, 4), device=_gpu),
+        GraphTensorType(MaxDType.float32, (1, 11), device=_gpu),
+    ],
+    # 1 dummy output (tiny scalar) to prevent dead code elimination
+    output_types=[
+        GraphTensorType(MaxDType.float32, (1,), device=_gpu),
+    ],
+)
+def _project_gaussians_inplace(means2d, conics, depths, radii,
+                                means3d, scales, quats, opacities,
+                                view_matrices, ks):
+    result = graph_ops.custom(
+        name="project_gaussians_inplace",
+        device=_gpu,
+        values=[means2d, conics, depths, radii,
+                means3d, scales, quats, opacities, view_matrices, ks],
+        out_types=[
+            GraphTensorType(MaxDType.float32, (1,), device=_gpu),
+        ],
+    )
+    return result
+
+
 def project_gaussians(
     means3d: torch.Tensor, # (N, 3)
     scales: torch.Tensor, # (N, 3)
@@ -462,19 +499,30 @@ def project_gaussians_mojo(
 ) -> tuple:
     """Projects 3D Gaussians to 2D image plane."""
     N = means3d.shape[0]
+    device = means3d.device
 
-    means2d = torch.zeros((1, N, 2), dtype=torch.float32, device=means3d.device).contiguous()
-    conics = torch.zeros((1, N, 3), dtype=torch.float32, device=means3d.device).contiguous()
-    depth = torch.zeros((1, N), dtype=torch.float32, device=means3d.device).contiguous()
-    radii = torch.zeros((1, N, 2), dtype=torch.int32, device=means3d.device).contiguous()
+    # Output buffers — kernel writes every element in-place (including 0 for culled)
+    means2d = torch.empty((1, N, 2), dtype=torch.float32, device=device)
+    conics = torch.empty((1, N, 3), dtype=torch.float32, device=device)
+    depth = torch.empty((1, N), dtype=torch.float32, device=device)
+    radii = torch.empty((1, N, 2), dtype=torch.int32, device=device)
+    # Tiny dummy DPS output to prevent graph DCE (1 scalar, negligible copy)
+    dummy = torch.empty(1, dtype=torch.float32, device=device)
 
     view_matrix = camera.view_matrix.unsqueeze(0).contiguous()  # Shape: (1, 4, 4)
+    tan_fov_x = 0.5 * camera.W / camera.fx
+    tan_fov_y = 0.5 * camera.H / camera.fy
+    lim_x_pos = (camera.W - camera.cx) / camera.fx + 0.3 * tan_fov_x
+    lim_x_neg = camera.cx / camera.fx + 0.3 * tan_fov_x
+    lim_y_pos = (camera.H - camera.cy) / camera.fy + 0.3 * tan_fov_y
+    lim_y_neg = camera.cy / camera.fy + 0.3 * tan_fov_y
     ks_flat = torch.tensor([[camera.fx, camera.fy, camera.cx, camera.cy,
                              float(camera.W), float(camera.H),
-                             0.0, 0.0, 0.0, 0.0, 0.0]],
+                             lim_x_pos, lim_x_neg, lim_y_pos, lim_y_neg, camera.far]],
                            device=means3d.device, dtype=torch.float32).contiguous()
 
-    _project_gaussians_graph(
+    _project_gaussians_inplace(
+        dummy,
         means2d, conics, depth, radii,
         means3d.contiguous(),
         torch.exp(scales).contiguous(),
