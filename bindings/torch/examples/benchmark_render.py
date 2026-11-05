@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from mojosplat_torch.render import render_gaussians
+from mojosplat_torch.rasterizer import render_splats, rgb_to_sh0
 from mojosplat_torch.projection import project_gaussians
 from mojosplat_torch.binning import bin_gaussians_to_tiles
 from mojosplat_torch.rasterization import rasterize_gaussians
@@ -79,6 +80,21 @@ def benchmark_full_pipeline(backend, means3d, scales, quats, opacities, features
             means3d, scales, quats, opacities, features,
             camera, background_color=bg, backend=backend,
         )
+        torch.cuda.synchronize()
+        times.append(time.perf_counter() - t0)
+    return times
+
+
+def time_calls(fn, num_runs, warmup=20):
+    """Time `num_runs` calls of fn() with a sync around each; per-call seconds."""
+    for _ in range(warmup):
+        fn()
+    torch.cuda.synchronize()
+    times = []
+    for _ in range(num_runs):
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        fn()
         torch.cuda.synchronize()
         times.append(time.perf_counter() - t0)
     return times
@@ -199,6 +215,33 @@ def main():
             camera, bg, args.num_runs,
         )
         print(fmt_stats(times, backend))
+
+    # Fused single-call renderers on raw parameters (SH degree 0 from RGB):
+    # mojo's Faster-GS style Rasterizer vs gsplat's own `rasterization` API.
+    raw = dict(
+        means=means3d, quats=quats, scales=scales,
+        opacities=torch.logit(opacities.clamp(1e-6, 1 - 1e-6)),
+        sh0=rgb_to_sh0(features), shN=None,
+    )
+    times = time_calls(
+        lambda: render_splats(**raw, camera=camera, sh_degree=0, background=bg), args.num_runs
+    )
+    print(fmt_stats(times, "mojo-raster"))
+    try:
+        from gsplat import rasterization
+
+        sh = rgb_to_sh0(features)[:, None, :]
+        times = time_calls(
+            lambda: rasterization(
+                means3d, quats, torch.exp(scales), opacities, sh, camera.view_matrix[None],
+                camera.Ks[None], camera.W, camera.H, near_plane=camera.near,
+                far_plane=camera.far, sh_degree=0,
+            ),
+            args.num_runs,
+        )
+        print(fmt_stats(times, "gsplat-fused"))
+    except Exception as e:  # pragma: no cover
+        print(f"gsplat.rasterization unavailable: {e}")
 
     # =========================================================================
     # Per-kernel benchmarks

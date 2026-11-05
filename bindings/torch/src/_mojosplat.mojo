@@ -18,6 +18,7 @@ from max.gpu.host import DeviceContext
 from mojosplat.binning import copy_i32
 from mojosplat.camera import Camera
 from mojosplat.common import F32Ptr, I32Ptr
+from mojosplat.rasterizer import Rasterizer, SplatParams
 from mojosplat.render import Gaussians, Renderer
 
 comptime TILE_SIZE = 16
@@ -60,12 +61,15 @@ def _background(bg: PythonObject) raises -> SIMD[DType.float32, 4]:
 
 
 struct Context(Movable, Writable):
-    """Holds a Mojo DeviceContext (GPU 0) and the renderer's workspaces."""
+    """Holds a Mojo DeviceContext (GPU 0) and the renderers' workspaces."""
 
-    var renderer: Renderer[TILE_SIZE, CHANNELS]
+    var renderer: Renderer[TILE_SIZE, CHANNELS]  # gsplat-compatible stages
+    var rasterizer: Rasterizer[]  # Faster-GS style forward
 
     def __init__(out self) raises:
-        self.renderer = Renderer[TILE_SIZE, CHANNELS](DeviceContext())
+        var ctx = DeviceContext()
+        self.renderer = Renderer[TILE_SIZE, CHANNELS](ctx)
+        self.rasterizer = Rasterizer(ctx)
 
     def write_to(self, mut writer: Some[Writer]):
         writer.write("mojosplat Context(tile_size=", TILE_SIZE, ", channels=", CHANNELS, ")")
@@ -162,6 +166,25 @@ struct Context(Movable, Writable):
         return PythonObject(self_[].renderer.num_intersections)
 
 
+    @staticmethod
+    def render_splats(
+        self_: Pointer[Self, MutUnsafeAnyOrigin],
+        ptrs: PythonObject,  # (means, log_scales, quats, opacity_logits, sh0, shN, image)
+        camera: PythonObject,
+        background: PythonObject,
+        sizes: PythonObject,  # (N, shN bases per Gaussian, sh_degree)
+    ) raises -> PythonObject:
+        """Faster-GS style render from raw parameters; returns (visible, instances)."""
+        var splats = SplatParams(
+            _f32(ptrs[0]), _f32(ptrs[1]), _f32(ptrs[2]), _f32(ptrs[3]),
+            _f32(ptrs[4]), _f32(ptrs[5]), Int(py=sizes[0]), Int(py=sizes[1]),
+        )
+        ref r = self_[].rasterizer
+        r.render(splats, _camera(camera), _background(background), _f32(ptrs[6]), Int(py=sizes[2]))
+        r.ctx.synchronize()
+        return Python.tuple(r.num_visible, r.num_instances)
+
+
 @export
 def PyInit__mojosplat() abi("C") -> PythonObject:
     try:
@@ -174,6 +197,7 @@ def PyInit__mojosplat() abi("C") -> PythonObject:
             .def_method[Context.read_bins]("read_bins")
             .def_method[Context.rasterize]("rasterize")
             .def_method[Context.render]("render")
+            .def_method[Context.render_splats]("render_splats")
         )
         m.def_function[_tile_size]("tile_size")
         return m.finalize()
