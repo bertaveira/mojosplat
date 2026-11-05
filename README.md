@@ -8,27 +8,28 @@ https://github.com/user-attachments/assets/ae4409a3-a656-4635-bb57-f22aca2f6141
 
 
 
-MojoSplat implements the forward pass of 3D Gaussian Splatting **entirely in Mojo**. There are two renderers:
+MojoSplat implements 3D Gaussian Splatting rendering, **forward and backward, entirely in Mojo**. There are two renderers:
 
 - **`Rasterizer`** (default): the forward design of [Faster-GS](https://fhahlbohm.github.io/faster-gaussian-splatting) (Hahlbohm et al., CVPR 2026). It takes the raw trainable parameters (log scales, quaternions, opacity logits, SH up to degree 3). The pipeline:
   - a fused preprocess pass with exact Gaussian/tile culling;
   - a two-stage sort: depth first, then a stable 16-bit tile sort;
-  - per-tile blending with 8×4 sub-tile skipping.
+  - per-tile blending with 8×4 sub-tile skipping;
+  - a per-Gaussian backward pass (Taming-3DGS / Faster-GS) for training, with gradients for all raw parameters.
 - **`Renderer`**: the earlier gsplat-compatible pipeline with separate projection, binning and rasterization stages, matching gsplat's kernels. The PyTorch bindings use it for stage-by-stage comparisons.
 
 The core library (`mojosplat/`) has **no Python dependency**: you can load a `.splat` file, render it and write a PNG from a Mojo program. PyTorch support lives separately in [`bindings/torch`](bindings/torch) (in the spirit of tiny-cuda-nn), where torch tensors are handed to the Mojo kernels by pointer, without copies.
 
 > [!WARNING]
-> 1. This is NOT production ready (forward pass only; tested on NVIDIA; AMD RDNA3/4 and Apple Silicon compile but are untested).
+> 1. This is NOT production ready (tested on NVIDIA; AMD RDNA3/4 and Apple Silicon compile but are untested; no optimizer or densification loop yet).
 > 2. Mojo is evolving fast. This version targets **Mojo 1.2 / MAX 26.7**.
 
 ## Repository layout
 
 | Path | What |
 |------|------|
-| `mojosplat/` | Pure Mojo package. `Rasterizer`: `rasterizer`, `preprocess`, `sh`, `instances`, `blend`. `Renderer` (gsplat-compatible): `render`, `projection`, `binning`, `rasterization`. Shared: `scan`, `sort` (GPU radix sort, 16/32/64-bit keys), `camera`, `io` (`.splat` loader, PNG/PPM writer) |
+| `mojosplat/` | Pure Mojo package. `Rasterizer`: `rasterizer`, `preprocess`, `sh`, `instances`, `blend`, `backward`. `Renderer` (gsplat-compatible): `render`, `projection`, `binning`, `rasterization`. Shared: `scan`, `sort` (GPU radix sort, 16/32/64-bit keys), `camera`, `io` (`.splat` loader, PNG/PPM writer) |
 | `examples/` | Mojo programs: `render_splat.mojo`, `benchmark.mojo` |
-| `tests/` | Mojo test-suite with golden data in `tests/data/golden`. `Rasterizer` is checked against an independent float64 brute-force reference (`make_golden_splats.py`), `Renderer` against the previous gsplat-matched pipeline |
+| `tests/` | Mojo test-suite with golden data in `tests/data/golden`. `Rasterizer` (image and gradients) is checked against an independent float64 brute-force reference and its autograd (`make_golden_splats.py`), `Renderer` against the previous gsplat-matched pipeline |
 | `bindings/torch/` | `mojosplat_torch` Python package: Mojo extension module + torch/gsplat reference backends, pytest suite, Python examples (viewer, orbit video, benchmark) |
 
 ## Installation
@@ -77,6 +78,15 @@ def main() raises:
 
 `SplatBuffers(ctx, means, log_scales, quats, opacity_logits, sh0, shN, rest_stride)` builds a scene from raw parameters (e.g. a trained 3DGS model with `sh0` [N, 3] and `shN` [N, 15, 3]).
 
+Gradients, for training:
+
+```mojo
+var state = rasterizer.forward(splats.view(), camera, bg, dptr(image), sh_degree)
+# ... compute dL/dimage into grad_image ([H, W, 3]) ...
+rasterizer.backward(splats.view(), state, dptr(image), dptr(grad_image), grads)
+# grads: a SplatParams of gradient buffers laid out like the parameters
+```
+
 Run it with `pixi run mojo run -I . my_program.mojo`.
 
 ## PyTorch bindings
@@ -97,11 +107,15 @@ from mojosplat_torch import Camera, render_splats
 camera = Camera(R=torch.eye(3, device="cuda"), T=torch.tensor([0.0, 0.0, 5.0], device="cuda"),
                 H=720, W=1280, fx=1152.0, fy=1152.0, cx=640.0, cy=360.0)
 image = render_splats(means, quats, scales, opacities, sh0, shN, camera)  # (H, W, 3)
+loss = (image - target).abs().mean()
+loss.backward()   # gradients for means, quats, scales, opacities, sh0, shN
 ```
+
+`render_splats` is a `torch.autograd.Function`: each forward keeps its own saved state in torch-allocated buffers, so several renders (e.g. a batch of cameras) can be backpropagated together. Pass `densification=torch.zeros(2, N, device="cuda")` to accumulate 3DGS densification statistics (visibility count, screen-space gradient norm) during the backward.
 
 The gsplat-compatible path is available too: `render_gaussians(...)` and the individual stages (`project_gaussians`, `bin_gaussians_to_tiles`, `rasterize_gaussians`), each with `torch`, `gsplat` and `mojo` backends. Python examples (interactive viser viewer, orbit video, benchmark) are in `bindings/torch/examples/`, e.g. `pixi run -e torch python bindings/torch/examples/viewer.py`.
 
-Current limitations of the Mojo backends: forward only (no autograd yet), 3 color channels, `cuda:0`, and each call synchronizes the torch stream (no stream overlap yet).
+Current limitations of the Mojo backends: 3 color channels, `cuda:0`, no gradients w.r.t. the camera or background, and each call synchronizes the torch stream (no stream overlap yet). The gsplat-compatible stage functions are forward only.
 
 ## Performance
 
@@ -124,6 +138,15 @@ Per-stage time for `Rasterizer` from `pixi run bench`, in ms with a sync after e
 | tile sort | 0.13 | |
 | blend | 0.49 | |
 
+Training step: forward + backward of all raw parameters through torch autograd. Same scene, timed with `benchmark_render.py`:
+
+| | Forward + backward |
+|---|---|
+| **mojo `render_splats`** | **4.04 ms** |
+| gsplat `rasterization` | 8.20 ms |
+
+In pure Mojo the training forward is 1.42 ms and the backward 1.60 ms. Gradients match float64 autograd of the brute-force reference to ~1e-6 relative.
+
 Where the speed comes from:
 - **Blending** (1.55 → 0.49 ms):
   - Each warp only composites the Gaussians that overlap its 8×4 sub-tile.
@@ -140,7 +163,7 @@ Areas where help is needed:
 
 - **PyTorch Rasterization**: Native PyTorch rasterization reference (`torch` backend currently falls back to gsplat)
 - **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. 
-- **Backwards pass**: in progress, following Faster-GS's per-Gaussian backward, so MojoSplat can be used for training.
+- **Training loop**: fused Adam, densification (MCMC or 3DGS), losses (L1 + SSIM) and a COLMAP loader in Mojo, to train without Python.
 - **Testing**: More comprehensive test coverage
 - **Unscented Projection**: Implmeent the Unscented projection from 3DGUT as an alternative to EWA
 

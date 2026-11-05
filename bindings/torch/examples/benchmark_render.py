@@ -244,6 +244,37 @@ def main():
         print(f"gsplat.rasterization unavailable: {e}")
 
     # =========================================================================
+    # Training step: forward + backward of L = sum(image * w) w.r.t. the raw
+    # parameters (log scales, opacity logits, SH), through torch autograd.
+    # =========================================================================
+    print(f"\n{'='*80}")
+    print(f"TRAINING STEP (forward + backward, {args.kernel_runs} runs)")
+    print(f"{'='*80}")
+    w = torch.rand(camera.H, camera.W, 3, device=device) * 2 - 1
+    leaves = {k: v.detach().clone().requires_grad_() for k, v in raw.items() if v is not None}
+
+    def mojo_step():
+        img = render_splats(**leaves, shN=None, camera=camera, sh_degree=0, background=bg)
+        (img * w).sum().backward()
+
+    print(fmt_stats(time_calls(mojo_step, args.kernel_runs), "mojo-raster"))
+    try:
+        from gsplat import rasterization
+
+        def gsplat_step():
+            img, _, _ = rasterization(
+                leaves["means"], leaves["quats"], torch.exp(leaves["scales"]),
+                torch.sigmoid(leaves["opacities"]), leaves["sh0"][:, None, :],
+                camera.view_matrix[None], camera.Ks[None], camera.W, camera.H,
+                near_plane=camera.near, far_plane=camera.far, sh_degree=0,
+            )
+            (img[0] * w).sum().backward()
+
+        print(fmt_stats(time_calls(gsplat_step, args.kernel_runs), "gsplat-fused"))
+    except Exception as e:  # pragma: no cover
+        print(f"gsplat.rasterization unavailable: {e}")
+
+    # =========================================================================
     # Per-kernel benchmarks
     # =========================================================================
     print(f"\n{'='*80}")

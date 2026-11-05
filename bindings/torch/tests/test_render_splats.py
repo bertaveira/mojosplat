@@ -137,3 +137,112 @@ def test_rejects_bad_inputs():
         render_splats(**{**params, "shN": params["shN"][:, :3]}, camera=camera, sh_degree=2)
     with pytest.raises(TypeError):
         render_splats(**{**params, "means": params["means"].double()}, camera=camera)
+
+
+# ---------------------------------------------------------------------------
+# Gradients
+# ---------------------------------------------------------------------------
+
+PARAM_FILES = {
+    "means": "grad_means3d.f32", "quats": "grad_quats.f32", "scales": "grad_log_scales.f32",
+    "opacities": "grad_opacity_logits.f32", "sh0": "grad_sh0.f32", "shN": "grad_shN.f32",
+}
+
+
+def rel(a, b):
+    return ((a - b).norm() / b.norm().clamp_min(1e-30)).item()
+
+
+@pytest.mark.parametrize("name", ["splats_small", "splats_medium", "splats_dc"])
+def test_gradients_match_float64_autograd(name):
+    params, camera, degree, bg, _ = load_golden(name)
+    d = GOLDEN / name
+    params = {k: (v.clone().requires_grad_() if v is not None else None) for k, v in params.items()}
+    H, W = camera.H, camera.W
+    grad_image = torch.from_numpy(np.fromfile(d / "grad_image.f32", dtype="<f4")).to(DEV).reshape(H, W, 3)
+    img = render_splats(**params, camera=camera, sh_degree=degree, background=bg)
+    (img * grad_image).sum().backward()
+    for k, f in PARAM_FILES.items():
+        if params[k] is None:
+            continue
+        ref = torch.from_numpy(np.fromfile(d / f, dtype="<f4")).to(DEV).reshape(params[k].shape)
+        assert rel(params[k].grad, ref) < 1e-4, (k, rel(params[k].grad, ref))
+
+
+def test_gradients_close_to_gsplat():
+    gsplat = pytest.importorskip("gsplat")
+    params, camera = random_scene(3000, seed=11)
+    leaves = {k: v.clone().requires_grad_() for k, v in params.items()}
+    g = torch.Generator(device=DEV).manual_seed(0)
+    w = torch.randn(camera.H, camera.W, 3, generator=g, device=DEV)
+
+    img = render_splats(**leaves, camera=camera, sh_degree=3)
+    (img * w).sum().backward()
+    ours = {k: v.grad for k, v in leaves.items()}
+
+    ref_leaves = {k: v.clone().requires_grad_() for k, v in params.items()}
+    colors = torch.cat([ref_leaves["sh0"][:, None], ref_leaves["shN"]], 1)
+    ref, _, _ = gsplat.rasterization(
+        ref_leaves["means"], ref_leaves["quats"], torch.exp(ref_leaves["scales"]),
+        torch.sigmoid(ref_leaves["opacities"]), colors, camera.view_matrix[None],
+        camera.Ks[None], camera.W, camera.H, sh_degree=3,
+    )
+    (ref[0] * w).sum().backward()
+    # In general not identical (gsplat truncates at 3 sigma and clamps the
+    # Jacobian at a different margin); on this scene they agree to ~3e-6.
+    for k in leaves:
+        assert rel(ours[k], ref_leaves[k].grad) < 1e-3, (k, rel(ours[k], ref_leaves[k].grad))
+
+
+def test_two_forwards_before_backward():
+    """Each forward keeps its own saved state (e.g. a batch of cameras)."""
+    params, cam1 = random_scene(2000, seed=3)
+    cam2 = Camera(R=cam1.R, T=torch.tensor([0.3, -0.2, 0.5], device=DEV), H=cam1.H, W=cam1.W,
+                  fx=cam1.fx, fy=cam1.fy, cx=cam1.cx, cy=cam1.cy)
+
+    def grads(cams):
+        leaves = {k: v.clone().requires_grad_() for k, v in params.items()}
+        loss = sum((render_splats(**leaves, camera=c) ** 2).sum() for c in cams)
+        loss.backward()
+        return {k: v.grad for k, v in leaves.items()}
+
+    both = grads([cam1, cam2])
+    g1, g2 = grads([cam1]), grads([cam2])
+    # Float atomics accumulate in a nondeterministic order: compare loosely.
+    for k in both:
+        torch.testing.assert_close(both[k], g1[k] + g2[k], rtol=1e-3, atol=1e-4)
+
+
+def test_partial_requires_grad_and_densification():
+    params, camera = random_scene(2000, seed=5, sh_rest=0)
+    means = params["means"].clone().requires_grad_()
+    dens = torch.zeros(2, 2000, device=DEV)
+    img, (visible, _) = render_splats(**{**params, "means": means}, camera=camera,
+                                      densification=dens, return_stats=True)
+    img.sum().backward()
+    assert means.grad is not None and means.grad.abs().sum() > 0
+    assert int(dens[0].sum().item()) == visible  # one count per visible Gaussian
+    assert torch.all(dens[1][dens[0] == 0] == 0) and dens[1].sum() > 0
+    culled = means.grad.abs().sum(-1)[dens[0] == 0]
+    assert torch.all(culled == 0)
+
+
+def test_optimization_converges():
+    """Fit perturbed splats back to a target image with Adam."""
+    target_params, camera = random_scene(1500, seed=9, sh_rest=8)
+    with torch.no_grad():
+        target = render_splats(**target_params, camera=camera)
+    g = torch.Generator(device=DEV).manual_seed(1)
+    leaves = {
+        k: (v + 0.05 * torch.randn(v.shape, generator=g, device=DEV)).requires_grad_()
+        for k, v in target_params.items()
+    }
+    opt = torch.optim.Adam(leaves.values(), lr=5e-3)
+    losses = []
+    for _ in range(150):
+        opt.zero_grad()
+        loss = (render_splats(**leaves, camera=camera) - target).abs().mean()
+        loss.backward()
+        opt.step()
+        losses.append(loss.item())
+    assert losses[-1] < 0.3 * losses[0], (losses[0], losses[-1])
