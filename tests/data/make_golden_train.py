@@ -13,6 +13,9 @@ Writes into tests/data/golden/train/:
             exp_avg_<a>.f32, exp_avg_sq_<a>.f32, meta.txt
     knn/    points.f32 [N,3] and dist2.f32 [N]: mean squared distance to the
             3 nearest other points (numpy brute force, float64)
+    densify/ one step of Faster-GS's adaptive_density_control (clone, split
+            with given normals, prune) on random Gaussians with Adam moments:
+            in_*.f32 -> out_*.f32, info.f32 [2, N], randn.f32, meta.txt
 
 Usage (repo root):  pixi run -e torch python tests/data/make_golden_train.py
 """
@@ -114,7 +117,78 @@ def make_knn(d: Path, n=2000):
     save(d / "dist2.f32", nearest.mean(1))
 
 
+def make_densify(d: Path, n=200, k=3):
+    """One step of Faster-GS's adaptive_density_control (Model.py), written
+    out in torch float32 with given split normals."""
+    g = torch.Generator().manual_seed(3)
+    extent, thr, pd, min_op = 1.0, 2e-4, 0.01, 0.005
+    means = torch.randn(n, 3, generator=g)
+    log_scales = torch.log(torch.rand(n, 3, generator=g) * 0.03 + 0.002)
+    log_scales[n // 2:] = torch.log(torch.rand(n - n // 2, 3, generator=g) * 0.007 + 0.002)  # small: cloned
+    log_scales[:10] = math.log(0.2)  # too large (pruned when prune_large)
+    rotations = torch.randn(n, 4, generator=g)
+    rotations[10:13] = 1e-5  # degenerate
+    opacities = torch.randn(n, generator=g) * 3
+    opacities[13:20] = -8.0  # below min opacity
+    sh0 = torch.randn(n, 3, generator=g)
+    shN = torch.randn(n, k * 3, generator=g)
+    counts = torch.randint(0, 6, (n,), generator=g).float()
+    gsum = torch.rand(n, generator=g) * 4e-4 * counts.clamp_min(1)
+    attrs = [means, log_scales, rotations, opacities[:, None], sh0, shN]
+    names = ["means", "log_scales", "rotations", "opacity_logits", "sh0", "sh_rest"]
+    m = [torch.randn(a.shape, generator=g) for a in attrs]
+    v = [torch.rand(a.shape, generator=g) for a in attrs]
+
+    sel = gsum >= thr * counts.clamp_min(1)
+    small = log_scales.max(1).values <= math.log(pd * extent)
+    dup, split = sel & small, sel & ~small
+    ns = int(split.sum())
+    z = torch.randn(2 * ns, 3, generator=g)
+    s = log_scales[split].exp().repeat(2, 1)
+    q = rotations[split].repeat(2, 1)
+    q = q / q.norm(dim=1, keepdim=True)
+    w, x, y, zq = q.unbind(-1)
+    R = torch.stack([
+        1 - 2 * (y * y + zq * zq), 2 * (x * y - w * zq), 2 * (x * zq + w * y),
+        2 * (x * y + w * zq), 1 - 2 * (x * x + zq * zq), 2 * (y * zq - w * x),
+        2 * (x * zq - w * y), 2 * (y * zq + w * x), 1 - 2 * (x * x + y * y),
+    ], -1).reshape(-1, 3, 3)
+    split_means = means[split].repeat(2, 1) + (R @ (s * z)[..., None])[..., 0]
+    split_scales = log_scales[split].repeat(2, 1) + math.log(0.625)
+    new = []
+    for i, a in enumerate(attrs):
+        if i == 0:
+            new.append(torch.cat([a, a[dup], split_means]))
+        elif i == 1:
+            new.append(torch.cat([a, a[dup], split_scales]))
+        else:
+            new.append(torch.cat([a, a[dup], a[split].repeat(2, 1)]))
+    n_new = int(dup.sum()) + 2 * ns
+    new_m = [torch.cat([a, torch.zeros(n_new, a.shape[1])]) for a in m]
+    new_v = [torch.cat([a, torch.zeros(n_new, a.shape[1])]) for a in v]
+    prune = torch.cat([split, torch.zeros(n_new, dtype=torch.bool)])
+    prune |= new[3][:, 0] < math.log(min_op / (1 - min_op))
+    prune |= (new[2] ** 2).sum(1) < 1e-8
+    prune |= new[1].max(1).values > math.log(0.1 * extent)  # prune_large
+    keep = ~prune
+    for i, nm in enumerate(names):
+        save(d / f"in_{nm}.f32", attrs[i])
+        save(d / f"in_m_{nm}.f32", m[i])
+        save(d / f"in_v_{nm}.f32", v[i])
+        save(d / f"out_{nm}.f32", new[i][keep])
+        save(d / f"out_m_{nm}.f32", new_m[i][keep])
+        save(d / f"out_v_{nm}.f32", new_v[i][keep])
+    save(d / "info.f32", torch.cat([counts, gsum]))
+    save(d / "randn.f32", z)
+    (d / "meta.txt").write_text(
+        f"N={n}\nK={k}\nextent={extent}\ncloned={int(dup.sum())}\nsplit={ns}\n"
+        f"pruned={int(prune.sum())}\ncount={int(keep.sum())}\n"
+    )
+    print(f"densify: cloned {int(dup.sum())}, split {ns}, pruned {int(prune.sum())}, count {int(keep.sum())}")
+
+
 if __name__ == "__main__":
+    make_densify(OUT / "densify")
     make_loss(OUT / "loss")
     make_adam(OUT / "adam")
     make_knn(OUT / "knn")

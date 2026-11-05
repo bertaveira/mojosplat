@@ -19,7 +19,7 @@ MojoSplat implements 3D Gaussian Splatting rendering, **forward and backward, en
 The core library (`mojosplat/`) has **no Python dependency**: you can load a `.splat` file, render it and write a PNG from a Mojo program. PyTorch support lives separately in [`bindings/torch`](bindings/torch) (in the spirit of tiny-cuda-nn), where torch tensors are handed to the Mojo kernels by pointer, without copies.
 
 > [!WARNING]
-> 1. This is NOT production ready (tested on NVIDIA; AMD RDNA3/4 and Apple Silicon compile but are untested; training works but has no densification yet, see `docs/design.md`).
+> 1. This is NOT production ready (tested on NVIDIA; AMD RDNA3/4 and Apple Silicon compile but are untested).
 > 2. Mojo is evolving fast. This version targets **Mojo 1.2 / MAX 26.7**.
 
 ## Repository layout
@@ -32,7 +32,7 @@ The core library (`mojosplat/`) has **no Python dependency**: you can load a `.s
 | `mojosplat/render/` | The `Rasterizer`: `preprocess`, `sh`, `instances`, `blend`, `blend_backward`, `preprocess_backward`. |
 | `mojosplat/model/` | Owning storage of the Gaussians (`Splats`). |
 | `mojosplat/io/` | Raw arrays, `.splat` and 3DGS `.ply` scenes, COLMAP binary models, JPEG decoding (libjpeg-turbo), PNG/PPM output. |
-| `mojosplat/train/` | Training: COLMAP datasets, L1 + SSIM loss, Adam, the training loop. |
+| `mojosplat/train/` | Training: COLMAP datasets, L1 + SSIM loss, Adam, densification, the training loop. |
 | `tools/` | Command-line programs: `render.mojo`, `bench.mojo`, `train.mojo`. |
 | `tests/` | Mojo tests, mirroring the package (`tests/gpu/`, `tests/render/`, `tests/io/`, `tests/train/`). Dataset tests use Mip-NeRF360 garden from `data/` (a local symlink to your datasets folder) and skip if it is missing. Golden data in `tests/data/golden` comes from an independent float64 brute-force reference and its autograd (`make_golden_splats.py`). |
 | `bindings/torch/` | `mojosplat_torch` Python package: the Mojo extension (`render_splats` with autograd), a gsplat reference (`render_gsplat`), pytest suite, and Python examples (viewer, orbit video, benchmark). |
@@ -102,12 +102,21 @@ pixi run train data/mipnerf360/garden --iters 30000  # -> output/garden/point_cl
 pixi run render output/garden/point_cloud.ply -o out.png
 ```
 
-`tools/train.mojo` loads a COLMAP scene (images decoded with libjpeg-turbo, every 8th image held out), initializes Gaussians from the SfM points (3-nearest-neighbour scales), trains with the 3DGS / Faster-GS recipe and reports the test PSNR:
+`tools/train.mojo` loads a COLMAP scene (images decoded with libjpeg-turbo, every 8th image held out), initializes Gaussians from the SfM points (3-nearest-neighbour scales), trains with the 3DGS / Faster-GS recipe and reports the test PSNR. The recipe:
 - loss: 0.8 L1 + 0.2 D-SSIM;
 - optimizer: Adam with per-attribute learning rates and an exponentially decaying position learning rate;
-- SH degree raised every 1000 iterations.
+- SH degree raised every 1000 iterations;
+- classic densification (clone / split / prune every 100 iterations from 600 to 14,900) with an opacity reset every 3000.
 
-Densification is not implemented yet, so the number of Gaussians stays at the SfM count. On Mip-NeRF360 garden (images_4, 138k Gaussians, RTX 5090), 30k iterations take **38 s** and reach **24.8 dB** test PSNR. The 3DGS reference with densification is about 27.4 dB; see `docs/design.md` for the roadmap.
+Mip-NeRF360 garden (images_4, RTX 5090, 30k iterations):
+
+| | Test PSNR | Gaussians | Time |
+|---|---|---|---|
+| **MojoSplat** | **27.43 dB** | 4.19M | 4m28s |
+| 3DGS (Kerbl et al., published) | 27.41 dB | ~5.8M | — |
+| MojoSplat, `--no-densify` | 24.80 dB | 0.14M | 38 s |
+
+Faster-GS reaches 2m43s on average over Mip-NeRF360 on an RTX 5090. Its remaining speedups (Adam fused into the backward, Z-order reordering) are the next step; see `docs/design.md`.
 
 ## PyTorch bindings
 

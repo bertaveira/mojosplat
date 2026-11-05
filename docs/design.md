@@ -17,7 +17,7 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   render/       the rasterizer: forward (inference + training) and backward
   model/        owning storage of the Gaussians
   io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
-  train/        dataset, loss (L1 + SSIM), PSNR, Adam, trainer; densification planned
+  train/        dataset, loss (L1 + SSIM), PSNR, Adam, densification, trainer
 tools/          command-line programs (render, bench; planned: train, eval)
 examples/       short API demos
 tests/          mirrors the package; golden data + generators in tests/data/
@@ -119,6 +119,10 @@ MCMC can be added later as a second strategy on the same store operations.
    iterations in 38 s, 24.8 dB test PSNR with the 138k SfM Gaussians.
 3. Classic densification (clone/split/prune, opacity reset) on the Splats
    row operations; full 30k run on garden vs published per-scene PSNR.
+   **Done:** one `Splats.gather` primitive (append = gather with copies,
+   prune = gather of kept rows); a step matches a torch transcription of
+   Faster-GS's adaptive_density_control exactly. Garden: 27.43 dB test PSNR
+   (3DGS: 27.41), 4.19M Gaussians, 4m28s.
 4. Performance: Adam fused into the backward, Morton reordering; compare with
    Faster-GS's 2m43s Mip-NeRF360 average on an RTX 5090.
 5. Evaluation tool over the Mip-NeRF360 scenes; README.

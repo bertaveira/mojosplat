@@ -12,16 +12,32 @@ Mojo code passes `Splats` around (it keeps the memory alive); kernels get a
 `SplatView` of raw pointers.
 """
 
+from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
 from std.math import log
 
 from ..core.math import SH_C0
 from ..core.splats import SplatView
-from ..core.types import F32Ptr, dptr
+from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, dptr, num_blocks
 from ..gpu.elementwise import copy_f32, fill_f32
 from ..io.arrays import download
 from ..io.ply import HostSplats
 from ..io.splat import SplatScene
+
+
+def _gather_rows_kernel(
+    dst: F32Ptr, src: F32Ptr, index: I32Ptr, n_rows: Int32, width: Int32, zero_from: Int32
+):
+    """dst[i, :] = src[index[i], :] for rows i < zero_from, 0 for the rest."""
+    var e = block_idx.x * BLOCK_SIZE + thread_idx.x
+    var w = Int(width)
+    if e >= Int(n_rows) * w:
+        return
+    var row = e // w
+    if row >= Int(zero_from):
+        dst[unsafe_offset=e] = 0.0
+    else:
+        dst[unsafe_offset=e] = src[unsafe_offset=Int(index[unsafe_offset=row]) * w + e % w]
 
 
 struct Attr:
@@ -202,3 +218,37 @@ struct Splats(Movable):
             var d = self._zeros(2 * capacity)
             self.densification = d
         self.capacity = capacity
+
+    def _gathered(
+        self, src: DeviceBuffer[DType.float32], index: I32Ptr, n_out: Int, width: Int, zero_from: Int
+    ) raises -> DeviceBuffer[DType.float32]:
+        var dst = self.ctx.enqueue_create_buffer[DType.float32](max(n_out * width, 1))
+        if n_out * width > 0:
+            self.ctx.stream().enqueue_function(
+                self.ctx.compile_function[_gather_rows_kernel](),
+                dptr(dst), dptr(src), index, Int32(n_out), Int32(width), Int32(zero_from),
+                grid_dim=num_blocks(n_out * width), block_dim=BLOCK_SIZE,
+            )
+        return dst
+
+    def gather(mut self, index: I32Ptr, n_out: Int, zero_moments_from: Int) raises:
+        """Rebuild every per-Gaussian array: row i becomes old row index[i].
+
+        The one primitive behind densification: append (clone / split:
+        index = [0..n) ++ copies), compact (prune: index = kept rows) and
+        permute (reordering). Adam moments of rows >= `zero_moments_from`
+        are zeroed (new Gaussians start with fresh optimizer state);
+        gradients and densification statistics are reallocated (the next
+        backward / densification interval refills them).
+        """
+        for a in range(Attr.COUNT):
+            var w = self.width(a)
+            self.params[a] = self._gathered(self.params[a], index, n_out, w, n_out)
+            if self.training:
+                self.exp_avg[a] = self._gathered(self.exp_avg[a], index, n_out, w, zero_moments_from)
+                self.exp_avg_sq[a] = self._gathered(self.exp_avg_sq[a], index, n_out, w, zero_moments_from)
+                self.grads[a] = self.ctx.enqueue_create_buffer[DType.float32](max(n_out * w, 1))
+        if self.training:
+            self.densification = self._zeros(2 * max(n_out, 1))
+        self.count = n_out
+        self.capacity = max(n_out, 1)

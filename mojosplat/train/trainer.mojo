@@ -1,6 +1,8 @@
-"""The training loop (3DGS / Faster-GS recipe, no densification yet).
+"""The training loop (3DGS / Faster-GS recipe).
 
-One iteration:
+One iteration `it` (0-based, Faster-GS's callback order):
+    densify           if 600 <= it <= 14900 and it % 100 == 0 (see densify.mojo)
+    reset opacities   if 3000 <= it <= 14900 and it % 3000 == 0
     view  = next training view (random order, reshuffled every epoch)
     image, state = rasterizer.forward(splats, view.camera)       # saves backward state
     grad  = loss.backward(image, view.image)                      # L1 + D-SSIM
@@ -8,6 +10,7 @@ One iteration:
     adam.step(splats)                                             # per-attribute lrs
 plus the schedules: the means learning rate decays exponentially (scaled by
 the scene extent) and the SH degree grows by one every 1000 iterations.
+The backward accumulates densification statistics until densification ends.
 """
 
 from max.gpu.host import DeviceBuffer, DeviceContext
@@ -21,6 +24,7 @@ from ..model.splats import Attr, Splats
 from ..render.rasterizer import Rasterizer
 from .adam import Adam
 from .dataset import Dataset
+from .densify import DensifyStats, Densifier
 from .loss import PhotometricLoss
 
 
@@ -42,6 +46,13 @@ struct TrainConfig(Copyable, Movable):
     var background: SIMD[DType.float32, 4]
     var seed: Int
     var log_interval: Int
+    var densify: Bool
+    var densify_from: Int
+    var densify_until: Int
+    var densify_interval: Int
+    var opacity_reset_interval: Int
+    var grad_threshold: Float32
+    var percent_dense: Float32
 
     def __init__(out self):
         self.iterations = 30_000
@@ -59,6 +70,13 @@ struct TrainConfig(Copyable, Movable):
         self.background = SIMD[DType.float32, 4](0.0)
         self.seed = 0
         self.log_interval = 100
+        self.densify = True
+        self.densify_from = 600
+        self.densify_until = 14_900
+        self.densify_interval = 100
+        self.opacity_reset_interval = 3000
+        self.grad_threshold = 0.0002
+        self.percent_dense = 0.01
 
 
 def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> Float32:
@@ -75,6 +93,8 @@ struct Trainer(Movable):
     var rasterizer: Rasterizer[]
     var adam: Adam
     var loss: PhotometricLoss
+    var densifier: Densifier
+    var last_densify: DensifyStats
     var image: DeviceBuffer[DType.float32]
     var grad_image: DeviceBuffer[DType.float32]
     var order: List[Int]
@@ -96,6 +116,10 @@ struct Trainer(Movable):
         self.adam = Adam(lr)
         self.rasterizer = Rasterizer(ctx)
         self.loss = PhotometricLoss(ctx, config.lambda_dssim)
+        self.densifier = Densifier(ctx)
+        self.densifier.grad_threshold = config.grad_threshold
+        self.densifier.percent_dense = config.percent_dense
+        self.last_densify = DensifyStats()
         var max_px = 1
         for v in dataset.train:
             max_px = max(max_px, v.camera.width * v.camera.height)
@@ -110,6 +134,7 @@ struct Trainer(Movable):
         seed(config.seed)
 
     def active_sh_degree(self) -> Int:
+        """SH degree used by the next iteration."""
         return min(self.config.sh_degree, self.iteration // self.config.sh_degree_interval)
 
     def _next_view(mut self) -> Int:
@@ -126,10 +151,24 @@ struct Trainer(Movable):
         self.order_pos += 1
         return v
 
+    def _densification_callbacks(mut self, it: Int) raises:
+        var c = self.config.copy()
+        if not c.densify or it < c.densify_from or it > c.densify_until:
+            return
+        if (it - c.densify_from) % c.densify_interval == 0:
+            self.last_densify = self.densifier.densify(
+                self.splats, self.dataset.scene_extent, it > c.opacity_reset_interval
+            )
+            if it < c.densify_until:
+                self.splats.reset_densification()
+        if it >= c.opacity_reset_interval and it % c.opacity_reset_interval == 0:
+            self.densifier.reset_opacities(self.splats)
+
     def step(mut self) raises -> Float64:
         """One training iteration. Returns the loss on logging iterations
-        (multiples of config.log_interval), else -1 (no extra sync)."""
-        self.iteration += 1
+        (every config.log_interval-th), else -1 (no extra sync)."""
+        var it = self.iteration
+        self._densification_callbacks(it)
         var vi = self._next_view()
         ref view = self.dataset.train[vi]
         var cam = view.camera
@@ -138,18 +177,28 @@ struct Trainer(Movable):
         var st = self.rasterizer.forward(
             self.splats.view(), cam, self.config.background, image, self.active_sh_degree()
         )
-        var log_now = self.config.log_interval > 0 and self.iteration % self.config.log_interval == 0
+        var log_now = self.config.log_interval > 0 and (it + 1) % self.config.log_interval == 0
         var value = self.loss.backward(
             image, dptr(view.image), grad, cam.width, cam.height, compute_loss=log_now
         )
-        self.rasterizer.backward(self.splats.view(), st, image, grad, self.splats.grad_view())
+        var stats = self.config.densify and it < self.config.densify_until
+        self.rasterizer.backward(
+            self.splats.view(), st, image, grad, self.splats.grad_view(),
+            self.splats.densification_ptr(), stats,
+        )
         self.adam.lr[Attr.MEANS] = exponential_lr(
             self.config.lr_means_init * self.dataset.scene_extent,
             self.config.lr_means_final * self.dataset.scene_extent,
-            self.iteration, self.config.lr_means_steps,
+            it + 1, self.config.lr_means_steps,
         )
         self.adam.step(self.splats)
+        self.iteration += 1
         return value if log_now else -1.0
+
+    def finish(mut self) raises -> Int:
+        """After training: prune Gaussians that can no longer affect any pixel
+        (opacity < 1/255) or are degenerate. Returns the number removed."""
+        return self.densifier.prune_final(self.splats)
 
     def evaluate(mut self, test: Bool = True) raises -> Float64:
         """Mean PSNR over the test (or training) views at the current state."""

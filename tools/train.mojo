@@ -6,8 +6,8 @@ Usage:
 
 Loads <scene>/sparse/0 and <scene>/<images> (every 8th image held out),
 initializes Gaussians from the SfM points, trains with the 3DGS / Faster-GS
-recipe, then reports the test PSNR and writes <out>/point_cloud.ply.
-(Densification is not implemented yet: the number of Gaussians stays fixed.)
+recipe (with classic densification; --no-densify disables it), then reports
+the test PSNR and writes <out>/point_cloud.ply.
 """
 
 from max.gpu.host import DeviceContext
@@ -41,6 +41,9 @@ def main() raises:
         elif a == "--log":
             config.log_interval = Int(String(args[i + 1]))
             i += 2
+        elif a == "--no-densify":
+            config.densify = False
+            i += 1
         elif a == "--sh-degree":
             config.sh_degree = Int(String(args[i + 1]))
             i += 2
@@ -72,12 +75,14 @@ def main() raises:
             var it_s = Float64(config.log_interval) / (Float64(now - t_last) / 1e9)
             t_last = now
             print(
-                "iter", trainer.iteration, "| loss", loss, "| sh", trainer.active_sh_degree(),
-                "|", it_s, "it/s | elapsed", Float64(now - t_start) / 1e9, "s",
+                "iter", trainer.iteration, "| loss", loss, "|", trainer.splats.count, "Gaussians | sh",
+                trainer.active_sh_degree(), "|", it_s, "it/s | elapsed", Float64(now - t_start) / 1e9, "s",
             )
+    var removed = trainer.finish()
     ctx.synchronize()
     var train_s = Float64(perf_counter_ns() - t_start) / 1e9
     print("Training time:", train_s, "s for", config.iterations, "iterations")
+    print("Final model:", trainer.splats.count, "Gaussians (", removed, "transparent ones removed )")
     print("Test PSNR:", trainer.evaluate(test=True), "dB")
     if not exists(out):
         makedirs(out)
