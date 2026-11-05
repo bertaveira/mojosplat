@@ -125,4 +125,20 @@ MCMC can be added later as a second strategy on the same store operations.
    (3DGS: 27.41), 4.19M Gaussians, 4m28s.
 4. Performance: Adam fused into the backward, Morton reordering; compare with
    Faster-GS's 2m43s Mip-NeRF360 average on an RTX 5090.
+   **Done (first pass):** garden 268 s -> 211 s. Profile of a steady-state
+   step (4.19M Gaussians) went 9.9 -> 7.7 ms:
+   - The SH-rest Adam recomputes basis(dir) * dL/dcolor elementwise
+     (`Rasterizer.sh_rest_grad` -> `Adam.step(splats, sh_rest)`), so the
+     backward never writes that gradient. Its scattered writes had made the
+     preprocess backward cost 2.0 ms; it now takes 0.4 ms.
+   - Morton reordering: -10-15% on the per-Gaussian kernels.
+
+   Now: Adam ~4.1 ms (at memory bandwidth: dense Adam over 59 floats x 4.2M
+   x (p, m, v)), blend backward 1.6 ms (compute-bound warp pipeline).
+   Tried and rejected: restricting each blend-backward bucket to the rows
+   its 32 Gaussians cover. Their union is almost always the whole 12-row
+   tile, so it added instructions and registers (72 -> 87) and was slower.
+   Remaining levers change the numerics (user decision): skip Adam for
+   invisible Gaussians (Faster-GS option), 16-bit Adam moments (as
+   LichtFeld Studio does).
 5. Evaluation tool over the Mip-NeRF360 scenes; README.

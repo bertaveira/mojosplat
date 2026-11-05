@@ -112,11 +112,16 @@ Mip-NeRF360 garden (images_4, RTX 5090, 30k iterations):
 
 | | Test PSNR | Gaussians | Time |
 |---|---|---|---|
-| **MojoSplat** | **27.43 dB** | 4.19M | 4m28s |
+| **MojoSplat** | **27.48 dB** | 4.19M | 3m31s |
 | 3DGS (Kerbl et al., published) | 27.41 dB | ~5.8M | — |
 | MojoSplat, `--no-densify` | 24.80 dB | 0.14M | 38 s |
 
-Faster-GS reaches 2m43s on average over Mip-NeRF360 on an RTX 5090. Its remaining speedups (Adam fused into the backward, Z-order reordering) are the next step; see `docs/design.md`.
+Speed comes from Faster-GS's techniques, adapted:
+- **Per-Gaussian backward.**
+- **Fused SH optimizer.** The 45 higher-order SH coefficients per Gaussian, three quarters of all parameters, are updated by an Adam pass that recomputes their gradient from the view direction instead of reading it from memory.
+- **Z-order reordering** of the Gaussians.
+
+A steady-state step on 4.2M Gaussians takes 7.7 ms. More than half of that is Adam, which runs near the GPU's memory bandwidth.
 
 ## PyTorch bindings
 
