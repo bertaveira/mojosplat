@@ -98,14 +98,21 @@ Current limitations of the mojo backend: `tile_size=16`, 3 color channels, `cuda
 
 ## Performance
 
-Previous version (modular 26.2, torch-driven, RTX 5090, bicycle.splat, 6.1M Gaussians, 1280x720):
+RTX 5090 (idle), bicycle.splat (6.1M Gaussians), 1280x720, camera at (0, 0, 5) with fx = 0.9 W. Mean times:
 
-| Backend    | Full pipeline       | Projection | Binning | Rasterization |
-| ---------- | ------------------- | ---------- | ------- | ------------- |
-| **gsplat** | 2.41 ms (414.9 FPS) | 0.43 ms    | 0.46 ms | 1.56 ms       |
-| **mojo**   | 2.68 ms (373.7 FPS) | 0.49 ms    | 0.73 ms | 1.55 ms       |
+| Backend | Full pipeline | Projection | Binning | Rasterization |
+| ------- | ------------- | ---------- | ------- | ------------- |
+| **mojo, pure Mojo** (`pixi run bench`) | **2.34 ms (427 FPS)** | 0.29 ms | 0.51 ms | 1.55 ms |
+| mojo via PyTorch bindings | 2.71 ms (368 FPS) | 0.56 ms | 0.56 ms | 1.60 ms |
+| gsplat via PyTorch | 2.36 ms (424 FPS) | 0.43 ms | 0.44 ms | 1.56 ms |
+| mojo, previous version (modular 26.2, torch-driven) | 2.68 ms (374 FPS) | 0.49 ms | 0.73 ms | 1.55 ms |
 
-The binning gap came from `torch.sort` processing all 64 key bits. The 1.2 port replaces `torch.cumsum`/`torch.sort` with a Mojo device scan and an 8-bit LSD radix sort that only sorts `32 + bit_width(num_tiles)` bits (6 passes at 1280x720). Fresh numbers for the 1.2 version will be added once measured on an idle GPU.
+- **Pure Mojo now matches gsplat** for the full pipeline. Binning went from 0.73 ms to 0.51 ms. The old version used `torch.cumsum`/`torch.sort`, which sort all 64 key bits. The new one uses a Mojo device scan and an 8-bit LSD radix sort that only sorts the `32 + bit_width(num_tiles)` bits that matter (6 passes at 1280x720).
+- **The PyTorch path is slower** than pure Mojo because each stage is a separate call from Python with its own stream synchronization, and log-scales are exponentiated in torch first. Projection shows this most: 0.29 ms in Mojo vs 0.56 ms through torch.
+- **How stage times were measured:**
+  - Pure-Mojo stage times put a sync after each stage, so they add up to slightly more than a full frame.
+  - Times through PyTorch include each call's Python overhead.
+  - The previous version's numbers come from an earlier run.
 
 ## Contributing
 
