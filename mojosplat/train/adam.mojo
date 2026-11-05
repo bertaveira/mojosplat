@@ -118,9 +118,9 @@ struct Adam(Movable):
         var ctx = splats.ctx
         var stream = ctx.stream()
 
-        @parameter
-        def step_size(a: Int) -> Float32:
-            return Float32(Float64(self.lr[a]) / bc1)
+        var step_size = SIMD[DType.float32, 8](0.0)  # lr / bias correction 1, per Attr
+        for a in range(Attr.COUNT):
+            step_size[a] = Float32(Float64(self.lr[a]) / bc1)
 
         # sh_rest first: its recomputed gradient needs the means before they move.
         if sh_rest:
@@ -133,7 +133,7 @@ struct Adam(Movable):
                     dptr(splats.exp_avg_sq[Attr.SH_REST]), dptr(splats.params[Attr.MEANS]),
                     sg.slot_of, sg.grad_color, sg.cam_pos, Int32(splats.count),
                     Int32(splats.rest_stride), Int32(sg.active_bases),
-                    step_size(Attr.SH_REST), bc2_sqrt_rcp, self.beta1, self.beta2, self.eps,
+                    step_size[Attr.SH_REST], bc2_sqrt_rcp, self.beta1, self.beta2, self.eps,
                     grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
                 )
         var kernel = ctx.compile_function[_adam_kernel]()
@@ -146,6 +146,6 @@ struct Adam(Movable):
             stream.enqueue_function(
                 kernel, dptr(splats.params[a]), dptr(splats.grads[a]),
                 dptr(splats.exp_avg[a]), dptr(splats.exp_avg_sq[a]), Int32(n),
-                step_size(a), bc2_sqrt_rcp, self.beta1, self.beta2, self.eps,
+                step_size[a], bc2_sqrt_rcp, self.beta1, self.beta2, self.eps,
                 grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
             )
