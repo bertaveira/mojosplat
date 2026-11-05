@@ -1,4 +1,7 @@
-"""Stable LSD radix sort of (UInt64 key, Int32 value) pairs on the GPU.
+"""Stable LSD radix sort of (unsigned key, Int32 value) pairs on the GPU.
+
+Keys may be UInt16, UInt32 or UInt64 (`key_dtype`); smaller keys move fewer
+bytes per pass.
 
 Design (reduce-then-scan, 8-bit digits, one pass per digit):
 
@@ -29,7 +32,7 @@ from std.atomic import Atomic, Ordering
 from std.bit import count_trailing_zeros, pop_count
 from std.memory import stack_allocation
 
-from .common import I32Ptr, U32Ptr, U64Ptr
+from .common import I32Ptr, U32Ptr
 from .scan import exclusive_scan, scan_workspace_size
 
 comptime RADIX_BITS = 8
@@ -56,8 +59,10 @@ def sort_partials_size(n: Int) -> Int:
     return scan_workspace_size(sort_hist_size(n))
 
 
-def _upsweep_kernel(
-    keys: U64Ptr,
+def _upsweep_kernel[
+    key_dtype: DType
+](
+    keys: Pointer[Scalar[key_dtype], MutUntrackedOrigin],
     hist: U32Ptr,  # [RADIX * num_parts], digit-major
     n: Int32,
     num_parts: Int32,
@@ -78,7 +83,7 @@ def _upsweep_kernel(
         var idx = base + i * SORT_BLOCK + t
         var digit = UInt32(RADIX)  # sentinel for out-of-range lanes
         if idx < Int(n):
-            digit = UInt32((keys[unsafe_offset=idx] >> UInt64(shift)) & RADIX_MASK)
+            digit = UInt32((keys[unsafe_offset=idx] >> Scalar[key_dtype](shift)) & RADIX_MASK)
         # Aggregate equal digits within the warp: one atomic per group.
         var peers = warp.match_any[mask_type=DType.uint32](digit)
         if digit < RADIX and lane == Int(count_trailing_zeros(peers)):
@@ -89,10 +94,12 @@ def _upsweep_kernel(
     hist[unsafe_offset=t * Int(num_parts) + block_idx.x] = s_hist[unsafe_offset=t]
 
 
-def _downsweep_kernel(
-    keys_in: U64Ptr,
+def _downsweep_kernel[
+    key_dtype: DType
+](
+    keys_in: Pointer[Scalar[key_dtype], MutUntrackedOrigin],
     vals_in: I32Ptr,
-    keys_out: U64Ptr,
+    keys_out: Pointer[Scalar[key_dtype], MutUntrackedOrigin],
     vals_out: I32Ptr,
     offsets: U32Ptr,  # scanned hist: [RADIX * num_parts], digit-major
     n: Int32,
@@ -113,7 +120,7 @@ def _downsweep_kernel(
 
     var lt_mask = (UInt32(1) << UInt32(lane)) - 1
     var base = block_idx.x * SORT_PART + w * WARP_SPAN
-    var keys = SIMD[DType.uint64, SORT_ITEMS](0)
+    var keys = SIMD[key_dtype, SORT_ITEMS](0)
     var vals = SIMD[DType.int32, SORT_ITEMS](0)
     var ranks = SIMD[DType.uint32, SORT_ITEMS](0)
 
@@ -126,7 +133,7 @@ def _downsweep_kernel(
             var k = keys_in[unsafe_offset=idx]
             keys[r] = k
             vals[r] = vals_in[unsafe_offset=idx]
-            digit = UInt32((k >> UInt64(shift)) & RADIX_MASK)
+            digit = UInt32((k >> Scalar[key_dtype](shift)) & RADIX_MASK)
         var peers = warp.match_any[mask_type=DType.uint32](digit)
         var leader = count_trailing_zeros(peers)
         var prior = UInt32(0)
@@ -151,18 +158,20 @@ def _downsweep_kernel(
         var idx = base + r * WARP_SIZE + lane
         if idx < Int(n):
             var k = keys[r]
-            var digit = Int((k >> UInt64(shift)) & RADIX_MASK)
+            var digit = Int((k >> Scalar[key_dtype](shift)) & RADIX_MASK)
             var dst = Int(s_warp_hist[unsafe_offset=hist_row + digit] + ranks[r])
             keys_out[unsafe_offset=dst] = k
             vals_out[unsafe_offset=dst] = vals[r]
 
 
-def radix_sort_pairs(
+def radix_sort_pairs[
+    key_dtype: DType = DType.uint64
+](
     ctx: DeviceContext,
     stream: DeviceStream,
-    keys_a: U64Ptr,
+    keys_a: Pointer[Scalar[key_dtype], MutUntrackedOrigin],
     vals_a: I32Ptr,
-    keys_b: U64Ptr,
+    keys_b: Pointer[Scalar[key_dtype], MutUntrackedOrigin],
     vals_b: I32Ptr,
     hist: U32Ptr,
     partials: U32Ptr,
@@ -177,12 +186,15 @@ def radix_sort_pairs(
     `total` >= 1. Returns True if the sorted result ended up in the `b`
     buffers, False if in `a`.
     """
+    comptime assert key_dtype in (
+        DType.uint16, DType.uint32, DType.uint64
+    ), "keys must be UInt16, UInt32 or UInt64"
     if n <= 1:
         return False
     var num_parts = sort_num_parts(n)
     var passes = (end_bit + RADIX_BITS - 1) // RADIX_BITS
-    var up = ctx.compile_function[_upsweep_kernel]()
-    var down = ctx.compile_function[_downsweep_kernel]()
+    var up = ctx.compile_function[_upsweep_kernel[key_dtype]]()
+    var down = ctx.compile_function[_downsweep_kernel[key_dtype]]()
     for p in range(passes):
         var shift = UInt32(p * RADIX_BITS)
         var src_k = keys_a if p % 2 == 0 else keys_b
