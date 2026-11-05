@@ -27,10 +27,10 @@ The core library (`mojosplat/`) has **no Python dependency**: you can load a `.s
 | Path | What |
 |------|------|
 | `mojosplat/` | The library (pure Mojo, no CLI), split by layer. |
-| `mojosplat/core/` | Plain types: pointers, `Camera`, the `SplatParams` view, SH constants. |
+| `mojosplat/core/` | Plain types: pointers, `Camera`, the `SplatView` view, SH constants. |
 | `mojosplat/gpu/` | Generic GPU building blocks: device scan, radix sort (16/32/64-bit keys), fills, memory arenas. |
 | `mojosplat/render/` | The `Rasterizer`: `preprocess`, `sh`, `instances`, `blend`, `blend_backward`, `preprocess_backward`. |
-| `mojosplat/model/` | Owning storage of the Gaussians (`SplatBuffers`). |
+| `mojosplat/model/` | Owning storage of the Gaussians (`Splats`). |
 | `mojosplat/io/` | Raw arrays, `.splat` and 3DGS `.ply` scenes, COLMAP binary models, JPEG decoding (libjpeg-turbo), PNG/PPM output. |
 | `mojosplat/train/` | Training: COLMAP datasets (loss, optimizer and trainer in progress). |
 | `tools/` | Command-line programs: `render.mojo`, `bench.mojo`. |
@@ -68,12 +68,12 @@ From your own Mojo code:
 
 ```mojo
 from max.gpu.host import DeviceContext
-from mojosplat import Camera, Rasterizer, SplatBuffers, download, load_splat, write_png
+from mojosplat import Camera, Rasterizer, Splats, download, load_splat, write_png
 
 def main() raises:
     var ctx = DeviceContext()
     # .splat stores activated values; from_scene converts to raw parameters
-    var splats = SplatBuffers.from_scene(ctx, load_splat("examples/bicycle.splat"))
+    var splats = Splats.from_scene(ctx, load_splat("examples/bicycle.splat"))
     var camera = Camera.translated(0.0, 0.0, 5.0, 1280, 720, 1152.0, 1152.0)
     var image = ctx.enqueue_create_buffer[DType.float32](1280 * 720 * 3)
     var rasterizer = Rasterizer(ctx)      # owns and reuses all intermediate buffers
@@ -81,7 +81,7 @@ def main() raises:
     write_png("out.png", download(ctx, image, 1280 * 720 * 3), 1280, 720)
 ```
 
-`SplatBuffers(ctx, means, log_scales, quats, opacity_logits, sh0, shN, rest_stride)` builds a scene from raw parameters (e.g. a trained 3DGS model with `sh0` [N, 3] and `shN` [N, 15, 3]).
+`Splats(ctx, means, log_scales, quats, opacity_logits, sh0, shN, rest_stride)` builds a scene from raw parameters (e.g. a trained 3DGS model with `sh0` [N, 3] and `shN` [N, 15, 3]).
 
 Gradients, for training:
 
@@ -89,7 +89,7 @@ Gradients, for training:
 var state = rasterizer.forward(splats.view(), camera, bg, dptr(image), sh_degree)
 # ... compute dL/dimage into grad_image ([H, W, 3]) ...
 rasterizer.backward(splats.view(), state, dptr(image), dptr(grad_image), grads)
-# grads: a SplatParams of gradient buffers laid out like the parameters
+# grads: a SplatView of gradient buffers laid out like the parameters
 ```
 
 Run it with `pixi run mojo run -I . my_program.mojo`.

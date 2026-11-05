@@ -16,7 +16,7 @@ from std.python.bindings import PythonModuleBuilder
 from max.gpu.host import DeviceContext
 
 from mojosplat.core.camera import Camera
-from mojosplat.core.splats import SplatParams
+from mojosplat.core.splats import SplatView
 from mojosplat.core.types import F32Ptr, I32Ptr, U32Ptr
 from mojosplat.gpu.arena import StateAllocator
 from mojosplat.render.rasterizer import ForwardState, Rasterizer
@@ -71,8 +71,8 @@ def _u32(obj: PythonObject) raises -> U32Ptr:
     return U32Ptr(unsafe_from_address=Int(py=obj))
 
 
-def _splats(ptrs: PythonObject, sizes: PythonObject) raises -> SplatParams:
-    return SplatParams(
+def _splats(ptrs: PythonObject, sizes: PythonObject) raises -> SplatView:
+    return SplatView(
         _f32(ptrs[0]), _f32(ptrs[1]), _f32(ptrs[2]), _f32(ptrs[3]),
         _f32(ptrs[4]), _f32(ptrs[5]), Int(py=sizes[0]), Int(py=sizes[1]),
     )

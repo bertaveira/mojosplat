@@ -26,10 +26,10 @@ from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.memory import ArcPointer
 from std.time import perf_counter_ns
 
-from ..core.splats import SplatParams
+from ..core.splats import SplatView
 from ..gpu.arena import DeviceArena, StateAllocator
 from ..gpu.elementwise import fill_f32
-from ..model.splats import SplatBuffers
+from ..model.splats import Splats
 from .blend_backward import blend_backward
 from .preprocess_backward import preprocess_backward
 from .blend import blend, bucket_bound, bucket_counts
@@ -261,7 +261,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
 
     def render(
         mut self,
-        splats: SplatBuffers,
+        splats: Splats,
         camera: Camera,
         background: SIMD[DType.float32, 4],
         image: DeviceBuffer[DType.float32],
@@ -274,7 +274,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
 
     def render(
         mut self,
-        splats: SplatParams,
+        splats: SplatView,
         camera: Camera,
         background: SIMD[DType.float32, 4],
         image: F32Ptr,
@@ -307,7 +307,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
 
     def forward(
         mut self,
-        splats: SplatParams,
+        splats: SplatView,
         camera: Camera,
         background: SIMD[DType.float32, 4],
         image: F32Ptr,
@@ -326,7 +326,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         A: StateAllocator
     ](
         mut self,
-        splats: SplatParams,
+        splats: SplatView,
         camera: Camera,
         background: SIMD[DType.float32, 4],
         image: F32Ptr,
@@ -363,11 +363,11 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
 
     def backward(
         mut self,
-        splats: SplatParams,
+        splats: SplatView,
         st: ForwardState,
         image: F32Ptr,
         grad_image: F32Ptr,
-        grads: SplatParams,
+        grads: SplatView,
         densification: F32Ptr = placeholder[DType.float32](),
         has_densification: Bool = False,
     ) raises:
@@ -414,7 +414,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
 
     def _begin(
         mut self,
-        splats: SplatParams,
+        splats: SplatView,
         camera: Camera,
         background: SIMD[DType.float32, 4],
         sh_degree: Int,
@@ -435,7 +435,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         self._reserve_scan(st.n_tiles)
         return st
 
-    def _preprocess[train: Bool = False](mut self, splats: SplatParams, mut st: ForwardState) raises:
+    def _preprocess[train: Bool = False](mut self, splats: SplatView, mut st: ForwardState) raises:
         """Preprocess into st's slot arrays; one host sync for the counts."""
         var ctx = self.ctx
         self.counters.enqueue_fill(0)

@@ -5,7 +5,7 @@ from .math import sh_num_bases
 
 
 @fieldwise_init
-struct SplatParams(ImplicitlyCopyable, Movable):
+struct SplatView(ImplicitlyCopyable, Movable):
     """Device pointers to N Gaussians' raw parameters (float32, SoA).
 
     means [N,3], log_scales [N,3], rotations [N,4] (w,x,y,z; any norm),

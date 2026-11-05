@@ -12,7 +12,7 @@ and [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 ```
 mojosplat/      the library: kernels + model, no CLI or dataset policy
-  core/         plain types: pointers, Camera, SplatParams view, SH constants
+  core/         plain types: pointers, Camera, SplatView view, SH constants
   gpu/          generic GPU building blocks: scan, radix sort, fills, arenas
   render/       the rasterizer: forward (inference + training) and backward
   model/        owning storage of the Gaussians
@@ -62,7 +62,7 @@ implemented **only here** and apply to every array at once:
 - `permute(order)` for Morton (Z-order) reordering,
 - `reset_moments(rows)`.
 
-The renderer keeps taking a `SplatParams` view; the Adam kernel sees the same
+The renderer keeps taking a `SplatView` view; the Adam kernel sees the same
 per-attribute layout. Densification strategies only call store operations,
 which keeps the bookkeeping that LichtFeld Studio spreads over its model,
 optimizer and each strategy in one place, and makes "one more per-Gaussian

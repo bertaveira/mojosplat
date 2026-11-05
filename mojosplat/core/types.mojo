@@ -6,6 +6,7 @@ from max.gpu.host import DeviceBuffer
 comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
 comptime I32Ptr = Pointer[Int32, MutUntrackedOrigin]
 comptime U32Ptr = Pointer[UInt32, MutUntrackedOrigin]
+comptime U8Ptr = Pointer[UInt8, MutUntrackedOrigin]
 comptime U16Ptr = Pointer[UInt16, MutUntrackedOrigin]
 comptime U64Ptr = Pointer[UInt64, MutUntrackedOrigin]
 

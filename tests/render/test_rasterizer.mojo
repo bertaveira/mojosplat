@@ -9,12 +9,12 @@ from std.testing import assert_equal, assert_true, TestSuite
 from golden import GoldenScene
 from mojosplat.core.camera import Camera
 from mojosplat.io.arrays import download
-from mojosplat.model.splats import SplatBuffers
+from mojosplat.model.splats import Splats
 from mojosplat.render.rasterizer import Rasterizer
 
 
-def load_splats(ctx: DeviceContext, s: GoldenScene) raises -> SplatBuffers:
-    return SplatBuffers(
+def load_splats(ctx: DeviceContext, s: GoldenScene) raises -> Splats:
+    return Splats(
         ctx, s.f32("means3d.f32"), s.f32("log_scales.f32"), s.f32("quats.f32"),
         s.f32("opacity_logits.f32"), s.f32("sh0.f32"), s.f32("shN.f32"), s.sh_rest,
     )
@@ -99,7 +99,7 @@ def test_empty_scene_is_background() raises:
     var W = 50
     var H = 30
     var empty = List[Float32]()
-    var splats = SplatBuffers(ctx, empty, empty, empty, empty, empty, empty, 0)
+    var splats = Splats(ctx, empty, empty, empty, empty, empty, empty, 0)
     var cam = Camera.translated(0.0, 0.0, 5.0, W, H, 40.0, 40.0)
     var image = ctx.enqueue_create_buffer[DType.float32](W * H * 3)
     var r = Rasterizer(ctx)

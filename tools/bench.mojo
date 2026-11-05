@@ -13,7 +13,7 @@ from max.gpu.host import DeviceContext
 from std.sys import argv
 from std.time import perf_counter_ns
 
-from mojosplat import Camera, Rasterizer, SplatBuffers, load_splat
+from mojosplat import Camera, Rasterizer, Splats, load_splat
 
 
 def summarize(label: String, mut times: List[Float64]):
@@ -58,7 +58,7 @@ def main() raises:
     var bg = SIMD[DType.float32, 4](0.0)
     print("Scene:", path, "|", scene.count, "Gaussians |", W, "x", H, "|", ctx.name())
 
-    var splats = SplatBuffers.from_scene(ctx, scene)
+    var splats = Splats.from_scene(ctx, scene)
     var rast = Rasterizer(ctx)
     for _ in range(20):
         rast.render(splats, camera, bg, image)

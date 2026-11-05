@@ -13,7 +13,7 @@ from .binary import ByteReader, append_text
 
 
 struct HostSplats(Movable):
-    """Raw Gaussian parameters in host memory (same layout as SplatParams)."""
+    """Raw Gaussian parameters in host memory (same layout as SplatView)."""
 
     var count: Int
     var rest_stride: Int  # K: SH bases per Gaussian in sh_rest (0, 3, 8 or 15)

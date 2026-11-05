@@ -12,8 +12,8 @@ from std.testing import assert_true, TestSuite
 from golden import GoldenScene
 from mojosplat.core.types import dptr
 from mojosplat.io.arrays import download, upload
-from mojosplat.core.splats import SplatParams
-from mojosplat.model.splats import SplatBuffers
+from mojosplat.core.splats import SplatView
+from mojosplat.model.splats import Splats
 from mojosplat.render.rasterizer import Rasterizer
 
 
@@ -32,7 +32,7 @@ def rel_err(got: List[Float32], want: List[Float32]) -> Tuple[Float64, Float64]:
 def check_scene[tw: Int, th: Int](name: String, tol: Float64) raises:
     var s = GoldenScene(name)
     var ctx = DeviceContext()
-    var splats = SplatBuffers(
+    var splats = Splats(
         ctx, s.f32("means3d.f32"), s.f32("log_scales.f32"), s.f32("quats.f32"),
         s.f32("opacity_logits.f32"), s.f32("sh0.f32"), s.f32("shN.f32"), s.sh_rest,
     )
@@ -47,7 +47,7 @@ def check_scene[tw: Int, th: Int](name: String, tol: Float64) raises:
     var g_opac = ctx.enqueue_create_buffer[DType.float32](n)
     var g_sh0 = ctx.enqueue_create_buffer[DType.float32](n * 3)
     var g_shN = ctx.enqueue_create_buffer[DType.float32](max(n * k * 3, 3))
-    var grads = SplatParams(
+    var grads = SplatView(
         dptr(g_means), dptr(g_scales), dptr(g_quats), dptr(g_opac), dptr(g_sh0), dptr(g_shN), n, k
     )
     var bg = SIMD[DType.float32, 4](0.0)

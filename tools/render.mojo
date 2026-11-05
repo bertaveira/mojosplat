@@ -14,7 +14,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 
 from mojosplat import (
-    Camera, Rasterizer, SplatBuffers, download, load_splat, read_ply, write_array, write_png, write_ppm,
+    Camera, Rasterizer, Splats, download, load_splat, read_ply, write_array, write_png, write_ppm,
 )
 
 
@@ -59,11 +59,11 @@ def main() raises:
     print("Device:", ctx.name())
     print("Loading", path, "...")
     var t0 = perf_counter_ns()
-    var splats: SplatBuffers
+    var splats: Splats
     if path.endswith(".ply"):
-        splats = SplatBuffers.from_host(ctx, read_ply(path))
+        splats = Splats.from_host(ctx, read_ply(path))
     else:
-        splats = SplatBuffers.from_scene(ctx, load_splat(path))
+        splats = Splats.from_scene(ctx, load_splat(path))
     print("  ", splats.count, "Gaussians in", Float64(perf_counter_ns() - t0) / 1e6, "ms")
     var camera = Camera.translated(cam_t[0], cam_t[1], cam_t[2], W, H, fx, fx)
     var image = ctx.enqueue_create_buffer[DType.float32](W * H * 3)
