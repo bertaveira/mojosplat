@@ -87,7 +87,19 @@ struct Camera(ImplicitlyCopyable, Movable):
         p[CAM_LIM_Y_NEG] = self.cy / self.fy + 0.3 * tan_fov_y
         p[CAM_NEAR] = self.near
         p[CAM_FAR] = self.far
+        var pos = self.position()
+        p[CAM_POS_X] = pos[0]
+        p[CAM_POS_Y] = pos[1]
+        p[CAM_POS_Z] = pos[2]
         return p
+
+    def position(self) -> SIMD[DType.float32, 4]:
+        """Camera center in world coordinates: -R^T t."""
+        var v = self.view
+        var pos = SIMD[DType.float32, 4](0.0)
+        comptime for i in range(3):
+            pos[i] = -(v[0 + i] * v[3] + v[4 + i] * v[7] + v[8 + i] * v[11])
+        return pos
 
 
 # Indices into the packed camera vector. 0..11 hold the top 3x4 of the view
@@ -104,3 +116,6 @@ comptime CAM_LIM_Y_POS = 20
 comptime CAM_LIM_Y_NEG = 21
 comptime CAM_NEAR = 22
 comptime CAM_FAR = 23
+comptime CAM_POS_X = 24
+comptime CAM_POS_Y = 25
+comptime CAM_POS_Z = 26

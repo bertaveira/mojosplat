@@ -1,11 +1,17 @@
 """Shared type aliases and launch helpers for MojoSplat kernels."""
 
+from max.gpu import WARP_SIZE
 from max.gpu.host import DeviceBuffer
 
 comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
 comptime I32Ptr = Pointer[Int32, MutUntrackedOrigin]
 comptime U32Ptr = Pointer[UInt32, MutUntrackedOrigin]
+comptime U16Ptr = Pointer[UInt16, MutUntrackedOrigin]
 comptime U64Ptr = Pointer[UInt64, MutUntrackedOrigin]
+
+# One bit per lane, as returned by `warp.vote` / `warp.match_any`.
+comptime LANE_MASK_DTYPE = DType.uint32 if WARP_SIZE <= 32 else DType.uint64
+comptime LaneMask = Scalar[LANE_MASK_DTYPE]
 
 # Default 1D launch block size for "one thread per element" kernels.
 comptime BLOCK_SIZE = 256

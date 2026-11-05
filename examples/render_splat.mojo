@@ -15,7 +15,7 @@ from std.time import perf_counter_ns
 
 from mojosplat.camera import Camera
 from mojosplat.io import download, load_splat, write_array, write_png, write_ppm
-from mojosplat.render import GaussianBuffers, Renderer
+from mojosplat.rasterizer import Rasterizer, SplatBuffers
 
 
 def main() raises:
@@ -62,19 +62,19 @@ def main() raises:
 
     var ctx = DeviceContext()
     print("Device:", ctx.name())
-    var gaussians = GaussianBuffers.from_scene(ctx, scene)
+    var splats = SplatBuffers.from_scene(ctx, scene)
     var camera = Camera.translated(cam_t[0], cam_t[1], cam_t[2], W, H, fx, fx)
     var image = ctx.enqueue_create_buffer[DType.float32](W * H * 3)
-    var renderer = Renderer(ctx)
+    var rasterizer = Rasterizer(ctx)
 
-    renderer.render(gaussians, camera, SIMD[DType.float32, 4](0.0), image)  # warm-up / JIT
+    rasterizer.render(splats, camera, SIMD[DType.float32, 4](0.0), image)  # warm-up / JIT
     ctx.synchronize()
     var t1 = perf_counter_ns()
-    renderer.render(gaussians, camera, SIMD[DType.float32, 4](0.0), image)
+    rasterizer.render(splats, camera, SIMD[DType.float32, 4](0.0), image)
     ctx.synchronize()
     print(
-        "Rendered", W, "x", H, "in", Float64(perf_counter_ns() - t1) / 1e6, "ms,",
-        renderer.num_intersections, "tile intersections",
+        "Rendered", W, "x", H, "in", Float64(perf_counter_ns() - t1) / 1e6, "ms:",
+        rasterizer.num_visible, "visible Gaussians,", rasterizer.num_instances, "tile instances",
     )
 
     var pixels = download(ctx, image, W * H * 3)
