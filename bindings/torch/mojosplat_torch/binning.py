@@ -5,123 +5,7 @@ from pathlib import Path
 
 from typing_extensions import Literal
 
-from max.experimental.torch import graph_op
-from max.graph import ops as graph_ops, TensorType as GraphTensorType, DeviceRef
-from max.dtype import DType as MaxDType
-
-mojo_kernels = Path(__file__).parent / "kernels"
-_gpu = DeviceRef.GPU()
-
-_isect_count_ops: dict = {}
-_isect_write_ops: dict = {}
-_isect_offset_op = None
-
-
-def _get_isect_count_op(tile_size: int):
-    if tile_size in _isect_count_ops:
-        return _isect_count_ops[tile_size]
-
-    _N = "N"
-
-    @graph_op(
-        name=f"isect_count_ts{tile_size}",
-        kernel_library=mojo_kernels,
-        input_types=[
-            # "Output" passed as input (written in-place via rebind)
-            GraphTensorType(MaxDType.int32, (_N,), device=_gpu),      # tiles_per_gauss
-            # Regular inputs
-            GraphTensorType(MaxDType.float32, (_N, 2), device=_gpu),  # means2d
-            GraphTensorType(MaxDType.int32,   (_N, 2), device=_gpu),  # radii
-            GraphTensorType(MaxDType.int32,   (2,),    device=_gpu),  # tile_dims
-        ],
-        output_types=[
-            GraphTensorType(MaxDType.float32, (1,), device=_gpu),  # dummy to prevent DCE
-        ],
-    )
-    def _graph(tiles_per_gauss, means2d, radii, tile_dims):
-        return graph_ops.custom(
-            "isect_count",
-            _gpu,
-            [tiles_per_gauss, means2d, radii, tile_dims],
-            out_types=[GraphTensorType(MaxDType.float32, (1,), device=_gpu)],
-            parameters={"tile_size": tile_size},
-        )
-
-    _isect_count_ops[tile_size] = _graph
-    return _graph
-
-
-def _get_isect_write_op(tile_size: int):
-    if tile_size in _isect_write_ops:
-        return _isect_write_ops[tile_size]
-
-    _N = "N"
-    _M = "M"
-
-    @graph_op(
-        name=f"isect_write_ts{tile_size}",
-        kernel_library=mojo_kernels,
-        input_types=[
-            # "Outputs" passed as inputs (written in-place via rebind)
-            GraphTensorType(MaxDType.int64, (_M,), device=_gpu),      # isect_ids
-            GraphTensorType(MaxDType.int32, (_M,), device=_gpu),      # flatten_ids
-            # Regular inputs
-            GraphTensorType(MaxDType.float32, (_N, 2), device=_gpu),  # means2d
-            GraphTensorType(MaxDType.int32,   (_N, 2), device=_gpu),  # radii
-            GraphTensorType(MaxDType.float32, (_N,),   device=_gpu),  # depths
-            GraphTensorType(MaxDType.int32,   (_N,),   device=_gpu),  # offsets
-            GraphTensorType(MaxDType.int32,   (2,),    device=_gpu),  # tile_dims
-        ],
-        output_types=[
-            GraphTensorType(MaxDType.float32, (1,), device=_gpu),  # dummy to prevent DCE
-        ],
-    )
-    def _graph(isect_ids, flatten_ids, means2d, radii, depths, offsets, tile_dims):
-        return graph_ops.custom(
-            "isect_write",
-            _gpu,
-            [isect_ids, flatten_ids, means2d, radii, depths, offsets, tile_dims],
-            out_types=[
-                GraphTensorType(MaxDType.float32, (1,), device=_gpu),
-            ],
-            parameters={"tile_size": tile_size},
-        )
-
-    _isect_write_ops[tile_size] = _graph
-    return _graph
-
-
-def _get_isect_offset_op():
-    global _isect_offset_op
-    if _isect_offset_op is not None:
-        return _isect_offset_op
-
-    _M = "M"
-    _T1 = "T1"  # n_tiles + 1
-
-    @graph_op(
-        name="isect_offset",
-        kernel_library=mojo_kernels,
-        input_types=[
-            # "Output" passed as input (written in-place via rebind)
-            GraphTensorType(MaxDType.int32, (_T1,), device=_gpu),     # offsets [n_tiles+1]
-            # Regular inputs
-            GraphTensorType(MaxDType.int64, (_M,),  device=_gpu),     # sorted_keys
-        ],
-        output_types=[
-            GraphTensorType(MaxDType.float32, (1,), device=_gpu),     # dummy to prevent DCE
-        ],
-    )
-    def _graph(offsets, sorted_keys):
-        return graph_ops.custom(
-            "isect_offset",
-            _gpu,
-            [offsets, sorted_keys],
-            out_types=[GraphTensorType(MaxDType.float32, (1,), device=_gpu)],
-        )
-
-    _isect_offset_op = _graph
-    return _graph
+from . import _ext
 
 
 def bin_gaussians_to_tiles(
@@ -388,63 +272,32 @@ def bin_gaussians_to_tiles_mojo(
     tile_width: int,
     tile_height: int,
 ) -> tuple:
-    """Mojo GPU implementation of Gaussian-to-tile binning.
+    """Binning entirely on the GPU in Mojo (count, scan, write, radix sort, offsets).
 
-    Uses two Mojo kernels (IsectCount + IsectWrite) plus Python-side prefix sum,
-    sort, and tile-range extraction.
+    Returns (sorted_gaussian_indices [M] int32, tile_ranges [TH, TW, 2] int32).
     """
+    if tile_size != _ext.TILE_SIZE:
+        raise ValueError(f"mojo backend is compiled for tile_size={_ext.TILE_SIZE}")
     N = means2d.shape[0]
     device = means2d.device
     n_tiles = tile_width * tile_height
-
     if N == 0:
         return (
             torch.empty(0, dtype=torch.int32, device=device),
             torch.zeros(tile_height, tile_width, 2, dtype=torch.int32, device=device),
         )
+    means2d = _ext.check(means2d, "means2d", torch.float32)
+    radii = _ext.check(radii.to(torch.int32), "radii", torch.int32)
+    depths = _ext.check(depths, "depths", torch.float32)
 
-    means2d_c = means2d.contiguous()
-    radii_i32 = radii.to(torch.int32).contiguous()
-    depths_c = depths.contiguous()
-    tile_dims = torch.tensor([tile_width, tile_height], dtype=torch.int32, device=device).contiguous()
-    dummy = torch.empty(1, dtype=torch.float32, device=device)
-
-    # Step 1: Count how many tiles each Gaussian overlaps
-    # Kernel writes every element (0 for culled gaussians)
-    tiles_per_gauss = torch.empty(N, dtype=torch.int32, device=device)
-    _get_isect_count_op(tile_size)(dummy, tiles_per_gauss, means2d_c, radii_i32, tile_dims)
-
-    # Step 2: Exclusive prefix sum → per-Gaussian write offsets.
-    # dtype=int32 skips the int64 intermediate + downcast (~85 µs on 6M gaussians).
-    cum_tiles = torch.cumsum(tiles_per_gauss, dim=0, dtype=torch.int32)
-    M = int(cum_tiles[-1].item())
-
-    # Slice assignment avoids torch.cat + extra allocation
-    offsets = torch.empty(N, dtype=torch.int32, device=device)
-    offsets[0] = 0
-    offsets[1:] = cum_tiles[:-1]
-
-    if M == 0:
-        return (
-            torch.empty(0, dtype=torch.int32, device=device),
-            torch.zeros(tile_height, tile_width, 2, dtype=torch.int32, device=device),
-        )
-
-    # Step 3: Write (tile_id << 32 | depth_bits) and gaussian index per intersection
-    isect_ids = torch.empty(M, dtype=torch.int64, device=device)
-    flatten_ids = torch.empty(M, dtype=torch.int32, device=device)
-    _get_isect_write_op(tile_size)(dummy, isect_ids, flatten_ids, means2d_c, radii_i32, depths_c, offsets, tile_dims)
-
-    # Step 4: Sort by (tile_id, depth) — torch.sort returns both sorted values and indices
-    sorted_keys, sort_perm = torch.sort(isect_ids)
-    sorted_gaussian_indices = flatten_ids[sort_perm]
-
-    # Step 5: Per-tile [start, end) ranges via a Mojo port of gsplat's
-    # `intersect_offset_kernel` — one custom kernel replaces searchsorted+stack.
+    _ext.sync_torch()
+    ctx = _ext.context()
+    M = ctx.bin(
+        (means2d.data_ptr(), radii.data_ptr(), depths.data_ptr()),
+        N, tile_width * tile_size, tile_height * tile_size,
+    )
+    ids = torch.empty(max(M, 1), dtype=torch.int32, device=device)
     tile_offsets = torch.empty(n_tiles + 1, dtype=torch.int32, device=device)
-    _get_isect_offset_op()(dummy, tile_offsets, sorted_keys)
-    tile_ranges = torch.stack(
-        [tile_offsets[:-1], tile_offsets[1:]], dim=-1
-    ).view(tile_height, tile_width, 2)
-
-    return sorted_gaussian_indices.to(torch.int32), tile_ranges.to(torch.int32)
+    ctx.read_bins(ids.data_ptr(), tile_offsets.data_ptr(), n_tiles)
+    tile_ranges = torch.stack([tile_offsets[:-1], tile_offsets[1:]], dim=-1)
+    return ids[:M], tile_ranges.view(tile_height, tile_width, 2)

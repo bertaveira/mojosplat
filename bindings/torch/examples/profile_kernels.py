@@ -17,10 +17,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from mojosplat.projection import project_gaussians
-from mojosplat.binning import bin_gaussians_to_tiles
-from mojosplat.rasterization import rasterize_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.projection import project_gaussians
+from mojosplat_torch.binning import bin_gaussians_to_tiles
+from mojosplat_torch.rasterization import rasterize_gaussians
+from mojosplat_torch.utils import Camera
 
 TILE_SIZE = 16
 WARMUP = 20
@@ -90,7 +90,7 @@ def fmt(label, mean, std, mn):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("splat", nargs="?",
-                        default=str(Path(__file__).parent / "bicycle.splat"))
+                        default=str(Path(__file__).resolve().parents[3] / "examples" / "bicycle.splat"))
     parser.add_argument("-W", "--width",  type=int, default=1280)
     parser.add_argument("-H", "--height", type=int, default=720)
     parser.add_argument("--no-torch-profiler", action="store_true",

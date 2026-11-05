@@ -2,10 +2,10 @@ import pytest
 import torch
 import math
 
-from mojosplat.rasterization import rasterize_gaussians
-from mojosplat.projection import project_gaussians
-from mojosplat.binning import bin_gaussians_to_tiles
-from mojosplat.utils import Camera
+from mojosplat_torch.rasterization import rasterize_gaussians
+from mojosplat_torch.projection import project_gaussians
+from mojosplat_torch.binning import bin_gaussians_to_tiles
+from mojosplat_torch.utils import Camera
 
 
 @pytest.fixture

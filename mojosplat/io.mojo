@@ -113,7 +113,7 @@ def load_splat(path: String) raises -> SplatScene:
     var scene = SplatScene(n)
     var base = data.unsafe_ptr()
     for i in range(n):
-        var rec = base + i * 32
+        var rec = base.unsafe_offset(i * 32)
         var f = rec.unsafe_bitcast[Float32]()
         for k in range(3):
             scene.means.append(f[unsafe_offset=k])

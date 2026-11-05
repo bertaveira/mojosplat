@@ -2,59 +2,8 @@ from pathlib import Path
 import torch
 from typing_extensions import Literal
 
-from max.experimental.torch import graph_op
-from max.graph import ops as graph_ops, TensorType as GraphTensorType, DeviceRef
-from max.dtype import DType as MaxDType
 from .utils import Camera
-
-mojo_kernels = Path(__file__).parent / "kernels"
-_gpu = DeviceRef.GPU()
-
-_rasterize_graph_ops: dict = {}
-
-
-def _get_rasterize_graph_op(tile_size: int, cdim: int):
-    key = (tile_size, cdim)
-    if key in _rasterize_graph_ops:
-        return _rasterize_graph_ops[key]
-
-    _N = "N"
-    _M = "M"
-    _TGH = "TGH"
-    _TGW = "TGW"
-    _H = "ImgH"
-    _W = "ImgW"
-
-    @graph_op(
-        name=f"rasterize_to_pixels_3dgs_fwd_ts{tile_size}_c{cdim}",
-        kernel_library=mojo_kernels,
-        input_types=[
-            # "Output" passed as input (written in-place via rebind)
-            GraphTensorType(MaxDType.float32, (1, _H, _W, cdim), device=_gpu),  # render_colors
-            # Regular inputs
-            GraphTensorType(MaxDType.float32, (1, _N, 2),       device=_gpu),  # means2d
-            GraphTensorType(MaxDType.float32, (1, _N, 3),       device=_gpu),  # conics
-            GraphTensorType(MaxDType.float32, (1, _N, cdim),    device=_gpu),  # colors
-            GraphTensorType(MaxDType.float32, (1, _N),          device=_gpu),  # opacities
-            GraphTensorType(MaxDType.float32, (1, cdim),        device=_gpu),  # backgrounds
-            GraphTensorType(MaxDType.int32,   (1, _TGH, _TGW, 2), device=_gpu),  # tile_ranges
-            GraphTensorType(MaxDType.int32,   (1, _M),          device=_gpu),  # flatten_ids
-        ],
-        output_types=[
-            GraphTensorType(MaxDType.float32, (1,), device=_gpu),  # dummy to prevent DCE
-        ],
-    )
-    def _rasterize_graph(render_colors, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids):
-        return graph_ops.custom(
-            "rasterize_to_pixels_3dgs_fwd",
-            _gpu,
-            [render_colors, means2d, conics, colors, opacities, backgrounds, tile_ranges, flatten_ids],
-            out_types=[GraphTensorType(MaxDType.float32, (1,), device=_gpu)],
-            parameters={"tile_size": tile_size, "CDIM": cdim},
-        )
-
-    _rasterize_graph_ops[key] = _rasterize_graph
-    return _rasterize_graph
+from . import _ext
 
 
 def rasterize_gaussians(
@@ -182,41 +131,29 @@ def rasterize_gaussians_mojo(
     camera: Camera,
     tile_size: int = 16,
 ) -> torch.Tensor:
-    """Mojo implementation of Gaussian rasterization."""
-    # Ensure proper tensor shapes and types for Mojo kernel
-    if means2d.dim() == 2:
-        means2d = means2d.unsqueeze(0)  # (N, 2) -> (1, N, 2)
-    if conics.dim() == 2:
-        conics = conics.unsqueeze(0)    # (N, 3) -> (1, N, 3)
-    if colors.dim() == 2:
-        colors = colors.unsqueeze(0)    # (N, C) -> (1, N, C)
-    if opacities.dim() == 1:
-        opacities = opacities.unsqueeze(0)  # (N,) -> (1, N)
-    elif opacities.dim() == 2:
-        opacities = opacities.squeeze(-1).unsqueeze(0)  # (N, 1) -> (N,) -> (1, N)
-    if background_color.dim() == 1:
-        background_color = background_color.unsqueeze(0)  # (C,) -> (1, C)
-    if tile_ranges.dim() == 3:
-        tile_ranges = tile_ranges.unsqueeze(0)  # (TGH, TGW, 2) -> (1, TGH, TGW, 2)
-    if sorted_gaussian_indices.dim() == 1:
-        sorted_gaussian_indices = sorted_gaussian_indices.unsqueeze(0)  # (M,) -> (1, M)
+    """Mojo rasterization; returns an (H, W, C) image."""
+    if tile_size != _ext.TILE_SIZE:
+        raise ValueError(f"mojo backend is compiled for tile_size={_ext.TILE_SIZE}")
+    if colors.shape[-1] != _ext.CHANNELS:
+        raise ValueError(f"mojo backend is compiled for {_ext.CHANNELS} color channels")
+    device = means2d.device
+    means2d = _ext.check(means2d.reshape(-1, 2), "means2d", torch.float32)
+    conics = _ext.check(conics.reshape(-1, 3), "conics", torch.float32)
+    colors = _ext.check(colors.reshape(-1, _ext.CHANNELS), "colors", torch.float32)
+    opacities = _ext.check(opacities.reshape(-1), "opacities", torch.float32)
+    ids = _ext.check(sorted_gaussian_indices.reshape(-1).to(torch.int32), "ids", torch.int32)
+    # tile_ranges [TH, TW, 2] -> start offsets [n_tiles + 1]
+    tr = tile_ranges.reshape(-1, 2).to(torch.int32)
+    tile_offsets = torch.cat([tr[:, 0], tr[-1:, 1]]).contiguous()
+    if ids.numel() == 0:
+        ids = torch.zeros(1, dtype=torch.int32, device=device)
 
-    # Ensure contiguous tensors and correct dtypes
-    means2d = means2d.contiguous()
-    conics = conics.contiguous()
-    colors = colors.contiguous()
-    background_color = background_color.contiguous()
-    tile_ranges = tile_ranges.to(torch.int32).contiguous()
-    sorted_gaussian_indices = sorted_gaussian_indices.to(torch.int32).contiguous()
-
-    num_channels = colors.shape[-1]
-    result = torch.zeros(1, camera.H, camera.W, num_channels, device=means2d.device, dtype=means2d.dtype)
-    dummy = torch.empty(1, dtype=torch.float32, device=means2d.device)
-
-    rasterize_kernel = _get_rasterize_graph_op(tile_size, num_channels)
-    rasterize_kernel(
-        dummy, result, means2d, conics, colors, opacities, background_color,
-        tile_ranges, sorted_gaussian_indices
+    image = torch.empty(camera.H, camera.W, _ext.CHANNELS, dtype=torch.float32, device=device)
+    _ext.sync_torch()
+    _ext.context().rasterize(
+        (means2d.data_ptr(), conics.data_ptr(), colors.data_ptr(), opacities.data_ptr(),
+         tile_offsets.data_ptr(), ids.data_ptr(), image.data_ptr()),
+        background_color.reshape(-1).tolist(),
+        camera.W, camera.H,
     )
-
-    return result.squeeze(0)
+    return image

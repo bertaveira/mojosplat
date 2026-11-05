@@ -5,8 +5,8 @@ import torch
 import pytest
 import math
 
-from mojosplat.render import render_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.render import render_gaussians
+from mojosplat_torch.utils import Camera
 
 
 @pytest.mark.parametrize("N", [10, 100])

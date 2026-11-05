@@ -4,7 +4,7 @@ import numpy as np
 import math
 from typing import Literal
 
-from mojosplat.binning import bin_gaussians_to_tiles
+from mojosplat_torch.binning import bin_gaussians_to_tiles
 
 
 @pytest.fixture

@@ -18,8 +18,8 @@ import torch
 import viser
 import viser.transforms as vtf
 
-from mojosplat.render import render_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.render import render_gaussians
+from mojosplat_torch.utils import Camera
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ def main():
     parser.add_argument(
         "splat",
         nargs="?",
-        default=str(Path(__file__).parent / "bicycle.splat"),
+        default=str(Path(__file__).resolve().parents[3] / "examples" / "bicycle.splat"),
         help="Path to .splat file (default: examples/bicycle.splat)",
     )
     parser.add_argument("--width",   "-W", type=int, default=1280, help="Render width  (default 1280)")

@@ -15,8 +15,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from mojosplat.render import render_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.render import render_gaussians
+from mojosplat_torch.utils import Camera
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ def lookat(eye: np.ndarray, center: np.ndarray):
 def main():
     parser = argparse.ArgumentParser(description="Orbit video around a .splat scene")
     parser.add_argument("splat", nargs="?",
-                        default=str(Path(__file__).parent / "bicycle.splat"))
+                        default=str(Path(__file__).resolve().parents[3] / "examples" / "bicycle.splat"))
     parser.add_argument("--output", "-o", default="orbit.mp4")
     parser.add_argument("--width",  "-W", type=int, default=800)
     parser.add_argument("--height", "-H", type=int, default=450)

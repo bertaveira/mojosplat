@@ -199,3 +199,22 @@ def sort_end_bit(n_tiles: Int) -> Int:
     while (1 << bits) < n_tiles:
         bits += 1
     return 32 + max(bits, 1)
+
+
+def _copy_kernel(src: I32Ptr, dst: I32Ptr, count: Int32):
+    var i = block_idx.x * BLOCK_SIZE + thread_idx.x
+    if i < Int(count):
+        dst[unsafe_offset=i] = src[unsafe_offset=i]
+
+
+def copy_i32(
+    ctx: DeviceContext, stream: DeviceStream, src: I32Ptr, dst: I32Ptr, count: Int
+) raises:
+    """Device-to-device copy of `count` int32 values on `stream`."""
+    if count == 0:
+        return
+    stream.enqueue_function(
+        ctx.compile_function[_copy_kernel](),
+        src, dst, Int32(count),
+        grid_dim=num_blocks(count), block_dim=BLOCK_SIZE,
+    )

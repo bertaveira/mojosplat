@@ -2,8 +2,8 @@ import pytest
 import torch
 import numpy as np
 
-from mojosplat.projection import project_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.projection import project_gaussians
+from mojosplat_torch.utils import Camera
 
 
 @pytest.fixture

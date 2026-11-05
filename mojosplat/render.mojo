@@ -7,6 +7,7 @@ pure-Mojo examples and the PyTorch bindings (torch-owned memory).
 """
 
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
+from std.time import perf_counter_ns
 
 from .binning import (
     compute_tile_offsets,
@@ -112,6 +113,9 @@ struct Renderer[tile_size: Int = 16, channels: Int = 3](Movable):
     # Result of the last `render`
     var num_intersections: Int
     var sorted_in_b: Bool
+    # Optional per-stage timing (adds a sync after every stage).
+    var profile: Bool
+    var stage_ms: SIMD[DType.float64, 4]  # projection, binning, raster, total
 
     def __init__(out self, ctx: DeviceContext) raises:
         self.ctx = ctx
@@ -137,6 +141,8 @@ struct Renderer[tile_size: Int = 16, channels: Int = 3](Movable):
         self.tile_offsets = ctx.enqueue_create_buffer[DType.int32](2)
         self.num_intersections = 0
         self.sorted_in_b = False
+        self.profile = False
+        self.stage_ms = SIMD[DType.float64, 4](0)
 
     def _reserve_gaussians(mut self, n: Int) raises:
         if n <= self.n_cap:
@@ -205,28 +211,75 @@ struct Renderer[tile_size: Int = 16, channels: Int = 3](Movable):
         Enqueued on the context's stream. Blocks once (to read back the
         number of tile intersections, needed to size the sort).
         """
+        var n = gaussians.count
+        self._reserve_gaussians(n)
+        var t0 = perf_counter_ns()
+        self.project(gaussians, camera, dptr(self.means2d), dptr(self.conics),
+                     dptr(self.depths), dptr(self.radii))
+        if self.profile:
+            self.ctx.synchronize()
+        var t1 = perf_counter_ns()
+        _ = self.bin(dptr(self.means2d), dptr(self.radii), dptr(self.depths), n,
+                     camera.width, camera.height)
+        if self.profile:
+            self.ctx.synchronize()
+        var t2 = perf_counter_ns()
+        self.rasterize(dptr(self.means2d), dptr(self.conics), gaussians.colors,
+                       gaussians.opacities, background, self.tile_offsets_ptr(),
+                       self.sorted_ids(), image, camera.width, camera.height)
+        if self.profile:
+            self.ctx.synchronize()
+            var t3 = perf_counter_ns()
+            self.stage_ms = SIMD[DType.float64, 4](
+                Float64(t1 - t0), Float64(t2 - t1), Float64(t3 - t2), Float64(t3 - t0)
+            ) / 1e6
+
+    # ------------------------------------------------------------------
+    # Individual stages (raw device pointers; enqueued on ctx's stream)
+    # ------------------------------------------------------------------
+
+    def project(
+        mut self,
+        gaussians: Gaussians,
+        camera: Camera,
+        means2d: F32Ptr,
+        conics: F32Ptr,
+        depths: F32Ptr,
+        radii: I32Ptr,
+    ) raises:
+        """Projection into caller-provided [N,2]/[N,3]/[N]/[N,2] buffers."""
+        project_gaussians(
+            self.ctx, self.ctx.stream(), gaussians.means, gaussians.scales,
+            gaussians.quats, gaussians.opacities, camera.packed(), means2d,
+            conics, depths, radii, gaussians.count,
+        )
+
+    def bin(
+        mut self,
+        means2d: F32Ptr,
+        radii: I32Ptr,
+        depths: F32Ptr,
+        n: Int,
+        width: Int,
+        height: Int,
+    ) raises -> Int:
+        """Tile binning. Returns the number of intersections M.
+
+        Results stay in renderer memory: `sorted_ids()` ([M]) and
+        `tile_offsets_ptr()` ([num_tiles + 1]). Blocks once to read M.
+        """
         var ctx = self.ctx
         var stream = ctx.stream()
-        var n = gaussians.count
-        var tiles_x = camera.tiles_x(Self.tile_size)
-        var tiles_y = camera.tiles_y(Self.tile_size)
+        var tiles_x = (width + Self.tile_size - 1) // Self.tile_size
+        var tiles_y = (height + Self.tile_size - 1) // Self.tile_size
         var n_tiles = tiles_x * tiles_y
         self._reserve_gaussians(n)
         self._reserve_tiles(n_tiles)
-
-        # 1. Projection
-        project_gaussians(
-            ctx, stream, gaussians.means, gaussians.scales, gaussians.quats,
-            gaussians.opacities, camera.packed(), dptr(self.means2d),
-            dptr(self.conics), dptr(self.depths), dptr(self.radii), n,
-        )
-
-        # 2. Binning: count -> scan -> (sync for M) -> write -> sort -> offsets
         var m = 0
         if n > 0:
             count_tiles[Self.tile_size](
-                ctx, stream, dptr(self.means2d), dptr(self.radii),
-                dptr(self.tiles_per_gauss), n, tiles_x, tiles_y,
+                ctx, stream, means2d, radii, dptr(self.tiles_per_gauss), n,
+                tiles_x, tiles_y,
             )
             exclusive_scan[DType.int32](
                 ctx, stream, dptr(self.tiles_per_gauss), dptr(self.offsets),
@@ -240,9 +293,8 @@ struct Renderer[tile_size: Int = 16, channels: Int = 3](Movable):
         self.sorted_in_b = False
         if m > 0:
             write_intersections[Self.tile_size](
-                ctx, stream, dptr(self.means2d), dptr(self.radii),
-                dptr(self.depths), dptr(self.offsets), dptr(self.keys_a),
-                dptr(self.ids_a), n, tiles_x, tiles_y,
+                ctx, stream, means2d, radii, depths, dptr(self.offsets),
+                dptr(self.keys_a), dptr(self.ids_a), n, tiles_x, tiles_y,
             )
             self.sorted_in_b = radix_sort_pairs(
                 ctx, stream, dptr(self.keys_a), dptr(self.ids_a),
@@ -252,10 +304,26 @@ struct Renderer[tile_size: Int = 16, channels: Int = 3](Movable):
             )
         var sorted_keys = dptr(self.keys_b) if self.sorted_in_b else dptr(self.keys_a)
         compute_tile_offsets(ctx, stream, sorted_keys, dptr(self.tile_offsets), m, n_tiles)
+        return m
 
-        # 3. Rasterization
+    def tile_offsets_ptr(self) -> I32Ptr:
+        """Per-tile start offsets of the last `bin` ([num_tiles + 1])."""
+        return dptr(self.tile_offsets)
+
+    def rasterize(
+        mut self,
+        means2d: F32Ptr,
+        conics: F32Ptr,
+        colors: F32Ptr,
+        opacities: F32Ptr,
+        background: SIMD[DType.float32, 4],
+        tile_offsets: I32Ptr,
+        sorted_ids: I32Ptr,
+        image: F32Ptr,
+        width: Int,
+        height: Int,
+    ) raises:
         rasterize[Self.tile_size, Self.channels](
-            ctx, stream, dptr(self.means2d), dptr(self.conics), gaussians.colors,
-            gaussians.opacities, background, dptr(self.tile_offsets),
-            self.sorted_ids(), image, camera.width, camera.height,
+            self.ctx, self.ctx.stream(), means2d, conics, colors, opacities,
+            background, tile_offsets, sorted_ids, image, width, height,
         )

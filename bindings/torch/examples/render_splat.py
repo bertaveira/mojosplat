@@ -6,8 +6,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from mojosplat.render import render_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.render import render_gaussians
+from mojosplat_torch.utils import Camera
 
 
 def load_splat(path: str):
@@ -53,7 +53,7 @@ def main():
     parser.add_argument(
         "splat",
         nargs="?",
-        default=str(Path(__file__).parent / "bicycle.splat"),
+        default=str(Path(__file__).resolve().parents[3] / "examples" / "bicycle.splat"),
         help="Path to .splat file (default: examples/bicycle.splat)",
     )
     parser.add_argument("--output", "-o", default="render.png", help="Output image path")

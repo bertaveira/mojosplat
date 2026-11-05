@@ -17,11 +17,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from mojosplat.render import render_gaussians
-from mojosplat.projection import project_gaussians
-from mojosplat.binning import bin_gaussians_to_tiles
-from mojosplat.rasterization import rasterize_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch.render import render_gaussians
+from mojosplat_torch.projection import project_gaussians
+from mojosplat_torch.binning import bin_gaussians_to_tiles
+from mojosplat_torch.rasterization import rasterize_gaussians
+from mojosplat_torch.utils import Camera
 
 TILE_SIZE = 16
 
@@ -143,7 +143,7 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark gsplat vs mojo full pipeline + kernels")
     parser.add_argument(
         "splat", nargs="?",
-        default=str(Path(__file__).parent / "bicycle.splat"),
+        default=str(Path(__file__).resolve().parents[3] / "examples" / "bicycle.splat"),
         help="Path to .splat file (default: examples/bicycle.splat)",
     )
     parser.add_argument("-W", "--width", type=int, default=1280)
