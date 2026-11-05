@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mojosplat-torch"
+version = "0.1.0"
+description = "PyTorch bindings for MojoSplat (Gaussian Splatting kernels written in Mojo)"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.9.0", "numpy"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "gsplat"]
+examples = ["pillow", "viser>=1.0.24", "matplotlib"]
+
+[tool.setuptools]
+packages = ["mojosplat_torch"]
+
+[tool.setuptools.package-data]
+# The Mojo extension is built by `pixi run -e torch build-ext`.
+mojosplat_torch = ["*.so"]

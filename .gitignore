@@ -186,3 +186,8 @@ cython_debug/
 kgen.trace.json*
 output/
 .rightnow/
+
+# pixi
+.pixi/
+*.mojoc
+bindings/torch/mojosplat_torch/*.so

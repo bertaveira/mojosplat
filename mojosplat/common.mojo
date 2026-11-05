@@ -1,0 +1,25 @@
+"""Shared type aliases and launch helpers for MojoSplat kernels."""
+
+from max.gpu.host import DeviceBuffer
+
+comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
+comptime I32Ptr = Pointer[Int32, MutUntrackedOrigin]
+comptime U32Ptr = Pointer[UInt32, MutUntrackedOrigin]
+comptime U64Ptr = Pointer[UInt64, MutUntrackedOrigin]
+
+# Default 1D launch block size for "one thread per element" kernels.
+comptime BLOCK_SIZE = 256
+
+
+@always_inline
+def num_blocks(n: Int, block: Int = BLOCK_SIZE) -> Int:
+    """Grid size covering `n` elements; at least 1 so empty launches are valid."""
+    return max(1, (n + block - 1) // block)
+
+
+@always_inline
+def dptr[
+    dtype: DType
+](buf: DeviceBuffer[dtype]) -> Pointer[Scalar[dtype], MutUntrackedOrigin]:
+    """Raw device pointer of a DeviceBuffer, usable as a kernel argument."""
+    return buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
