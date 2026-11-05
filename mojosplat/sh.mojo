@@ -90,3 +90,114 @@ def sh_to_color(
                     + x * (SH_C3B * yy - SH_C3A * xx) * _rgb(sh_rest, b + 14)
                 )
     return result
+
+
+comptime SH_C2E: Float32 = 1.8923493915151202
+comptime SH_C3I: Float32 = 3.5402615395598609
+comptime SH_C3J: Float32 = 4.5704579946446566
+comptime SH_C3K: Float32 = 5.597644988851731
+
+
+@always_inline
+def _store_rgb(p: F32Ptr, i: Int, v: SIMD[DType.float32, 4]):
+    p[unsafe_offset=i * 3 + 0] = v[0]
+    p[unsafe_offset=i * 3 + 1] = v[1]
+    p[unsafe_offset=i * 3 + 2] = v[2]
+
+
+@always_inline
+def _dot3(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> Float32:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+@always_inline
+def sh_to_color_backward(
+    sh_rest: F32Ptr,
+    grad_sh0: F32Ptr,  # out [N, 3]
+    grad_sh_rest: F32Ptr,  # out [N, rest_stride, 3]; unused bases get 0
+    g: Int,
+    dir: SIMD[DType.float32, 4],  # mean - camera center (unnormalized)
+    grad_color: SIMD[DType.float32, 4],  # dL/d(color before clamping)
+    active_bases: Int,
+    rest_stride: Int,
+) -> SIMD[DType.float32, 4]:
+    """Writes SH gradients of Gaussian `g`; returns dL/d(mean) through `dir`.
+
+    Port of Faster-GS's `convert_sh_to_color_backward` (Apache-2.0).
+    """
+    _store_rgb(grad_sh0, g, SH_C0 * grad_color)
+    var b = g * rest_stride
+    for k in range(max(active_bases - 1, 0), rest_stride):
+        _store_rgb(grad_sh_rest, b + k, SIMD[DType.float32, 4](0.0))
+    if active_bases <= 1:
+        return SIMD[DType.float32, 4](0.0)
+
+    var inv = rsqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+    var x = dir[0] * inv
+    var y = dir[1] * inv
+    var z = dir[2] * inv
+    _store_rgb(grad_sh_rest, b + 0, -SH_C1 * y * grad_color)
+    _store_rgb(grad_sh_rest, b + 1, SH_C1 * z * grad_color)
+    _store_rgb(grad_sh_rest, b + 2, -SH_C1 * x * grad_color)
+    var gx = -SH_C1 * _rgb(sh_rest, b + 2)
+    var gy = -SH_C1 * _rgb(sh_rest, b + 0)
+    var gz = SH_C1 * _rgb(sh_rest, b + 1)
+    if active_bases > 4:
+        var xx = x * x
+        var yy = y * y
+        var zz = z * z
+        var xy = x * y
+        var xz = x * z
+        var yz = y * z
+        _store_rgb(grad_sh_rest, b + 3, SH_C2A * xy * grad_color)
+        _store_rgb(grad_sh_rest, b + 4, -SH_C2A * yz * grad_color)
+        _store_rgb(grad_sh_rest, b + 5, (SH_C2B * zz - SH_C2C) * grad_color)
+        _store_rgb(grad_sh_rest, b + 6, -SH_C2A * xz * grad_color)
+        _store_rgb(grad_sh_rest, b + 7, SH_C2D * (xx - yy) * grad_color)
+        gx = gx + SH_C2A * y * _rgb(sh_rest, b + 3) - SH_C2A * z * _rgb(sh_rest, b + 6) + SH_C2A * x * _rgb(sh_rest, b + 7)
+        gy = gy + SH_C2A * x * _rgb(sh_rest, b + 3) - SH_C2A * z * _rgb(sh_rest, b + 4) - SH_C2A * y * _rgb(sh_rest, b + 7)
+        gz = gz - SH_C2A * y * _rgb(sh_rest, b + 4) + SH_C2E * z * _rgb(sh_rest, b + 5) - SH_C2A * x * _rgb(sh_rest, b + 6)
+        if active_bases > 9:
+            _store_rgb(grad_sh_rest, b + 8, y * (SH_C3A * yy - SH_C3B * xx) * grad_color)
+            _store_rgb(grad_sh_rest, b + 9, SH_C3C * xy * z * grad_color)
+            _store_rgb(grad_sh_rest, b + 10, y * (SH_C3D - SH_C3E * zz) * grad_color)
+            _store_rgb(grad_sh_rest, b + 11, z * (SH_C3F * zz - SH_C3G) * grad_color)
+            _store_rgb(grad_sh_rest, b + 12, x * (SH_C3D - SH_C3E * zz) * grad_color)
+            _store_rgb(grad_sh_rest, b + 13, SH_C3H * z * (xx - yy) * grad_color)
+            _store_rgb(grad_sh_rest, b + 14, x * (SH_C3B * yy - SH_C3A * xx) * grad_color)
+            gx = (
+                gx - SH_C3I * xy * _rgb(sh_rest, b + 8) + SH_C3C * yz * _rgb(sh_rest, b + 9)
+                + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 12)
+                + SH_C3C * xz * _rgb(sh_rest, b + 13)
+                + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 14)
+            )
+            gy = (
+                gy + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 8) + SH_C3C * xz * _rgb(sh_rest, b + 9)
+                + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 10)
+                - SH_C3C * yz * _rgb(sh_rest, b + 13)
+                + SH_C3I * xy * _rgb(sh_rest, b + 14)
+            )
+            gz = (
+                gz + SH_C3C * xy * _rgb(sh_rest, b + 9) - SH_C3J * yz * _rgb(sh_rest, b + 10)
+                + (SH_C3K * zz - SH_C3G) * _rgb(sh_rest, b + 11)
+                - SH_C3J * xz * _rgb(sh_rest, b + 12)
+                + SH_C3H * (xx - yy) * _rgb(sh_rest, b + 13)
+            )
+    # d(normalized dir)/d(dir): (I - d d^T) / |dir|
+    var gdx = _dot3(gx, grad_color)
+    var gdy = _dot3(gy, grad_color)
+    var gdz = _dot3(gz, grad_color)
+    var xr = dir[0]
+    var yr = dir[1]
+    var zr = dir[2]
+    var xx_r = xr * xr
+    var yy_r = yr * yr
+    var zz_r = zr * zr
+    var n2 = xx_r + yy_r + zz_r
+    var s = inv * inv * inv  # |dir|^-3
+    return SIMD[DType.float32, 4](
+        ((yy_r + zz_r) * gdx - xr * yr * gdy - xr * zr * gdz) * s,
+        (-xr * yr * gdx + (xx_r + zz_r) * gdy - yr * zr * gdz) * s,
+        (-xr * zr * gdx - yr * zr * gdy + (xx_r + yy_r) * gdz) * s,
+        0.0,
+    )

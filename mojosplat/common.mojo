@@ -13,6 +13,16 @@ comptime U64Ptr = Pointer[UInt64, MutUntrackedOrigin]
 comptime LANE_MASK_DTYPE = DType.uint32 if WARP_SIZE <= 32 else DType.uint64
 comptime LaneMask = Scalar[LANE_MASK_DTYPE]
 
+comptime _PLACEHOLDER_ADDR = 256
+
+
+@always_inline
+def placeholder[dtype: DType]() -> Pointer[Scalar[dtype], MutUntrackedOrigin]:
+    """A non-null pointer that must never be dereferenced (Mojo pointers are
+    non-nullable); marks unused optional buffers."""
+    return Pointer[Scalar[dtype], MutUntrackedOrigin](unsafe_from_address=_PLACEHOLDER_ADDR)
+
+
 # Default 1D launch block size for "one thread per element" kernels.
 comptime BLOCK_SIZE = 256
 

@@ -16,6 +16,11 @@ work waited for the busiest one), duplicate fetches across a block's warps
 hit L1, and a warp retires as soon as all of its pixels are saturated. On
 an RTX 5090 this is ~20% faster than the batched version.
 
+With `train=True` the kernel also saves what the per-Gaussian backward
+needs (Faster-GS / Taming-3DGS): every pixel's (color, T) before each
+bucket of 32 instances, its final T and the index of its last contributing
+Gaussian, the per-tile maximum of that index, and each bucket's tile.
+
 The Gaussian is evaluated with a single `exp2` by folding -0.5 * log2(e)
 into the conic. Semantics (as Faster-GS / 3DGS): fragments with
 alpha < 1/255 are skipped; a pixel stops after the fragment that brings its
@@ -26,12 +31,12 @@ from max.gpu import WARP_SIZE, block_idx, lane_id, thread_idx
 from max.gpu.host import DeviceContext, DeviceStream
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
-from max.gpu.sync import syncwarp
+from max.gpu.sync import barrier, syncwarp
 from std.bit import count_trailing_zeros
 from std.math import exp2
 from std.memory import stack_allocation
 
-from .common import F32Ptr, I32Ptr, LANE_MASK_DTYPE, U32Ptr
+from .common import F32Ptr, I32Ptr, LANE_MASK_DTYPE, U32Ptr, placeholder
 from .preprocess import MIN_ALPHA, load_record, record_bounds, unpack_bounds
 
 comptime T_MIN: Float32 = 1e-4
@@ -41,19 +46,27 @@ comptime SUBTILE_H = WARP_SIZE // SUBTILE_W
 
 
 def _blend_kernel[
-    tile_w: Int, tile_h: Int, CDIM: Int
+    tile_w: Int, tile_h: Int, CDIM: Int, train: Bool
 ](
     tile_offsets: U32Ptr,  # [n_tiles + 1]
     instance_ids: I32Ptr,  # [M] slots sorted by (tile, depth)
     records: F32Ptr,  # [slot, REC]
-    colors: F32Ptr,  # [slot, CDIM]
+    colors: F32Ptr,  # [slot, CDIM] (clamped at 0 here)
     background: SIMD[DType.float32, 4],
     image: F32Ptr,  # out [H, W, CDIM]
     width: Int32,
     height: Int32,
     grid_w: Int32,
+    # Training only (saved for the backward pass; ignored when train=False):
+    bucket_start: U32Ptr,  # [n_tiles + 1] first bucket of each tile
+    bucket_tile: U32Ptr,  # out [n_buckets] tile of each bucket
+    snapshots: F32Ptr,  # out [n_buckets, BLOCK, 4] (color, T) before each bucket
+    final_T: F32Ptr,  # out [H * W]
+    n_processed: U32Ptr,  # out [H * W] tile-local index + 1 of the last used Gaussian
+    tile_max_n: U32Ptr,  # out [n_tiles] max of n_processed over the tile
 ):
-    comptime WARPS = tile_w * tile_h // WARP_SIZE
+    comptime BLOCK = tile_w * tile_h
+    comptime WARPS = BLOCK // WARP_SIZE
     comptime SUBGRID_W = tile_w // SUBTILE_W
     comptime STRIDE = 12  # floats per Gaussian in the slab
     comptime assert CDIM <= 3, "slab holds 3 color channels"
@@ -64,12 +77,15 @@ def _blend_kernel[
     var lane = lane_id()
     var warp_idx = rank // WARP_SIZE
     var slab = slab_all.unsafe_offset(warp_idx * WARP_SIZE * STRIDE)
-    var sub_x0 = block_idx.x * tile_w + (warp_idx % SUBGRID_W) * SUBTILE_W
-    var sub_y0 = block_idx.y * tile_h + (warp_idx // SUBGRID_W) * SUBTILE_H
+    var tile_x0 = block_idx.x * tile_w
+    var tile_y0 = block_idx.y * tile_h
+    var sub_x0 = tile_x0 + (warp_idx % SUBGRID_W) * SUBTILE_W
+    var sub_y0 = tile_y0 + (warp_idx // SUBGRID_W) * SUBTILE_H
     var sub_x1 = sub_x0 + SUBTILE_W
     var sub_y1 = sub_y0 + SUBTILE_H
     var x = sub_x0 + lane % SUBTILE_W
     var y = sub_y0 + lane // SUBTILE_W
+    var local_idx = (y - tile_y0) * tile_w + (x - tile_x0)
     var inside = x < Int(width) and y < Int(height)
     var px = Float32(x) + 0.5
     var py = Float32(y) + 0.5
@@ -77,15 +93,30 @@ def _blend_kernel[
     var pix = SIMD[DType.float32, 4](0.0)
     var T: Float32 = 1.0
     var done = not inside
+    var last = 0  # tile-local index + 1 of the last Gaussian that contributed
 
     var tile_id = block_idx.y * Int(grid_w) + block_idx.x
     var start = Int(tile_offsets[unsafe_offset=tile_id])
     var end = Int(tile_offsets[unsafe_offset=tile_id + 1])
+    var first_bucket = 0
+    comptime if train:
+        first_bucket = Int(bucket_start[unsafe_offset=tile_id])
+        var n_buckets = (end - start + WARP_SIZE - 1) // WARP_SIZE
+        var b = rank
+        while b < n_buckets:
+            bucket_tile[unsafe_offset=first_bucket + b] = UInt32(tile_id)
+            b += BLOCK
 
     var i = start
     while i < end:
         if warp.vote[LANE_MASK_DTYPE](not done) == 0:
             break
+        comptime if train:
+            if not done:
+                var bucket = first_bucket + (i - start) // WARP_SIZE
+                snapshots.unsafe_offset((bucket * BLOCK + local_idx) * 4).unsafe_bitcast[
+                    SIMD[DType.float32, 4]
+                ]()[] = SIMD[DType.float32, 4](pix[0], pix[1], pix[2], T)
         var fetch = i + lane
         var overlaps = False
         if fetch < end:
@@ -99,7 +130,7 @@ def _blend_kernel[
             if overlaps:
                 var c = SIMD[DType.float32, 4](0.0)
                 comptime for k in range(CDIM):
-                    c[k] = colors[unsafe_offset=g * CDIM + k]
+                    c[k] = max(colors[unsafe_offset=g * CDIM + k], 0.0)
                 var dst = slab.unsafe_offset(lane * STRIDE)
                 dst.unsafe_bitcast[SIMD[DType.float32, 4]]()[] = SIMD[DType.float32, 4](
                     rec[0], rec[1], -0.5 * LOG2E * rec[2], -LOG2E * rec[3]
@@ -131,19 +162,61 @@ def _blend_kernel[
             comptime if CDIM > 2:
                 pix[2] += weight * src[unsafe_offset=8]
             T *= 1.0 - alpha
+            comptime if train:
+                last = i - start + j + 1
             if T < T_MIN:
                 done = True
         syncwarp()
         i += WARP_SIZE
 
     if inside:
-        var base = (y * Int(width) + x) * CDIM
+        var p = y * Int(width) + x
         comptime for c in range(CDIM):
-            image[unsafe_offset=base + c] = pix[c] + T * background[c]
+            image[unsafe_offset=p * CDIM + c] = pix[c] + T * background[c]
+        comptime if train:
+            final_T[unsafe_offset=p] = T
+            n_processed[unsafe_offset=p] = UInt32(last)
+
+    comptime if train:
+        var sh_max = stack_allocation[WARPS, UInt32, address_space=AddressSpace.SHARED]()
+        var m = warp.max(UInt32(last))
+        if lane == 0:
+            sh_max[unsafe_offset=warp_idx] = m
+        barrier()
+        if rank == 0:
+            var mm = sh_max[unsafe_offset=0]
+            comptime for w in range(1, WARPS):
+                mm = max(mm, sh_max[unsafe_offset=w])
+            tile_max_n[unsafe_offset=tile_id] = mm
+
+
+def _bucket_count_kernel(
+    tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int32
+):
+    var t = block_idx.x * 256 + thread_idx.x
+    if t < Int(n_tiles):
+        var n = tile_offsets[unsafe_offset=t + 1] - tile_offsets[unsafe_offset=t]
+        counts[unsafe_offset=t] = (n + UInt32(WARP_SIZE - 1)) // UInt32(WARP_SIZE)
+
+
+def bucket_counts(
+    ctx: DeviceContext, stream: DeviceStream, tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int
+) raises:
+    """Buckets (32 instances each) per tile; scan these to get bucket_start."""
+    stream.enqueue_function(
+        ctx.compile_function[_bucket_count_kernel](),
+        tile_offsets, counts, Int32(n_tiles),
+        grid_dim=max(1, (n_tiles + 255) // 256), block_dim=256,
+    )
+
+
+def bucket_bound(n_instances: Int, n_tiles: Int) -> Int:
+    """Upper bound on the number of buckets: sum ceil(c_t / 32) <= M / 32 + n_tiles."""
+    return n_instances // WARP_SIZE + n_tiles + 1
 
 
 def blend[
-    tile_w: Int, tile_h: Int, CDIM: Int
+    tile_w: Int, tile_h: Int, CDIM: Int, train: Bool = False
 ](
     ctx: DeviceContext,
     stream: DeviceStream,
@@ -155,12 +228,19 @@ def blend[
     image: F32Ptr,
     width: Int,
     height: Int,
+    bucket_start: U32Ptr = placeholder[DType.uint32](),
+    bucket_tile: U32Ptr = placeholder[DType.uint32](),
+    snapshots: F32Ptr = placeholder[DType.float32](),
+    final_T: F32Ptr = placeholder[DType.float32](),
+    n_processed: U32Ptr = placeholder[DType.uint32](),
+    tile_max_n: U32Ptr = placeholder[DType.uint32](),
 ) raises:
     var grid_w = (width + tile_w - 1) // tile_w
     var grid_h = (height + tile_h - 1) // tile_h
     stream.enqueue_function(
-        ctx.compile_function[_blend_kernel[tile_w, tile_h, CDIM]](),
+        ctx.compile_function[_blend_kernel[tile_w, tile_h, CDIM, train]](),
         tile_offsets, instance_ids, records, colors, background, image,
-        Int32(width), Int32(height), Int32(grid_w),
+        Int32(width), Int32(height), Int32(grid_w), bucket_start, bucket_tile,
+        snapshots, final_T, n_processed, tile_max_n,
         grid_dim=(grid_w, grid_h), block_dim=tile_w * tile_h,
     )

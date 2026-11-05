@@ -12,10 +12,13 @@ sorting tricks. It implements the rasterizer's semantics:
   * EWA projection with the Jacobian clamped to 15% outside the image;
   * alpha = sigmoid(o) * exp(-0.5 d^T conic d), fragments with
     alpha < 1/255 skipped, front-to-back by depth, a pixel stops after the
-    fragment that brings T below 1e-4; color = SH + 0.5 clamped at 0.
+    fragment that brings T below 1e-4; color = SH + 0.5 clamped at 0;
+  * gradients by float64 autograd through the same computation (the cull,
+    threshold and early-stop decisions are piecewise constant).
 
 Writes raw little-endian binaries under tests/data/golden/<scene>/ that
-tests/test_rasterizer.mojo reads back (no Python needed to run the tests):
+tests/test_rasterizer{,_backward}.mojo read back (no Python needed to run
+the tests):
 
     meta.txt          N, W, H, sh_degree, sh_rest (K)
     camera.f32        [16 view (row-major world-to-camera)] + [fx, fy, cx, cy, near, far]
@@ -23,6 +26,8 @@ tests/test_rasterizer.mojo reads back (no Python needed to run the tests):
     means3d.f32 [N,3]  log_scales.f32 [N,3]  quats.f32 [N,4]
     opacity_logits.f32 [N]  sh0.f32 [N,3]  shN.f32 [N,K,3]
     image.f32         [H, W, 3] reference render
+    grad_image.f32    [H, W, 3] random upstream gradient dL/dimage
+    grad_<param>.f32  dL/dparam of L = sum(image * grad_image), via float64 autograd
     image_gsplat.f32  [H, W, 3] gsplat.rasterization (if available; info only)
 
 Usage (repo root):  pixi run -e torch python tests/data/make_golden_splats.py
@@ -80,59 +85,84 @@ def quat_to_rot(q):
     ], -1).reshape(-1, 3, 3)
 
 
-def reference_render(s, chunk=4096):
+def reference_project(s, p):
+    """Per-Gaussian quantities of the reference (differentiable in p)."""
     view, (fx, fy, cx, cy, near, far), W, H = s["view"], s["intr"], s["W"], s["H"]
-    means, ls, q, ol = (s[k].to(F64) for k in ["means3d", "log_scales", "quats", "opacity_logits"])
-    sh0, shN, deg, bg = s["sh0"].to(F64), s["shN"].to(F64), s["sh_degree"], s["bg"].to(F64)
+    means, ls, q, ol, sh0, shN = p["means3d"], p["log_scales"], p["quats"], p["opacity_logits"], p["sh0"], p["shN"]
     R, t = view[:3, :3].to(F64), view[:3, 3].to(F64)
     pc = means @ R.T + t
     depth = pc[:, 2]
     opac = torch.sigmoid(ol)
     nq = (q * q).sum(-1)
     valid = (depth >= near) & (depth <= far) & (opac >= 1 / 255) & (nq >= 1e-8)
-    Rq = quat_to_rot(torch.where(valid[:, None], q, torch.tensor([1.0, 0, 0, 0], dtype=F64, device=DEV)))
+    qv = torch.where(valid[:, None], q, torch.tensor([1.0, 0, 0, 0], dtype=F64, device=DEV))
+    Rq = quat_to_rot(qv)
     cov3 = Rq @ torch.diag_embed(torch.exp(2 * ls)) @ Rq.transpose(1, 2)
     z = torch.where(valid, depth, torch.ones_like(depth))
     x, y = pc[:, 0] / z, pc[:, 1] / z
     xc = x.clamp((-0.15 * W - cx) / fx, (1.15 * W - cx) / fx)
     yc = y.clamp((-0.15 * H - cy) / fy, (1.15 * H - cy) / fy)
-    J = torch.zeros(len(z), 2, 3, dtype=F64, device=DEV)
-    J[:, 0, 0] = fx / z
-    J[:, 0, 2] = -fx / z * xc
-    J[:, 1, 1] = fy / z
-    J[:, 1, 2] = -fy / z * yc
+    zero = torch.zeros_like(z)
+    J = torch.stack([
+        torch.stack([fx / z, zero, -fx / z * xc], -1),
+        torch.stack([zero, fy / z, -fy / z * yc], -1),
+    ], 1)
     JW = J @ R
     cov2 = JW @ cov3 @ JW.transpose(1, 2) + 0.3 * torch.eye(2, dtype=F64, device=DEV)
     det = cov2[:, 0, 0] * cov2[:, 1, 1] - cov2[:, 0, 1] ** 2
-    valid &= det >= 1e-6
+    valid = valid & (det >= 1e-6)
     det = torch.where(valid, det, torch.ones_like(det))
     ca, cb, cc = cov2[:, 1, 1] / det, -cov2[:, 0, 1] / det, cov2[:, 0, 0] / det
     mx, my = x * fx + cx, y * fy + cy
-    cam_pos = -R.T @ t
-    dirs = means - cam_pos
+    dirs = means - (-R.T @ t)
     dirs = dirs / dirs.norm(dim=-1, keepdim=True)
-    color = (eval_sh(deg, sh0, shN, dirs) + 0.5).clamp_min(0.0)
-
+    color = (eval_sh(s["sh_degree"], sh0, shN, dirs) + 0.5).clamp_min(0.0)
     idx = torch.nonzero(valid).squeeze(-1)
-    idx = idx[torch.argsort(depth[idx], stable=True)]
-    mx, my, ca, cb, cc, op, color = mx[idx], my[idx], ca[idx], cb[idx], cc[idx], opac[idx], color[idx]
+    idx = idx[torch.argsort(depth[idx].detach(), stable=True)]
+    return [v[idx] for v in (mx, my, ca, cb, cc, opac, color)], int(valid.sum())
 
+
+def reference_raster(proj, bg, px, py):
+    mx, my, ca, cb, cc, op, color = proj
+    dx = mx[None, :] - px[:, None]
+    dy = my[None, :] - py[:, None]
+    power = 0.5 * (ca * dx * dx + cc * dy * dy) + cb * dx * dy
+    alpha = op * torch.exp(-power.clamp_min(0.0))
+    alpha = torch.where(alpha >= 1 / 255, alpha, torch.zeros_like(alpha))
+    T_before = torch.cumprod(torch.cat([torch.ones_like(alpha[:, :1]), 1 - alpha[:, :-1]], 1), 1)
+    inc = (T_before >= 1e-4).to(F64).detach()
+    w = inc * T_before * alpha
+    T_final = torch.where(inc > 0, 1 - alpha, torch.ones_like(alpha)).prod(1)
+    return w @ color + T_final[:, None] * bg
+
+
+PARAMS = ["means3d", "log_scales", "quats", "opacity_logits", "sh0", "shN"]
+
+
+def reference_render(s, grad_image=None, chunk=2048):
+    """Image [H, W, 3] (float64); with grad_image also d<image, grad_image>/dparams.
+
+    Chunked over pixels; the projection is recomputed per chunk so autograd
+    memory stays bounded.
+    """
+    W, H = s["W"], s["H"]
+    p = {k: s[k].to(F64).detach().requires_grad_(grad_image is not None) for k in PARAMS}
+    bg = s["bg"].to(F64)
     ys, xs = torch.meshgrid(torch.arange(H, device=DEV), torch.arange(W, device=DEV), indexing="ij")
     px = xs.reshape(-1).to(F64) + 0.5
     py = ys.reshape(-1).to(F64) + 0.5
     out = torch.empty(H * W, 3, dtype=F64, device=DEV)
+    gimg = None if grad_image is None else grad_image.to(F64).reshape(-1, 3)
+    visible = 0
     for s0 in range(0, H * W, chunk):
-        dx = mx[None, :] - px[s0:s0 + chunk, None]
-        dy = my[None, :] - py[s0:s0 + chunk, None]
-        power = 0.5 * (ca * dx * dx + cc * dy * dy) + cb * dx * dy
-        alpha = op * torch.exp(-power.clamp_min(0.0))
-        alpha = torch.where(alpha >= 1 / 255, alpha, torch.zeros_like(alpha))
-        T_before = torch.cumprod(torch.cat([torch.ones_like(alpha[:, :1]), 1 - alpha[:, :-1]], 1), 1)
-        inc = (T_before >= 1e-4).to(F64)
-        w = inc * T_before * alpha
-        T_final = torch.where(inc > 0, 1 - alpha, torch.ones_like(alpha)).prod(1)
-        out[s0:s0 + chunk] = w @ color + T_final[:, None] * bg
-    return out.reshape(H, W, 3), int(valid.sum())
+        with torch.set_grad_enabled(grad_image is not None):
+            proj, visible = reference_project(s, p)
+            img = reference_raster(proj, bg, px[s0:s0 + chunk], py[s0:s0 + chunk])
+            if gimg is not None:
+                (img * gimg[s0:s0 + chunk]).sum().backward()
+        out[s0:s0 + chunk] = img.detach()
+    grads = None if grad_image is None else {k: p[k].grad for k in PARAMS}
+    return out.reshape(H, W, 3), visible, grads
 
 
 def rot_xyz(ax, ay, az):
@@ -205,13 +235,18 @@ def gsplat_render(s):
 def run(name, s):
     d = OUT / name
     d.mkdir(parents=True, exist_ok=True)
-    image, visible = reference_render(s)
+    g = torch.Generator(device=DEV).manual_seed(123)
+    grad_image = torch.randn(s["H"], s["W"], 3, generator=g, device=DEV)
+    image, visible, grads = reference_render(s, grad_image)
     fx, fy, cx, cy, near, far = s["intr"]
     save(d, "camera.f32", torch.cat([s["view"].reshape(-1).cpu(), torch.tensor([fx, fy, cx, cy, near, far])]))
     save(d, "background.f32", s["bg"])
     for k in ["means3d", "log_scales", "quats", "opacity_logits", "sh0", "shN"]:
         save(d, f"{k}.f32", s[k])
     save(d, "image.f32", image)
+    save(d, "grad_image.f32", grad_image)
+    for k in PARAMS:
+        save(d, f"grad_{k}.f32", grads[k])
     msg = ""
     img_gs = gsplat_render(s)
     if img_gs is not None:

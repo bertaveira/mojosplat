@@ -1,6 +1,7 @@
 """Faster-GS style forward rasterizer (inference path).
 
-Pipeline (one host sync, to size the instance buffers):
+Inference (`render`) and training (`forward` + `backward`) share the
+pipeline (one host sync, to size the instance buffers):
 
   preprocess       activations, EWA projection, exact tile count, SH -> RGB,
                    compacted (depth, id) list of visible Gaussians
@@ -11,6 +12,11 @@ Pipeline (one host sync, to size the instance buffers):
   tile offsets     per-tile instance ranges
   blend            per-tile front-to-back compositing with sub-tile skipping
 
+`forward` additionally saves the state the per-Gaussian backward needs
+(see blend.mojo / backward.mojo) into buffers obtained from a
+`StateAllocator`, and returns it as a `ForwardState`, so several forwards can
+be in flight before their backward passes (e.g. torch autograd).
+
 Takes the *raw* (trainable) parameters as in 3DGS/gsplat training: log
 scales, unnormalized quaternions, opacity logits and SH coefficients.
 Design and kernels follow Faster-GS (Hahlbohm et al., CVPR 2026, Apache-2.0).
@@ -18,11 +24,13 @@ Design and kernels follow Faster-GS (Hahlbohm et al., CVPR 2026, Apache-2.0).
 
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.math import log
+from std.memory import ArcPointer
 from std.time import perf_counter_ns
 
-from .blend import blend
+from .backward import blend_backward, fill_f32, preprocess_backward
+from .blend import blend, bucket_bound, bucket_counts
 from .camera import Camera
-from .common import F32Ptr, I32Ptr, U16Ptr, U32Ptr, dptr
+from .common import F32Ptr, I32Ptr, U16Ptr, U32Ptr, dptr, placeholder
 from .instances import create_instances, depth_ordering, tile_key_bits, tile_offsets
 from .io import SplatScene, upload
 from .preprocess import REC, preprocess
@@ -120,14 +128,122 @@ struct SplatBuffers(Movable):
         )
 
 
+trait StateAllocator:
+    """Provides device memory for a training forward's saved state."""
+
+    def alloc(mut self, nbytes: Int) raises -> Int:
+        """Return the device address of >= nbytes, 256-byte aligned, that
+        stays valid until the matching backward has run."""
+        ...
+
+
+struct DeviceArena(StateAllocator, Movable):
+    """Reusable `StateAllocator` for pure-Mojo training loops.
+
+    After `reset()`, the i-th `alloc` returns the i-th buffer (grown when
+    needed), so a forward/backward per iteration does not reallocate. Only
+    one `ForwardState` per arena is valid at a time.
+    """
+
+    var ctx: DeviceContext
+    var buffers: List[DeviceBuffer[DType.uint8]]
+    var sizes: List[Int]
+    var next: Int
+
+    def __init__(out self, ctx: DeviceContext):
+        self.ctx = ctx
+        self.buffers = List[DeviceBuffer[DType.uint8]]()
+        self.sizes = List[Int]()
+        self.next = 0
+
+    def reset(mut self):
+        self.next = 0
+
+    def alloc(mut self, nbytes: Int) raises -> Int:
+        var need = max(nbytes, 256)
+        if self.next == len(self.buffers):
+            self.buffers.append(self.ctx.enqueue_create_buffer[DType.uint8](need))
+            self.sizes.append(need)
+        elif self.sizes[self.next] < need:
+            var cap = max(need, self.sizes[self.next] * 3 // 2)
+            self.buffers[self.next] = self.ctx.enqueue_create_buffer[DType.uint8](cap)
+            self.sizes[self.next] = cap
+        var addr = Int(dptr(self.buffers[self.next]))
+        self.next += 1
+        return addr
+
+
+struct ForwardState(ImplicitlyCopyable, Movable):
+    """What a training forward saves for its backward (raw device pointers).
+
+    Slot arrays are indexed by visible-Gaussian slot; `primitive_ids` maps a
+    slot to its Gaussian.
+    """
+
+    var n: Int
+    var n_visible: Int
+    var n_instances: Int
+    var n_tiles: Int
+    var n_bucket_blocks: Int  # upper bound on buckets (grid of the backward)
+    var width: Int
+    var height: Int
+    var grid_w: Int
+    var grid_h: Int
+    var active_bases: Int
+    var cam: SIMD[DType.float32, 32]
+    var background: SIMD[DType.float32, 4]
+    var primitive_ids: I32Ptr  # [N] (first n_visible used)
+    var slot_of: I32Ptr  # [N] slot of each Gaussian, -1 if culled
+    var records: F32Ptr  # [N, REC]
+    var colors: F32Ptr  # [N, 3]
+    var instance_slots: I32Ptr  # [M] sorted by (tile, depth)
+    var inst_a: I32Ptr
+    var inst_b: I32Ptr
+    var tile_offsets: U32Ptr  # [n_tiles + 1]
+    var bucket_start: U32Ptr  # [n_tiles + 1]
+    var bucket_tile: U32Ptr  # [n_bucket_blocks]
+    var snapshots: F32Ptr  # [n_bucket_blocks, tile_w * tile_h, 4]
+    var final_T: F32Ptr  # [H * W]
+    var n_processed: U32Ptr  # [H * W]
+    var tile_max_n: U32Ptr  # [n_tiles]
+
+    def __init__(out self):
+        self.n = 0
+        self.n_visible = 0
+        self.n_instances = 0
+        self.n_tiles = 0
+        self.n_bucket_blocks = 0
+        self.width = 0
+        self.height = 0
+        self.grid_w = 0
+        self.grid_h = 0
+        self.active_bases = 1
+        self.cam = SIMD[DType.float32, 32](0.0)
+        self.background = SIMD[DType.float32, 4](0.0)
+        self.primitive_ids = placeholder[DType.int32]()
+        self.slot_of = placeholder[DType.int32]()
+        self.records = placeholder[DType.float32]()
+        self.colors = placeholder[DType.float32]()
+        self.instance_slots = placeholder[DType.int32]()
+        self.inst_a = placeholder[DType.int32]()
+        self.inst_b = placeholder[DType.int32]()
+        self.tile_offsets = placeholder[DType.uint32]()
+        self.bucket_start = placeholder[DType.uint32]()
+        self.bucket_tile = placeholder[DType.uint32]()
+        self.snapshots = placeholder[DType.float32]()
+        self.final_T = placeholder[DType.float32]()
+        self.n_processed = placeholder[DType.uint32]()
+        self.tile_max_n = placeholder[DType.uint32]()
+
+
 struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
-    """Forward renderer; owns and reuses all intermediate GPU buffers."""
+    """Forward renderer and its backward; owns and reuses scratch buffers."""
 
     comptime CDIM = 3
+    comptime BLOCK = Self.tile_w * Self.tile_h
     var ctx: DeviceContext
-    # Per-Gaussian
+    # Per-Gaussian scratch (and the inference path's slot arrays)
     var n_cap: Int
-    # Per visible Gaussian ("slot"; compacted by preprocess)
     var depth_keys_a: DeviceBuffer[DType.uint32]
     var depth_keys_b: DeviceBuffer[DType.uint32]
     var slots_a: DeviceBuffer[DType.int32]
@@ -137,6 +253,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
     var records: DeviceBuffer[DType.float32]
     var colors: DeviceBuffer[DType.float32]
     var offsets: DeviceBuffer[DType.uint32]
+    var scan_cap: Int
     var scan_partials: DeviceBuffer[DType.uint32]
     var scan_total: DeviceBuffer[DType.uint32]
     var counters: DeviceBuffer[DType.uint32]
@@ -152,13 +269,18 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
     var sort_hist: DeviceBuffer[DType.uint32]
     var sort_partials: DeviceBuffer[DType.uint32]
     var sort_total: DeviceBuffer[DType.uint32]
-    # Per-tile
+    # Per-tile (inference path)
     var tiles_cap: Int
     var tile_offsets: DeviceBuffer[DType.uint32]
-    # Results of the last render
+    # Backward scratch: per-slot 2D gradients
+    var grad_cap: Int
+    var grad_scratch: DeviceBuffer[DType.float32]
+    # Default state allocator for `forward` without an explicit one
+    var arena: ArcPointer[DeviceArena]
+    # Results of the last render / forward
     var num_visible: Int
     var num_instances: Int
-    var inst_in_b: Bool
+    var last_instances: I32Ptr
     # Optional per-stage timing (adds syncs)
     var profile: Bool
     var stage_ms: SIMD[DType.float64, 8]  # preprocess, depth sort, instances, tile sort, blend, -, -, total
@@ -175,6 +297,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         self.records = ctx.enqueue_create_buffer[DType.float32](REC)
         self.colors = ctx.enqueue_create_buffer[DType.float32](3)
         self.offsets = ctx.enqueue_create_buffer[DType.uint32](1)
+        self.scan_cap = 1
         self.scan_partials = ctx.enqueue_create_buffer[DType.uint32](scan_workspace_size(1))
         self.scan_total = ctx.enqueue_create_buffer[DType.uint32](1)
         self.counters = ctx.enqueue_create_buffer[DType.uint32](2)
@@ -190,9 +313,12 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         self.sort_total = ctx.enqueue_create_buffer[DType.uint32](1)
         self.tiles_cap = 0
         self.tile_offsets = ctx.enqueue_create_buffer[DType.uint32](1)
+        self.grad_cap = 0
+        self.grad_scratch = ctx.enqueue_create_buffer[DType.float32](1)
+        self.arena = ArcPointer(DeviceArena(ctx))
         self.num_visible = 0
         self.num_instances = 0
-        self.inst_in_b = False
+        self.last_instances = placeholder[DType.int32]()
         self.profile = False
         self.stage_ms = SIMD[DType.float64, 8](0)
 
@@ -214,9 +340,15 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         self.records = ctx.enqueue_create_buffer[DType.float32](cap * REC)
         self.colors = ctx.enqueue_create_buffer[DType.float32](cap * 3)
         self.offsets = ctx.enqueue_create_buffer[DType.uint32](cap)
-        self.scan_partials = ctx.enqueue_create_buffer[DType.uint32](scan_workspace_size(cap))
         self.n_cap = cap
+        self._reserve_scan(cap)
         self._reserve_sort(cap)
+
+    def _reserve_scan(mut self, n: Int) raises:
+        if n <= self.scan_cap:
+            return
+        self.scan_cap = Self._grow(self.scan_cap, n)
+        self.scan_partials = self.ctx.enqueue_create_buffer[DType.uint32](scan_workspace_size(self.scan_cap))
 
     def _reserve_instances(mut self, m: Int) raises:
         if m <= self.m_cap:
@@ -251,9 +383,12 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
             t = now
 
     def instance_ids(self) -> I32Ptr:
-        """Slots of the last render sorted by (tile, depth); map a slot to its
-        Gaussian with `primitive_ids`."""
-        return dptr(self.inst_b) if self.inst_in_b else dptr(self.inst_a)
+        """Slots of the last render sorted by (tile, depth)."""
+        return self.last_instances
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def render(
         mut self,
@@ -282,39 +417,182 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         keeps the memory behind `splats`/`image` alive until the work is
         done. Blocks once (after preprocessing) to size the instance buffers.
         """
-        var ctx = self.ctx
-        var stream = ctx.stream()
-        var n = splats.count
-        var W = camera.width
-        var H = camera.height
-        if W >= 65536 or H >= 65536:
-            raise Error("image dimensions must be < 65536")
-        var grid_w = (W + Self.tile_w - 1) // Self.tile_w
-        var grid_h = (H + Self.tile_h - 1) // Self.tile_h
-        var n_tiles = grid_w * grid_h
-        var degree = min(max(sh_degree, 0), splats.max_sh_degree())
-        self._reserve_gaussians(max(n, 1))
-        self._reserve_tiles(n_tiles)
+        var st = self._begin(splats, camera, background, sh_degree)
+        st.primitive_ids = dptr(self.primitive_ids)
+        st.records = dptr(self.records)
+        st.colors = dptr(self.colors)
         var ms = SIMD[DType.float64, 8](0)
         var t_start = Int(perf_counter_ns())
         var t = t_start
+        self._preprocess(splats, st)
+        self._mark(t, 0, ms)
+        self._reserve_instances(max(st.n_instances, 1))
+        self._reserve_tiles(st.n_tiles)
+        st.inst_a = dptr(self.inst_a)
+        st.inst_b = dptr(self.inst_b)
+        st.tile_offsets = dptr(self.tile_offsets)
+        self._raster[False](st, image, t, ms)
+        if self.profile:
+            ms[7] = Float64(t - t_start) / 1e6
+            self.stage_ms = ms
 
-        self.counters.enqueue_fill(0)
-        preprocess[Self.tile_w, Self.tile_h](
+    def forward(
+        mut self,
+        splats: SplatParams,
+        camera: Camera,
+        background: SIMD[DType.float32, 4],
+        image: F32Ptr,
+        sh_degree: Int = 3,
+    ) raises -> ForwardState:
+        """Training forward using the rasterizer's own reusable state buffers.
+
+        The returned state stays valid until the next `forward` call on this
+        rasterizer (one forward/backward in flight at a time).
+        """
+        var arena = self.arena.copy()
+        arena[].reset()
+        return self.forward(splats, camera, background, image, sh_degree, arena[])
+
+    def forward[
+        A: StateAllocator
+    ](
+        mut self,
+        splats: SplatParams,
+        camera: Camera,
+        background: SIMD[DType.float32, 4],
+        image: F32Ptr,
+        sh_degree: Int,
+        mut alloc: A,
+    ) raises -> ForwardState:
+        """Training forward: renders like `render` and returns the state for
+        `backward`. Persistent buffers come from `alloc` and must stay alive
+        until the backward has run (keep the allocator alive too: Mojo
+        destroys values after their last use)."""
+        var st = self._begin(splats, camera, background, sh_degree)
+        var n = max(st.n, 1)
+        st.primitive_ids = I32Ptr(unsafe_from_address=alloc.alloc(n * 4))
+        st.slot_of = I32Ptr(unsafe_from_address=alloc.alloc(n * 4))
+        st.records = F32Ptr(unsafe_from_address=alloc.alloc(n * REC * 4))
+        st.colors = F32Ptr(unsafe_from_address=alloc.alloc(n * 3 * 4))
+        var ms = SIMD[DType.float64, 8](0)
+        var t = Int(perf_counter_ns())
+        self._preprocess[True](splats, st)
+        var m = max(st.n_instances, 1)
+        st.n_bucket_blocks = bucket_bound(st.n_instances, st.n_tiles)
+        var pixels = st.width * st.height
+        st.inst_a = I32Ptr(unsafe_from_address=alloc.alloc(m * 4))
+        st.inst_b = I32Ptr(unsafe_from_address=alloc.alloc(m * 4))
+        st.tile_offsets = U32Ptr(unsafe_from_address=alloc.alloc((st.n_tiles + 1) * 4))
+        st.bucket_start = U32Ptr(unsafe_from_address=alloc.alloc((st.n_tiles + 1) * 4))
+        st.tile_max_n = U32Ptr(unsafe_from_address=alloc.alloc(st.n_tiles * 4))
+        st.bucket_tile = U32Ptr(unsafe_from_address=alloc.alloc(st.n_bucket_blocks * 4))
+        st.snapshots = F32Ptr(unsafe_from_address=alloc.alloc(st.n_bucket_blocks * Self.BLOCK * 16))
+        st.final_T = F32Ptr(unsafe_from_address=alloc.alloc(pixels * 4))
+        st.n_processed = U32Ptr(unsafe_from_address=alloc.alloc(pixels * 4))
+        self._raster[True](st, image, t, ms)
+        return st
+
+    def backward(
+        mut self,
+        splats: SplatParams,
+        st: ForwardState,
+        image: F32Ptr,
+        grad_image: F32Ptr,
+        grads: SplatParams,
+        densification: F32Ptr = placeholder[DType.float32](),
+        has_densification: Bool = False,
+    ) raises:
+        """Gradients of the loss w.r.t. the raw parameters.
+
+        `image` is the forward's output and `grad_image` dL/d(image), both
+        [H, W, 3]. `grads` points at gradient buffers laid out like `splats`
+        (same rest_stride); every element is written (culled Gaussians get
+        0), so they need no initialization. If
+        `has_densification`, `densification` [2, N] accumulates (count,
+        |dL/dmean2d| in NDC) per Gaussian, as used by 3DGS densification.
+        """
+        var ctx = self.ctx
+        var stream = ctx.stream()
+        var n = splats.count
+        var nv = max(st.n_visible, 1)
+        if nv * 9 > self.grad_cap:
+            self.grad_cap = Self._grow(self.grad_cap, nv * 9)
+            self.grad_scratch = ctx.enqueue_create_buffer[DType.float32](self.grad_cap)
+        var g_mean2d = dptr(self.grad_scratch)
+        var g_conic = g_mean2d.unsafe_offset(nv * 2)
+        var g_opacity = g_mean2d.unsafe_offset(nv * 5)
+        var g_color = g_mean2d.unsafe_offset(nv * 6)
+        fill_f32(ctx, stream, g_mean2d, 0.0, nv * 9)
+        if st.n_instances > 0:
+            blend_backward[Self.tile_w, Self.tile_h](
+                ctx, stream, st.n_bucket_blocks, st.tile_offsets, st.bucket_start,
+                st.bucket_tile, st.tile_max_n, st.instance_slots, st.records,
+                st.colors, st.background, image, grad_image, st.final_T,
+                st.n_processed, st.snapshots, g_mean2d, g_conic, g_opacity,
+                g_color, st.n_tiles, st.width, st.height,
+            )
+        preprocess_backward(
             ctx, stream, splats.means, splats.log_scales, splats.rotations,
-            splats.opacity_logits, splats.sh0, splats.sh_rest, camera.packed(),
-            dptr(self.depth_keys_a), dptr(self.slots_a), dptr(self.primitive_ids),
-            dptr(self.n_touched), dptr(self.records), dptr(self.colors),
-            dptr(self.counters), n, grid_w, grid_h,
-            sh_num_bases(degree), splats.rest_stride,
+            splats.sh_rest, st.cam, st.slot_of, g_mean2d, g_conic,
+            g_opacity, g_color, grads.means, grads.log_scales, grads.rotations,
+            grads.opacity_logits, grads.sh0, grads.sh_rest, densification,
+            has_densification, n, st.active_bases, splats.rest_stride,
+        )
+
+    # ------------------------------------------------------------------
+    # Pipeline stages
+    # ------------------------------------------------------------------
+
+    def _begin(
+        mut self,
+        splats: SplatParams,
+        camera: Camera,
+        background: SIMD[DType.float32, 4],
+        sh_degree: Int,
+    ) raises -> ForwardState:
+        var st = ForwardState()
+        st.n = splats.count
+        st.width = camera.width
+        st.height = camera.height
+        if st.width >= 65536 or st.height >= 65536:
+            raise Error("image dimensions must be < 65536")
+        st.grid_w = (st.width + Self.tile_w - 1) // Self.tile_w
+        st.grid_h = (st.height + Self.tile_h - 1) // Self.tile_h
+        st.n_tiles = st.grid_w * st.grid_h
+        st.active_bases = sh_num_bases(min(max(sh_degree, 0), splats.max_sh_degree()))
+        st.cam = camera.packed()
+        st.background = background
+        self._reserve_gaussians(max(st.n, 1))
+        self._reserve_scan(st.n_tiles)
+        return st
+
+    def _preprocess[train: Bool = False](mut self, splats: SplatParams, mut st: ForwardState) raises:
+        """Preprocess into st's slot arrays; one host sync for the counts."""
+        var ctx = self.ctx
+        self.counters.enqueue_fill(0)
+        preprocess[Self.tile_w, Self.tile_h, train](
+            ctx, ctx.stream(), splats.means, splats.log_scales, splats.rotations,
+            splats.opacity_logits, splats.sh0, splats.sh_rest, st.cam,
+            dptr(self.depth_keys_a), dptr(self.slots_a), st.primitive_ids,
+            dptr(self.n_touched), st.records, st.colors, dptr(self.counters),
+            st.slot_of, st.n, st.grid_w, st.grid_h, st.active_bases, splats.rest_stride,
         )
         ctx.enqueue_copy(self.host_counters, self.counters)
         ctx.synchronize()
-        var n_vis = Int(self.host_counters[0])
-        var m = Int(self.host_counters[1])
-        self.num_visible = n_vis
-        self.num_instances = m
-        self._mark(t, 0, ms)
+        st.n_visible = Int(self.host_counters[0])
+        st.n_instances = Int(self.host_counters[1])
+        self.num_visible = st.n_visible
+        self.num_instances = st.n_instances
+        self._reserve_instances(max(st.n_instances, 1))
+
+    def _raster[
+        train: Bool
+    ](mut self, mut st: ForwardState, image: F32Ptr, mut t: Int, mut ms: SIMD[DType.float64, 8]) raises:
+        var ctx = self.ctx
+        var stream = ctx.stream()
+        var n_vis = st.n_visible
+        var m = st.n_instances
+        var n_tiles = st.n_tiles
 
         # Depth sort of the visible Gaussians.
         var ids_sorted = dptr(self.slots_a)
@@ -328,7 +606,6 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         self._mark(t, 1, ms)
 
         # Instances in depth order.
-        self._reserve_instances(max(m, 1))
         var key_bits = tile_key_bits(n_tiles)
         if m > 0:
             depth_ordering(ctx, stream, ids_sorted, dptr(self.n_touched), dptr(self.offsets), n_vis)
@@ -339,48 +616,57 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
             if key_bits <= 16:
                 create_instances[DType.uint16, Self.tile_w, Self.tile_h](
                     ctx, stream, ids_sorted, dptr(self.offsets), dptr(self.n_touched),
-                    dptr(self.records), self._keys16(False), dptr(self.inst_a),
-                    grid_w, n_tiles, n_vis,
+                    st.records, self._keys16(False), st.inst_a, st.grid_w, n_tiles, n_vis,
                 )
             else:
                 create_instances[DType.uint32, Self.tile_w, Self.tile_h](
                     ctx, stream, ids_sorted, dptr(self.offsets), dptr(self.n_touched),
-                    dptr(self.records), dptr(self.keys_a), dptr(self.inst_a),
-                    grid_w, n_tiles, n_vis,
+                    st.records, dptr(self.keys_a), st.inst_a, st.grid_w, n_tiles, n_vis,
                 )
         self._mark(t, 2, ms)
 
         # Stable sort by tile, then per-tile ranges.
-        self.inst_in_b = False
+        var in_b = False
         if key_bits <= 16:
             if m > 1:
-                self.inst_in_b = radix_sort_pairs[DType.uint16](
-                    ctx, stream, self._keys16(False), dptr(self.inst_a),
-                    self._keys16(True), dptr(self.inst_b), dptr(self.sort_hist),
-                    dptr(self.sort_partials), dptr(self.sort_total), m, key_bits,
+                in_b = radix_sort_pairs[DType.uint16](
+                    ctx, stream, self._keys16(False), st.inst_a, self._keys16(True),
+                    st.inst_b, dptr(self.sort_hist), dptr(self.sort_partials),
+                    dptr(self.sort_total), m, key_bits,
                 )
-            tile_offsets[DType.uint16](
-                ctx, stream, self._keys16(self.inst_in_b), dptr(self.tile_offsets), m, n_tiles
-            )
+            tile_offsets[DType.uint16](ctx, stream, self._keys16(in_b), st.tile_offsets, m, n_tiles)
         else:
             if m > 1:
-                self.inst_in_b = radix_sort_pairs[DType.uint32](
-                    ctx, stream, dptr(self.keys_a), dptr(self.inst_a),
-                    dptr(self.keys_b), dptr(self.inst_b), dptr(self.sort_hist),
-                    dptr(self.sort_partials), dptr(self.sort_total), m, key_bits,
+                in_b = radix_sort_pairs[DType.uint32](
+                    ctx, stream, dptr(self.keys_a), st.inst_a, dptr(self.keys_b),
+                    st.inst_b, dptr(self.sort_hist), dptr(self.sort_partials),
+                    dptr(self.sort_total), m, key_bits,
                 )
-            var keys = dptr(self.keys_b) if self.inst_in_b else dptr(self.keys_a)
-            tile_offsets[DType.uint32](ctx, stream, keys, dptr(self.tile_offsets), m, n_tiles)
+            var keys = dptr(self.keys_b) if in_b else dptr(self.keys_a)
+            tile_offsets[DType.uint32](ctx, stream, keys, st.tile_offsets, m, n_tiles)
+        st.instance_slots = st.inst_b if in_b else st.inst_a
+        self.last_instances = st.instance_slots
         self._mark(t, 3, ms)
 
-        blend[Self.tile_w, Self.tile_h, Self.CDIM](
-            ctx, stream, dptr(self.tile_offsets), self.instance_ids(),
-            dptr(self.records), dptr(self.colors), background, image, W, H,
-        )
+        comptime if train:
+            # Bucket layout: ceil(instances / 32) per tile, scanned.
+            bucket_counts(ctx, stream, st.tile_offsets, st.bucket_start, n_tiles)
+            exclusive_scan[DType.uint32](
+                ctx, stream, st.bucket_start, st.bucket_start,
+                st.bucket_start.unsafe_offset(n_tiles), dptr(self.scan_partials), n_tiles,
+            )
+            blend[Self.tile_w, Self.tile_h, Self.CDIM, True](
+                ctx, stream, st.tile_offsets, st.instance_slots, st.records,
+                st.colors, st.background, image, st.width, st.height,
+                st.bucket_start, st.bucket_tile, st.snapshots, st.final_T,
+                st.n_processed, st.tile_max_n,
+            )
+        else:
+            blend[Self.tile_w, Self.tile_h, Self.CDIM](
+                ctx, stream, st.tile_offsets, st.instance_slots, st.records,
+                st.colors, st.background, image, st.width, st.height,
+            )
         self._mark(t, 4, ms)
-        if self.profile:
-            ms[7] = Float64(t - t_start) / 1e6
-            self.stage_ms = ms
 
     def _keys16(self, b: Bool) -> U16Ptr:
         var p = dptr(self.keys_b) if b else dptr(self.keys_a)

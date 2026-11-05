@@ -146,7 +146,7 @@ def will_contribute[
 
 
 def _preprocess_kernel[
-    tile_w: Int, tile_h: Int
+    tile_w: Int, tile_h: Int, train: Bool
 ](
     means: F32Ptr,  # [N, 3]
     log_scales: F32Ptr,  # [N, 3]
@@ -160,8 +160,9 @@ def _preprocess_kernel[
     primitive_ids: I32Ptr,  # out [slot] Gaussian index
     n_touched: U32Ptr,  # out [slot] exact tile count
     records: F32Ptr,  # out [slot, REC]
-    colors: F32Ptr,  # out [slot, 3]
+    colors: F32Ptr,  # out [slot, 3] SH color, not clamped
     counters: U32Ptr,  # [2] (n_visible, n_instances), zeroed by the caller
+    slot_of: I32Ptr,  # out [N] (train only): slot of each Gaussian, -1 if culled
     n: Int32,
     grid_w: Int32,
     grid_h: Int32,
@@ -173,6 +174,9 @@ def _preprocess_kernel[
     # Out-of-range threads stay alive (as inactive) for the warp-wide steps.
     var active = idx < Int(n)
     var g = min(idx, Int(n) - 1)
+    comptime if train:
+        if active:
+            slot_of[unsafe_offset=g] = -1  # overwritten below if visible
 
     var m0 = means[unsafe_offset=g * 3 + 0]
     var m1 = means[unsafe_offset=g * 3 + 1]
@@ -345,19 +349,22 @@ def _preprocess_kernel[
     depth_keys[unsafe_offset=slot] = UInt32(depth.to_bits())
     slots[unsafe_offset=slot] = Int32(slot)
     primitive_ids[unsafe_offset=slot] = Int32(g)
+    comptime if train:
+        slot_of[unsafe_offset=g] = Int32(slot)
     n_touched[unsafe_offset=slot] = UInt32(touched)
     store_record(records, slot, mx, my, ca, cb, cc, opacity, pack_bounds(x0, x1, y0, y1))
     var dir = SIMD[DType.float32, 4](
         m0 - cam[CAM_POS_X], m1 - cam[CAM_POS_Y], m2 - cam[CAM_POS_Z], 0.0
     )
+    # Stored unclamped: blending clamps at 0, the backward needs the mask.
     var rgb = sh_to_color(sh0, sh_rest, g, dir, Int(active_bases), Int(rest_stride))
-    colors[unsafe_offset=slot * 3 + 0] = max(rgb[0], 0.0)
-    colors[unsafe_offset=slot * 3 + 1] = max(rgb[1], 0.0)
-    colors[unsafe_offset=slot * 3 + 2] = max(rgb[2], 0.0)
+    colors[unsafe_offset=slot * 3 + 0] = rgb[0]
+    colors[unsafe_offset=slot * 3 + 1] = rgb[1]
+    colors[unsafe_offset=slot * 3 + 2] = rgb[2]
 
 
 def preprocess[
-    tile_w: Int, tile_h: Int
+    tile_w: Int, tile_h: Int, train: Bool = False
 ](
     ctx: DeviceContext,
     stream: DeviceStream,
@@ -375,6 +382,7 @@ def preprocess[
     records: F32Ptr,
     colors: F32Ptr,
     counters: U32Ptr,
+    slot_of: I32Ptr,
     n: Int,
     grid_w: Int,
     grid_h: Int,
@@ -384,9 +392,9 @@ def preprocess[
     if n == 0:
         return
     stream.enqueue_function(
-        ctx.compile_function[_preprocess_kernel[tile_w, tile_h]](),
+        ctx.compile_function[_preprocess_kernel[tile_w, tile_h, train]](),
         means, log_scales, rotations, opacity_logits, sh0, sh_rest, cam,
-        depth_keys, slots, primitive_ids, n_touched, records, colors, counters, Int32(n), Int32(grid_w), Int32(grid_h),
+        depth_keys, slots, primitive_ids, n_touched, records, colors, counters, slot_of, Int32(n), Int32(grid_w), Int32(grid_h),
         Int32(active_bases), Int32(rest_stride),
         grid_dim=num_blocks(n, PREPROCESS_BLOCK), block_dim=PREPROCESS_BLOCK,
     )
