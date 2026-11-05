@@ -31,9 +31,10 @@ The core library (`mojosplat/`) has **no Python dependency**: you can load a `.s
 | `mojosplat/gpu/` | Generic GPU building blocks: device scan, radix sort (16/32/64-bit keys), fills, memory arenas. |
 | `mojosplat/render/` | The `Rasterizer`: `preprocess`, `sh`, `instances`, `blend`, `blend_backward`, `preprocess_backward`. |
 | `mojosplat/model/` | Owning storage of the Gaussians (`SplatBuffers`). |
-| `mojosplat/io/` | Raw arrays, `.splat` scenes, PNG/PPM output. |
+| `mojosplat/io/` | Raw arrays, `.splat` and 3DGS `.ply` scenes, COLMAP binary models, JPEG decoding (libjpeg-turbo), PNG/PPM output. |
+| `mojosplat/train/` | Training: COLMAP datasets (loss, optimizer and trainer in progress). |
 | `tools/` | Command-line programs: `render.mojo`, `bench.mojo`. |
-| `tests/` | Mojo tests, mirroring the package (`tests/gpu/`, `tests/render/`). Golden data in `tests/data/golden` comes from an independent float64 brute-force reference and its autograd (`make_golden_splats.py`). |
+| `tests/` | Mojo tests, mirroring the package (`tests/gpu/`, `tests/render/`, `tests/io/`, `tests/train/`). Dataset tests use Mip-NeRF360 garden from `data/` (a local symlink to your datasets folder) and skip if it is missing. Golden data in `tests/data/golden` comes from an independent float64 brute-force reference and its autograd (`make_golden_splats.py`). |
 | `bindings/torch/` | `mojosplat_torch` Python package: the Mojo extension (`render_splats` with autograd), a gsplat reference (`render_gsplat`), pytest suite, and Python examples (viewer, orbit video, benchmark). |
 | `docs/design.md` | Architecture and roadmap. |
 
@@ -58,6 +59,7 @@ curl -L -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/res
 ```bash
 pixi run render                                  # examples/bicycle.splat -> render.png
 pixi run render my_scene.splat -o out.png -W 1920 -H 1080 --cam 0 0 4
+pixi run render trained.ply -o out.png              # standard 3DGS .ply files work too
 pixi run bench -n 200                            # full frame + per-stage timings
 pixi run test                                    # Mojo test-suite
 ```

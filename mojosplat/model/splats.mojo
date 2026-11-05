@@ -5,7 +5,8 @@ from std.math import log
 
 from ..core.splats import SplatParams
 from ..core.types import dptr
-from ..io.arrays import upload
+from ..io.arrays import download, upload
+from ..io.ply import HostSplats
 from ..io.splat import SplatScene
 from ..core.math import SH_C0
 
@@ -73,3 +74,21 @@ struct SplatBuffers(Movable):
             dptr(self.opacity_logits), dptr(self.sh0), dptr(self.sh_rest),
             self.count, self.rest_stride,
         )
+
+    @staticmethod
+    def from_host(ctx: DeviceContext, h: HostSplats) raises -> SplatBuffers:
+        return SplatBuffers(
+            ctx, h.means, h.log_scales, h.rotations, h.opacity_logits, h.sh0,
+            h.sh_rest, h.rest_stride,
+        )
+
+    def to_host(self, ctx: DeviceContext) raises -> HostSplats:
+        var h = HostSplats(self.count, self.rest_stride)
+        h.means = download(ctx, self.means, self.count * 3)
+        h.log_scales = download(ctx, self.log_scales, self.count * 3)
+        h.rotations = download(ctx, self.rotations, self.count * 4)
+        h.opacity_logits = download(ctx, self.opacity_logits, self.count)
+        h.sh0 = download(ctx, self.sh0, self.count * 3)
+        if self.rest_stride > 0:
+            h.sh_rest = download(ctx, self.sh_rest, self.count * self.rest_stride * 3)
+        return h^

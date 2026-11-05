@@ -169,7 +169,6 @@ def sh_to_color_backward(
     var xx_r = xr * xr
     var yy_r = yr * yr
     var zz_r = zr * zr
-    var n2 = xx_r + yy_r + zz_r
     var s = inv * inv * inv  # |dir|^-3
     return SIMD[DType.float32, 4](
         ((yy_r + zz_r) * gdx - xr * yr * gdy - xr * zr * gdz) * s,

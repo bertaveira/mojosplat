@@ -1,7 +1,7 @@
-"""Render a .splat file to an image, entirely in Mojo (no Python).
+"""Render a .splat or 3DGS .ply file to an image, entirely in Mojo (no Python).
 
 Usage:
-    pixi run render [scene.splat] [-o out.png|out.ppm] [-W 1280] [-H 720]
+    pixi run render [scene.splat|scene.ply] [-o out.png|out.ppm] [-W 1280] [-H 720]
                     [--cam X Y Z] [--fx F] [--raw out.f32]
 
 The camera has identity rotation (looking down +z) and world-to-camera
@@ -14,7 +14,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 
 from mojosplat import (
-    Camera, Rasterizer, SplatBuffers, download, load_splat, write_array, write_png, write_ppm,
+    Camera, Rasterizer, SplatBuffers, download, load_splat, read_ply, write_array, write_png, write_ppm,
 )
 
 
@@ -55,14 +55,16 @@ def main() raises:
     if fx <= 0:
         fx = Float32(W) * 0.9
 
-    print("Loading", path, "...")
-    var t0 = perf_counter_ns()
-    var scene = load_splat(path)
-    print("  ", scene.count, "Gaussians in", Float64(perf_counter_ns() - t0) / 1e6, "ms")
-
     var ctx = DeviceContext()
     print("Device:", ctx.name())
-    var splats = SplatBuffers.from_scene(ctx, scene)
+    print("Loading", path, "...")
+    var t0 = perf_counter_ns()
+    var splats: SplatBuffers
+    if path.endswith(".ply"):
+        splats = SplatBuffers.from_host(ctx, read_ply(path))
+    else:
+        splats = SplatBuffers.from_scene(ctx, load_splat(path))
+    print("  ", splats.count, "Gaussians in", Float64(perf_counter_ns() - t0) / 1e6, "ms")
     var camera = Camera.translated(cam_t[0], cam_t[1], cam_t[2], W, H, fx, fx)
     var image = ctx.enqueue_create_buffer[DType.float32](W * H * 3)
     var rasterizer = Rasterizer(ctx)

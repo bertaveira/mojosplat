@@ -16,8 +16,8 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   gpu/          generic GPU building blocks: scan, radix sort, fills, arenas
   render/       the rasterizer: forward (inference + training) and backward
   model/        owning storage of the Gaussians
-  io/           raw arrays, scene formats, images
-  train/        (planned) loss, metrics, optimizer, densification, dataset, trainer
+  io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
+  train/        dataset (done); loss, metrics, optimizer, densification, trainer (planned)
 tools/          command-line programs (render, bench; planned: train, eval)
 examples/       short API demos
 tests/          mirrors the package; golden data + generators in tests/data/
@@ -111,7 +111,7 @@ MCMC can be added later as a second strategy on the same store operations.
 ## Roadmap
 
 0. Refactor into this layout, remove the gsplat-compatible pipeline. **Done.**
-1. Data: COLMAP reader, JPEG decode, PLY read/write, dataset.
+1. Data: COLMAP reader, JPEG decode, PLY read/write, dataset. **Done.**
 2. SplatStore + Adam, fused L1+SSIM, PSNR, minimal trainer without
    densification (loss must drop on Mip-NeRF360 garden).
 3. Classic densification, schedules, kNN scale initialization; full 30k run

@@ -72,3 +72,24 @@ struct GoldenScene(Movable):
 
     def i32(self, file: String) raises -> List[Int32]:
         return read_array[DType.int32](self.path(file))
+
+
+def read_kv(path: String) raises -> Dict[String, String]:
+    """key=value lines (as written by the tests/data generators)."""
+    var out = Dict[String, String]()
+    var text: String
+    with open(path, "r") as f:
+        text = f.read()
+    for line in text.splitlines():
+        var i = line.find("=")
+        if i > 0:
+            out[String(line[byte=0:i])] = String(line[byte = i + 1 :])
+    return out^
+
+
+def floats(s: String) raises -> List[Float64]:
+    var out = List[Float64]()
+    for p in s.split(" "):
+        if p.byte_length() > 0:
+            out.append(Float64(String(p)))
+    return out^

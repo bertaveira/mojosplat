@@ -10,6 +10,7 @@ platforms = ["linux-64"]
 mojo = "==1.2.0"
 # MAX runtime: provides the `max.gpu` Mojo package and libmax (GPU driver layer)
 max-core = "==26.7.0"
+libjpeg-turbo = ">=3.1"
 
 [tasks]
 test = { cmd = "bash scripts/run_mojo_tests.sh", description = "Run the pure-Mojo test-suite" }
