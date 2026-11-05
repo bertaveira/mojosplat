@@ -1,7 +1,7 @@
 """Render a .splat file to an image, entirely in Mojo (no Python).
 
 Usage:
-    pixi run render [scene.splat] [-o out.ppm] [-W 1280] [-H 720]
+    pixi run render [scene.splat] [-o out.png|out.ppm] [-W 1280] [-H 720]
                     [--cam X Y Z] [--fx F] [--raw out.f32]
 
 The camera has identity rotation (looking down +z) and world-to-camera
@@ -14,14 +14,14 @@ from std.sys import argv
 from std.time import perf_counter_ns
 
 from mojosplat.camera import Camera
-from mojosplat.io import download, load_splat, write_array, write_ppm
+from mojosplat.io import download, load_splat, write_array, write_png, write_ppm
 from mojosplat.render import GaussianBuffers, Renderer
 
 
 def main() raises:
     var args = argv()
     var path = String("examples/bicycle.splat")
-    var out = String("render.ppm")
+    var out = String("render.png")
     var raw = String("")
     var W = 1280
     var H = 720
@@ -78,7 +78,10 @@ def main() raises:
     )
 
     var pixels = download(ctx, image, W * H * 3)
-    write_ppm(out, pixels, W, H)
+    if out.endswith(".ppm"):
+        write_ppm(out, pixels, W, H)
+    else:
+        write_png(out, pixels, W, H)
     print("Saved", out)
     if raw.byte_length() > 0:
         write_array(raw, pixels)

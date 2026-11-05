@@ -8,165 +8,104 @@ https://github.com/user-attachments/assets/ae4409a3-a656-4635-bb57-f22aca2f6141
 
 
 
-This project implements the three core kernels of 3D Gaussian Splatting:
-- **Projection**: Transform 3D Gaussians to 2D image space
-- **Binning**: Sort and assign Gaussians to screen tiles  
-- **Rasterization**: Render Gaussians to pixels with alpha blending
+MojoSplat implements the forward pass of 3D Gaussian Splatting **entirely in Mojo**:
 
-You can call the render function or any of the individual kernels directly from python (using pytorch). The mojo kernels will be compiled on the fly.
+- **Projection**: EWA projection of 3D Gaussians to 2D conics (matches gsplat's `fully_fused_projection`)
+- **Binning**: tile intersection counting, a device-wide prefix scan, and a GPU radix sort of `(tile, depth)` keys
+- **Rasterization**: tile-based front-to-back alpha compositing
 
-## Implementation Status
-
-| Kernel | PyTorch | GSplat | Mojo |
-|--------|---------|--------|------|
-| **Projection** | ✅ | ✅ | ✅ |
-| **Binning** | ✅ | ✅ | ✅ |
-| **Rasterization** | ❌* | ✅ | ✅ |
-
-*PyTorch rasterization falls back to GSplat implementation
+The core library (`mojosplat/`) has **no Python dependency**: you can load a `.splat` file, render it and write a PNG from a Mojo program. PyTorch support lives separately in [`bindings/torch`](bindings/torch) (in the spirit of tiny-cuda-nn), where torch tensors are handed to the Mojo kernels by pointer, without copies.
 
 > [!WARNING]
-> 1. This is NOT production ready.
-> 2. Performance is inferior to the GSplat CUDA version. But this gap is closing as the Mojo language and library mature. Performance improvements are welcome!
-> 3. Mojo is evolving very fast. Faster than I work on this (this is very much a side project). So thsi projects will likely not be up to date with latest Mojo all the time as each update requires a non insignificant amount of work.
+> 1. This is NOT production ready (forward pass only, NVIDIA GPUs only so far).
+> 2. Mojo is evolving fast. This version targets **Mojo 1.2 / MAX 26.7**.
+
+## Repository layout
+
+| Path | What |
+|------|------|
+| `mojosplat/` | Pure Mojo package: `projection`, `scan`, `sort`, `binning`, `rasterization`, `render` (`Renderer`), `camera`, `io` (`.splat` loader, PNG/PPM writer) |
+| `examples/` | Mojo programs: `render_splat.mojo`, `benchmark.mojo` |
+| `tests/` | Mojo test-suite, validated against golden data in `tests/data/golden` (generated from the previous, gsplat-matched pipeline) |
+| `bindings/torch/` | `mojosplat_torch` Python package: Mojo extension module + torch/gsplat reference backends, pytest suite, Python examples (viewer, orbit video, benchmark) |
 
 ## Installation
 
-### Standalone Development (with uv)
-
-For development or standalone usage, this project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+Requires an NVIDIA GPU and [pixi](https://pixi.sh) (Modular's recommended way to install Mojo).
 
 ```bash
-# Clone the repository
 git clone https://github.com/bertaveira/mojosplat.git
 cd mojosplat
-
-# Install dependencies and activate environment
-uv sync
+pixi install            # Mojo 1.2.0 + MAX 26.7.0 (GPU runtime), no torch
 ```
 
-### As a Dependency in Your Project
-
-#### Using pip with GitHub
+Get a scene to play with (antimatter15 `.splat` format):
 
 ```bash
-pip install git+https://github.com/bertaveira/mojosplat.git
+curl -L -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
 ```
 
-#### Using uv in your project
+## Pure Mojo usage
 
-Add to your `pyproject.toml`:
-
-```toml
-dependencies = [
-    "mojosplat @ git+https://github.com/bertaveira/mojosplat.git",
-    # ... your other dependencies
-]
+```bash
+pixi run render                                  # examples/bicycle.splat -> render.png
+pixi run render my_scene.splat -o out.png -W 1920 -H 1080 --cam 0 0 4
+pixi run bench -n 200                            # full pipeline + per-stage timings
+pixi run test                                    # Mojo test-suite
 ```
 
-#### Using pip requirements.txt
+From your own Mojo code:
 
-Add to your `requirements.txt`:
+```mojo
+from max.gpu.host import DeviceContext
+from mojosplat.camera import Camera
+from mojosplat.io import download, load_splat, write_png
+from mojosplat.render import GaussianBuffers, Renderer
 
+def main() raises:
+    var ctx = DeviceContext()
+    var gaussians = GaussianBuffers.from_scene(ctx, load_splat("examples/bicycle.splat"))
+    var camera = Camera.translated(0.0, 0.0, 5.0, 1280, 720, 1152.0, 1152.0)
+    var image = ctx.enqueue_create_buffer[DType.float32](1280 * 720 * 3)
+    var renderer = Renderer(ctx)          # owns and reuses all intermediate buffers
+    renderer.render(gaussians, camera, SIMD[DType.float32, 4](0.0), image)
+    write_png("out.png", download(ctx, image, 1280 * 720 * 3), 1280, 720)
 ```
-git+https://github.com/bertaveira/mojosplat.git
+
+Run it with `pixi run mojo run -I . my_program.mojo`.
+
+## PyTorch bindings
+
+```bash
+pixi install -e torch          # adds torch, gsplat (reference), pytest
+pixi run -e torch build-ext    # builds bindings/torch/mojosplat_torch/_mojosplat.so
+pixi run -e torch test-torch   # pytest suite: mojo vs gsplat vs torch backends
 ```
-
-#### Using conda/mamba environment.yml
-
-```yaml
-dependencies:
-  - pip
-  - pip:
-    - git+https://github.com/bertaveira/mojosplat.git
-```
-
-## Usage
-
-### Basic Rendering
-
-All inputs must be CUDA tensors (`float32`). `scales` are in log-space; `quats` are `(w, x, y, z)`; `opacities` shape is `(N,)`.
 
 ```python
 import torch
-from mojosplat.render import render_gaussians
-from mojosplat.utils import Camera
+from mojosplat_torch import Camera, render_gaussians
 
-# 3D Gaussian data (e.g. from your scene or .splat file)
-N = 1000
-device = "cuda"
-means3d = torch.randn(N, 3, device=device, dtype=torch.float32)
-scales = torch.randn(N, 3, device=device, dtype=torch.float32)   # log-space
-quats = torch.randn(N, 4, device=device, dtype=torch.float32)     # (w, x, y, z)
-quats = quats / quats.norm(dim=1, keepdim=True)
-opacities = torch.randn(N, device=device, dtype=torch.float32)   # (N,) not (N, 1)
-features = torch.randn(N, 3, device=device, dtype=torch.float32) # RGB
-
-# Camera: R (3,3) world-to-camera, T (3,) world-to-camera, H, W, fx, fy, cx, cy
-R = torch.eye(3, device=device, dtype=torch.float32)
-T = torch.tensor([0.0, 0.0, 5.0], device=device, dtype=torch.float32)
-camera = Camera(R=R, T=T, H=720, W=1280, fx=1152.0, fy=1152.0, cx=640.0, cy=360.0)
-
-# Render (backend: "mojo", "gsplat", or "torch")
-image = render_gaussians(means3d, scales, quats, opacities, features, camera, backend="mojo")
-# image shape: (H, W, C)
+# All inputs: float32 CUDA tensors on cuda:0. scales in log-space, quats (w, x, y, z), opacities (N,)
+camera = Camera(R=torch.eye(3, device="cuda"), T=torch.tensor([0.0, 0.0, 5.0], device="cuda"),
+                H=720, W=1280, fx=1152.0, fy=1152.0, cx=640.0, cy=360.0)
+image = render_gaussians(means3d, scales, quats, opacities, colors, camera, backend="mojo")  # (H, W, 3)
 ```
 
-### Running Tests
+The individual stages (`project_gaussians`, `bin_gaussians_to_tiles`, `rasterize_gaussians`) are also exposed, each with `torch`, `gsplat` and `mojo` backends. Python examples (interactive viser viewer, orbit video, benchmark) are in `bindings/torch/examples/`, e.g. `pixi run -e torch python bindings/torch/examples/viewer.py`.
 
-```bash
-# Run all tests
-uv run pytest
+Current limitations of the mojo backend: `tile_size=16`, 3 color channels, `cuda:0`, and each call synchronizes the torch stream (no stream overlap yet).
 
-# Run specific kernel tests
-uv run pytest tests/test_projection_mojo.py
-uv run pytest tests/test_binning.py  
-uv run pytest tests/test_rasterization.py
-uv run pytest tests/test_render.py
+## Performance
 
-# Run with verbose output
-uv run pytest -v
-```
-
-### Benchmarking
-
-```bash
-# Benchmark with a real .splat scene (e.g. bicycle)
-# First download a .splat file (antimatter15 binary format):
-curl -L -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
-
-# Then run the benchmark (defaults to examples/bicycle.splat if present)
-uv run python examples/benchmark_render.py examples/bicycle.splat
-```
-
-### Interactive viewer
-
-You can view a `.splat` scene in the browser with the interactive viewer (drag to orbit, scroll to zoom). Use the same `bicycle.splat` file as above:
-
-```bash
-# Ensure you have the scene file (see Benchmarking above for download URL)
-uv run python examples/viewer.py examples/bicycle.splat
-```
-
-Then open the URL printed in the terminal in your browser. The first render triggers JIT compilation (~30–60 s); subsequent renders are fast.
-
-### Performance (RTX 5090, bicycle.splat, 6.1M Gaussians, 1280×720)
-
-Benchmark: `uv run python examples/benchmark_render.py examples/bicycle.splat` (1000 runs full pipeline, 200 runs per kernel).
-
+Previous version (modular 26.2, torch-driven, RTX 5090, bicycle.splat, 6.1M Gaussians, 1280x720):
 
 | Backend    | Full pipeline       | Projection | Binning | Rasterization |
 | ---------- | ------------------- | ---------- | ------- | ------------- |
 | **gsplat** | 2.41 ms (414.9 FPS) | 0.43 ms    | 0.46 ms | 1.56 ms       |
 | **mojo**   | 2.68 ms (373.7 FPS) | 0.49 ms    | 0.73 ms | 1.55 ms       |
 
-
-The remaining gap is concentrated in the binning sort step. gsplat uses
-`cub::DeviceRadixSort::SortPairs` with an explicit `end_bit = 32 + tile_n_bits`
-(about 44 bits for 1280×720 with tile_size=16), whereas `torch.sort` has no API
-for limiting the radix bit range and processes the full 64-bit key — about
-2 additional radix-sort passes at ~30 µs each. Further gains require a custom
-Mojo radix sort or a PyTorch C++ extension that exposes CUB's begin/end bits.
+The binning gap came from `torch.sort` processing all 64 key bits. The 1.2 port replaces `torch.cumsum`/`torch.sort` with a Mojo device scan and an 8-bit LSD radix sort that only sorts `32 + bit_width(num_tiles)` bits (6 passes at 1280x720). Fresh numbers for the 1.2 version will be added once measured on an idle GPU.
 
 ## Contributing
 
@@ -174,8 +113,8 @@ Contributions are very welcome! This is an experimental project exploring the in
 
 Areas where help is needed:
 
-- **PyTorch Rasterization**: Native PyTorch rasterization kernel
-- **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. Also measure the overhead of the python to mojo connection.
+- **PyTorch Rasterization**: Native PyTorch rasterization reference (`torch` backend currently falls back to gsplat)
+- **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. 
 - **Backwards pass**: implement the mojo kernels for the backwards pass. This will allow the MojoSplat to be used in training the gaussian representation.
 - **Testing**: More comprehensive test coverage
 - **Unscented Projection**: Implmeent the Unscented projection from 3DGUT as an alternative to EWA
@@ -189,7 +128,7 @@ To contribute:
 
 ## License
 
-[MIT License](LICENSE)
+[MIT License](LICENSE). MojoSplat only depends on Mojo and MAX as installed packages; MAX is distributed by Modular under the [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE) (free, no device restrictions). Users install it themselves through pixi, so nothing from MAX is redistributed here.
 
 ## Acknowledgments
 
