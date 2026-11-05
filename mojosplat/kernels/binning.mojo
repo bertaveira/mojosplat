@@ -8,6 +8,54 @@ from memory import UnsafePointer
 comptime block_size: Int = 256
 
 
+fn isect_offset_kernel(
+    # Sorted packed keys: (tile_id << 32) | depth_u32 per intersection
+    sorted_keys_ptr: UnsafePointer[Scalar[DType.int64], MutAnyOrigin],  # [M]
+    offsets_ptr: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],      # [n_tiles + 1]
+    M: Int,        # number of intersections
+    n_tiles: Int,  # tile_width * tile_height
+):
+    """Compute per-tile start offsets from sorted intersection keys.
+
+    Port of gsplat's `intersect_offset_kernel` (IntersectTile.cu:209). For each
+    intersection, look at (sorted_keys[idx-1] >> 32) vs (sorted_keys[idx] >> 32)
+    — a change in tile_id means `idx` is the start of a new tile run, and every
+    tile between the previous one and this one is empty (start = idx).
+
+    One thread per intersection; boundary threads also fill trailing empty
+    tiles. After this kernel, offsets[t] = first index in sorted_keys where
+    tile_id == t (or end-of-array if the tile is empty).
+    """
+    var idx = block_idx.x * block_size + thread_idx.x
+    if idx >= M:
+        return
+
+    var tid_curr = Int(sorted_keys_ptr[idx] >> 32)
+
+    if idx == 0:
+        # Fill offsets[0 .. tid_curr] = 0 (tiles before the first non-empty one).
+        for i in range(0, tid_curr + 1):
+            offsets_ptr[i] = 0
+        # If this is also the last thread (M == 1), fill the trailing region.
+        if M == 1:
+            for i in range(tid_curr + 1, n_tiles + 1):
+                offsets_ptr[i] = Int32(M)
+        return
+
+    if idx == M - 1:
+        # Fill offsets[tid_curr+1 .. n_tiles] = M (tiles after the last one).
+        for i in range(tid_curr + 1, n_tiles + 1):
+            offsets_ptr[i] = Int32(M)
+        # Also handle the boundary at idx (falls through to the boundary write).
+
+    var tid_prev = Int(sorted_keys_ptr[idx - 1] >> 32)
+    if tid_prev != tid_curr:
+        # We crossed from tile tid_prev to tid_curr. Every tile boundary in
+        # (tid_prev, tid_curr] starts at position idx.
+        for i in range(tid_prev + 1, tid_curr + 1):
+            offsets_ptr[i] = Int32(idx)
+
+
 fn isect_count_kernel[tile_size: Int](
     means2d_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],  # [N * 2]
     radii_ptr: UnsafePointer[Scalar[DType.int32], MutAnyOrigin],      # [N * 2]
@@ -22,7 +70,7 @@ fn isect_count_kernel[tile_size: Int](
     var radius_x = Int(radii_ptr[g * 2 + 0])
     var radius_y = Int(radii_ptr[g * 2 + 1])
 
-    if radius_x <= 0 and radius_y <= 0:
+    if radius_x <= 0 or radius_y <= 0:
         tiles_per_gauss_ptr[g] = 0
         return
 
@@ -62,7 +110,7 @@ fn isect_write_kernel[tile_size: Int](
     var radius_x = Int(radii_ptr[g * 2 + 0])
     var radius_y = Int(radii_ptr[g * 2 + 1])
 
-    if radius_x <= 0 and radius_y <= 0:
+    if radius_x <= 0 or radius_y <= 0:
         return
 
     var tile_width = Int(tile_dims_ptr[0])
@@ -105,13 +153,13 @@ struct IsectCount:
         target: StaticString,
     ](
         # Dummy DPS output (1 scalar) — prevents dead code elimination
-        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        dummy: OutputTensor[dtype=DType.float32, rank=1, ...],
         # "Output" passed as InputTensor (written in-place via rebind)
-        tiles_per_gauss: InputTensor[dtype=DType.int32, rank=1],  # (N,)
+        tiles_per_gauss: InputTensor[dtype=DType.int32, rank=1, ...],  # (N,)
         # Inputs
-        means2d:   InputTensor[dtype=DType.float32, rank=2],  # (N, 2)
-        radii:     InputTensor[dtype=DType.int32,   rank=2],  # (N, 2)
-        tile_dims: InputTensor[dtype=DType.int32,   rank=1],  # (2,)
+        means2d:   InputTensor[dtype=DType.float32, rank=2, ...],  # (N, 2)
+        radii:     InputTensor[dtype=DType.int32,   rank=2, ...],  # (N, 2)
+        tile_dims: InputTensor[dtype=DType.int32,   rank=1, ...],  # (2,)
         ctx: DeviceContextPtr
     ) raises:
         var N = means2d.dim_size(0)
@@ -137,6 +185,45 @@ struct IsectCount:
             raise Error("Unsupported target:", target)
 
 
+@compiler.register("isect_offset")
+struct IsectOffset:
+    """Port of gsplat's `intersect_offset_kernel` — replaces Python-side
+    `searchsorted(arange(n_tiles+1))` + `torch.stack` with a single Mojo
+    kernel. n_tiles is inferred from the offsets tensor length (n_tiles+1)."""
+
+    @staticmethod
+    fn execute[
+        target: StaticString,
+    ](
+        # Dummy DPS output (1 scalar) — prevents dead code elimination
+        dummy: OutputTensor[dtype=DType.float32, rank=1, ...],
+        # "Output" passed as InputTensor (written in-place via rebind)
+        offsets: InputTensor[dtype=DType.int32, rank=1, ...],     # (n_tiles + 1,)
+        # Inputs
+        sorted_keys: InputTensor[dtype=DType.int64, rank=1, ...], # (M,)
+        ctx: DeviceContextPtr
+    ) raises:
+        var M = sorted_keys.dim_size(0)
+        var n_tiles = offsets.dim_size(0) - 1
+
+        var sorted_keys_ptr = rebind[UnsafePointer[Scalar[DType.int64], MutAnyOrigin]](sorted_keys.to_layout_tensor().ptr)
+        var offsets_ptr     = rebind[UnsafePointer[Scalar[DType.int32], MutAnyOrigin]](offsets.to_layout_tensor().ptr)
+
+        @parameter
+        if target == "cpu":
+            raise Error("IsectOffset CPU target not implemented.")
+        elif target == "gpu":
+            var gpu_ctx = ctx.get_device_context()
+            var grid = (ceildiv(M, block_size),)
+            var block = (block_size,)
+            gpu_ctx.enqueue_function_unchecked[isect_offset_kernel](
+                sorted_keys_ptr, offsets_ptr, M, n_tiles,
+                grid_dim=grid, block_dim=block,
+            )
+        else:
+            raise Error("Unsupported target:", target)
+
+
 @compiler.register("isect_write")
 struct IsectWrite:
     @staticmethod
@@ -145,16 +232,16 @@ struct IsectWrite:
         target: StaticString,
     ](
         # Dummy DPS output (1 scalar) — prevents dead code elimination
-        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        dummy: OutputTensor[dtype=DType.float32, rank=1, ...],
         # "Outputs" passed as InputTensor (written in-place via rebind)
-        isect_ids:   InputTensor[dtype=DType.int64, rank=1],  # (M,)
-        flatten_ids: InputTensor[dtype=DType.int32, rank=1],  # (M,)
+        isect_ids:   InputTensor[dtype=DType.int64, rank=1, ...],  # (M,)
+        flatten_ids: InputTensor[dtype=DType.int32, rank=1, ...],  # (M,)
         # Inputs
-        means2d:   InputTensor[dtype=DType.float32, rank=2],  # (N, 2)
-        radii:     InputTensor[dtype=DType.int32,   rank=2],  # (N, 2)
-        depths:    InputTensor[dtype=DType.float32, rank=1],  # (N,)
-        offsets:   InputTensor[dtype=DType.int32,   rank=1],  # (N,)
-        tile_dims: InputTensor[dtype=DType.int32,   rank=1],  # (2,)
+        means2d:   InputTensor[dtype=DType.float32, rank=2, ...],  # (N, 2)
+        radii:     InputTensor[dtype=DType.int32,   rank=2, ...],  # (N, 2)
+        depths:    InputTensor[dtype=DType.float32, rank=1, ...],  # (N,)
+        offsets:   InputTensor[dtype=DType.int32,   rank=1, ...],  # (N,)
+        tile_dims: InputTensor[dtype=DType.int32,   rank=1, ...],  # (2,)
         ctx: DeviceContextPtr
     ) raises:
         var N = means2d.dim_size(0)

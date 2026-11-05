@@ -90,7 +90,7 @@ fn rasterize_to_pixels_3dgs_fwd_kernel[
     # Pixel Transmittance
     var T: Float32 = 1.0
     # Pixel Color: InlineArray stays in registers (no AddressSpace.GENERIC spilling)
-    var pix_out = InlineArray[Float32, CDIM](0.0)
+    var pix_out = InlineArray[Float32, CDIM](fill=0.0)
     var last_id: Int32 = -1
 
     if thread_id == 0:
@@ -192,17 +192,17 @@ struct RasterizeToPixels3DGSFwd:
         target: StaticString,
     ](
         # Dummy DPS output (1 scalar) — prevents dead code elimination
-        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        dummy: OutputTensor[dtype=DType.float32, rank=1, ...],
         # "Output" passed as InputTensor (written in-place via rebind)
-        render_colors: InputTensor[dtype=DType.float32, rank=4],  # (C, H, W, CDIM)
+        render_colors: InputTensor[dtype=DType.float32, rank=4, ...],  # (C, H, W, CDIM)
         # Inputs
-        means2d:     InputTensor[dtype=DType.float32, rank=3],
-        conics:      InputTensor[dtype=DType.float32, rank=3],
-        colors:      InputTensor[dtype=DType.float32, rank=3],
-        opacities:   InputTensor[dtype=DType.float32, rank=2],
-        backgrounds: InputTensor[dtype=DType.float32, rank=2],
-        tile_ranges: InputTensor[dtype=DType.int32, rank=4],
-        flatten_ids: InputTensor[dtype=DType.int32, rank=2],
+        means2d:     InputTensor[dtype=DType.float32, rank=3, ...],
+        conics:      InputTensor[dtype=DType.float32, rank=3, ...],
+        colors:      InputTensor[dtype=DType.float32, rank=3, ...],
+        opacities:   InputTensor[dtype=DType.float32, rank=2, ...],
+        backgrounds: InputTensor[dtype=DType.float32, rank=2, ...],
+        tile_ranges: InputTensor[dtype=DType.int32, rank=4, ...],
+        flatten_ids: InputTensor[dtype=DType.int32, rank=2, ...],
         # Context
         ctx: DeviceContextPtr
     ) raises:

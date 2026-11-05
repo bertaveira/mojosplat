@@ -158,10 +158,15 @@ Benchmark: `uv run python examples/benchmark_render.py examples/bicycle.splat` (
 | Backend    | Full pipeline       | Projection | Binning | Rasterization |
 | ---------- | ------------------- | ---------- | ------- | ------------- |
 | **gsplat** | 2.41 ms (414.9 FPS) | 0.43 ms    | 0.46 ms | 1.56 ms       |
-| **mojo**   | 2.75 ms (363.6 FPS) | 0.48 ms    | 0.87 ms | 1.55 ms       |
+| **mojo**   | 2.68 ms (373.7 FPS) | 0.49 ms    | 0.73 ms | 1.55 ms       |
 
 
-There is still a gap between the performance of the Mojo and GSplat kernels. Some extra work is needed to get closer to the GSplat performance. In some cases the Mojo library does not expose certain instructions that are used in the GSplat kernels, so one can expect to see a performance boost as the language and library mature.
+The remaining gap is concentrated in the binning sort step. gsplat uses
+`cub::DeviceRadixSort::SortPairs` with an explicit `end_bit = 32 + tile_n_bits`
+(about 44 bits for 1280×720 with tile_size=16), whereas `torch.sort` has no API
+for limiting the radix bit range and processes the full 64-bit key — about
+2 additional radix-sort passes at ~30 µs each. Further gains require a custom
+Mojo radix sort or a PyTorch C++ extension that exposes CUB's begin/end bits.
 
 ## Contributing
 
