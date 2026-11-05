@@ -191,3 +191,6 @@ output/
 .pixi/
 *.mojoc
 bindings/torch/mojosplat_torch/*.so
+
+# Local datasets (symlink to ~/datasets)
+/data
