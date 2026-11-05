@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from typing_extensions import Literal
 
 from pathlib import Path
-from max.torch import graph_op
+from max.experimental.torch import graph_op
 from max.graph import ops as graph_ops, TensorType as GraphTensorType, DeviceRef
 from max.dtype import DType as MaxDType
 from .utils import Camera

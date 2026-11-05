@@ -2,7 +2,7 @@ from pathlib import Path
 import torch
 from typing_extensions import Literal
 
-from max.torch import graph_op
+from max.experimental.torch import graph_op
 from max.graph import ops as graph_ops, TensorType as GraphTensorType, DeviceRef
 from max.dtype import DType as MaxDType
 from .utils import Camera

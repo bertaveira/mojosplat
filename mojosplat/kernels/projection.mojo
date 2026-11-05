@@ -213,19 +213,19 @@ struct ProjectGaussiansInplace:
         target: StaticString,
     ](
         # Dummy DPS output (1 scalar) — prevents dead code elimination
-        dummy: OutputTensor[dtype=DType.float32, rank=1],
+        dummy: OutputTensor[dtype=DType.float32, rank=1, ...],
         # "Outputs" passed as InputTensor (written in-place via rebind)
-        means2d: InputTensor[dtype=DType.float32, rank=3],
-        conics:  InputTensor[dtype=DType.float32, rank=3],
-        depths:  InputTensor[dtype=DType.float32, rank=2],
-        radii:   InputTensor[dtype=DType.int32,   rank=3],
+        means2d: InputTensor[dtype=DType.float32, rank=3, ...],
+        conics:  InputTensor[dtype=DType.float32, rank=3, ...],
+        depths:  InputTensor[dtype=DType.float32, rank=2, ...],
+        radii:   InputTensor[dtype=DType.int32,   rank=3, ...],
         # Inputs
-        means3d:       InputTensor[dtype=DType.float32, rank=2],
-        scales:        InputTensor[dtype=DType.float32, rank=2],
-        quats:         InputTensor[dtype=DType.float32, rank=2],
-        opacities:     InputTensor[dtype=DType.float32, rank=1],
-        view_matrices: InputTensor[dtype=DType.float32, rank=3],
-        ks:            InputTensor[dtype=DType.float32, rank=2],
+        means3d:       InputTensor[dtype=DType.float32, rank=2, ...],
+        scales:        InputTensor[dtype=DType.float32, rank=2, ...],
+        quats:         InputTensor[dtype=DType.float32, rank=2, ...],
+        opacities:     InputTensor[dtype=DType.float32, rank=1, ...],
+        view_matrices: InputTensor[dtype=DType.float32, rank=3, ...],
+        ks:            InputTensor[dtype=DType.float32, rank=2, ...],
         # Context
         ctx: DeviceContextPtr
     ) raises:
@@ -267,17 +267,17 @@ struct ProjectGaussians:
         target: StaticString,
     ](
         # Outputs
-        means2d: OutputTensor[dtype=DType.float32, rank=3],
-        conics:  OutputTensor[dtype=DType.float32, rank=3],
-        depths:  OutputTensor[dtype=DType.float32, rank=2],
-        radii:   OutputTensor[dtype=DType.int32,   rank=3],
+        means2d: OutputTensor[dtype=DType.float32, rank=3, ...],
+        conics:  OutputTensor[dtype=DType.float32, rank=3, ...],
+        depths:  OutputTensor[dtype=DType.float32, rank=2, ...],
+        radii:   OutputTensor[dtype=DType.int32,   rank=3, ...],
         # Inputs
-        means3d:       InputTensor[dtype=DType.float32, rank=2],
-        scales:        InputTensor[dtype=DType.float32, rank=2],
-        quats:         InputTensor[dtype=DType.float32, rank=2],
-        opacities:     InputTensor[dtype=DType.float32, rank=1],
-        view_matrices: InputTensor[dtype=DType.float32, rank=3],
-        ks:            InputTensor[dtype=DType.float32, rank=2],  # (C, 11)
+        means3d:       InputTensor[dtype=DType.float32, rank=2, ...],
+        scales:        InputTensor[dtype=DType.float32, rank=2, ...],
+        quats:         InputTensor[dtype=DType.float32, rank=2, ...],
+        opacities:     InputTensor[dtype=DType.float32, rank=1, ...],
+        view_matrices: InputTensor[dtype=DType.float32, rank=3, ...],
+        ks:            InputTensor[dtype=DType.float32, rank=2, ...],  # (C, 11)
         # Context
         ctx: DeviceContextPtr
     ) raises:

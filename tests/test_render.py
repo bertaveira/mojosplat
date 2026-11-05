@@ -61,11 +61,13 @@ def test_render_single_gaussian_center(device, default_camera, background_color)
     N = 1
     H, W = default_camera.H, default_camera.W
     center_x, center_y = W // 2, H // 2
-    # Position Gaussian closer to camera and with reasonable opacity
-    means3d = torch.tensor([[0.0, 0.0, 2.0]], device=device, dtype=torch.float32)  # Closer to camera
-    scales = torch.log(torch.tensor([[0.1, 0.1, 0.1]], device=device, dtype=torch.float32))  # Slightly larger
+    # Camera is at world z=5 (T=[0,0,-5]), so Gaussian must be at z>5.
+    # z=7 → camera_z=2, projects to (cx, cy) = (32, 32) with fx=fy=300.
+    means3d = torch.tensor([[0.0, 0.0, 7.0]], device=device, dtype=torch.float32)
+    # scale=0.02, depth=2 → radius ≈ fx*scale/z = 300*0.02/2 ≈ 3px, well within the 64px image
+    scales = torch.log(torch.tensor([[0.02, 0.02, 0.02]], device=device, dtype=torch.float32))
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32)
-    opacities = torch.tensor([0.8], device=device, dtype=torch.float32)  # Reasonable opacity
+    opacities = torch.tensor([0.8], device=device, dtype=torch.float32)
     gauss_color = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32, device=device)
 
     rendered_image = render_gaussians(
@@ -89,11 +91,12 @@ def test_render_two_gaussians(device, default_camera, background_color):
     """Test rendering two Gaussians with different colors."""
     N = 2
     H, W = default_camera.H, default_camera.W
-    # Position Gaussians closer to camera and spread them out more
-    means3d = torch.tensor([[-1.0, 0.0, 2.0], [1.0, 0.0, 2.0]], device=device, dtype=torch.float32)
-    scales = torch.log(torch.tensor([[0.1, 0.1, 0.1]], device=device, dtype=torch.float32)).expand(N, -1)
+    # Camera at world z=5 (T=[0,0,-5]). Gaussians at z=7 → camera_z=2.
+    # x=±0.1 → x_2d = 300*(±0.1/2) + 32 = 32±15 = (17, 47): both within 64px image.
+    means3d = torch.tensor([[-0.1, 0.0, 7.0], [0.1, 0.0, 7.0]], device=device, dtype=torch.float32)
+    scales = torch.log(torch.tensor([[0.2, 0.2, 0.2]], device=device, dtype=torch.float32)).expand(N, -1)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32).expand(N, -1)
-    opacities = torch.tensor([0.8, 0.8], device=device, dtype=torch.float32)  # Reasonable opacities
+    opacities = torch.tensor([0.8, 0.8], device=device, dtype=torch.float32)
     features = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32, device=device)
 
     rendered_image = render_gaussians(
