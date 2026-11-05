@@ -15,28 +15,9 @@ import numpy as np
 import torch
 from PIL import Image
 
-from mojosplat_torch.render import render_gaussians
-from mojosplat_torch.utils import Camera
+from mojosplat_torch import Camera, load_splat, render_gsplat, render_splats
 
-
-# ---------------------------------------------------------------------------
-# .splat loader (identical to render_splat.py)
-# ---------------------------------------------------------------------------
-
-def load_splat(path: str):
-    data = Path(path).read_bytes()
-    n = len(data) // 32
-    if n == 0:
-        raise ValueError(f"Empty or invalid .splat file: {path}")
-    raw = np.frombuffer(data, dtype=np.uint8).reshape(n, 32)
-    positions  = raw[:, 0:12].view(np.float32).reshape(n, 3).copy()
-    scales_exp = raw[:, 12:24].view(np.float32).reshape(n, 3).copy()
-    scales     = np.log(np.clip(scales_exp, 1e-10, None))
-    rgba       = raw[:, 24:28].astype(np.float32) / 255.0
-    rot_raw    = raw[:, 28:32].astype(np.float32)
-    quats      = (rot_raw - 128.0) / 128.0
-    quats     /= np.clip(np.linalg.norm(quats, axis=1, keepdims=True), 1e-10, None)
-    return positions, scales, rgba[:, :3], rgba[:, 3], quats
+RENDERERS = {"mojo": render_splats, "gsplat": render_gsplat}
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +69,7 @@ def main():
                         metavar=("X", "Y", "Z"),
                         help="Orbit center (default: auto-detected near ground level)")
     parser.add_argument("--backend", "-b", default="mojo",
-                        choices=["mojo", "gsplat", "torch"])
+                        choices=list(RENDERERS))
     parser.add_argument("--background", nargs=3, type=float,
                         default=[1.0, 1.0, 1.0], metavar=("R", "G", "B"))
     args = parser.parse_args()
@@ -99,15 +80,11 @@ def main():
 
     # ---- Load scene --------------------------------------------------------
     print(f"Loading {args.splat} …")
-    positions, scales, rgb, opacity, quats = load_splat(args.splat)
+    params = load_splat(args.splat, device)
+    positions = params["means"].cpu().numpy()
     print(f"  {len(positions):,} Gaussians")
-
-    means3d    = torch.tensor(positions, dtype=torch.float32, device=device)
-    scales_t   = torch.tensor(scales,    dtype=torch.float32, device=device)
-    quats_t    = torch.tensor(quats,     dtype=torch.float32, device=device)
-    opacity_t  = torch.tensor(opacity,   dtype=torch.float32, device=device)
-    features_t = torch.tensor(rgb,       dtype=torch.float32, device=device)
-    bg         = torch.tensor(args.background, dtype=torch.float32, device=device)
+    bg = torch.tensor(args.background, dtype=torch.float32, device=device)
+    render = RENDERERS[args.backend]
 
     W, H = args.width, args.height
     fx = fy = W * 0.9   # square pixels, ~62° horizontal FoV for 800 px
@@ -132,8 +109,7 @@ def main():
                   T=torch.tensor(T0, device=device),
                   H=H, W=W, fx=fx, fy=fy, cx=W/2, cy=H/2)
     with torch.no_grad():
-        render_gaussians(means3d, scales_t, quats_t, opacity_t, features_t,
-                         _cam, background_color=bg, backend=args.backend)
+        render(**params, camera=_cam, background=bg)
     print("  JIT ready.")
 
     # ---- Render frames -----------------------------------------------------
@@ -153,8 +129,7 @@ def main():
             H=H, W=W, fx=fx, fy=fy, cx=W/2, cy=H/2,
         )
         with torch.no_grad():
-            img = render_gaussians(means3d, scales_t, quats_t, opacity_t, features_t,
-                                   cam, background_color=bg, backend=args.backend)
+            img = render(**params, camera=cam, background=bg)
         frames.append((img.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
         if (i + 1) % 20 == 0 or i == args.frames - 1:
             print(f"  {i+1}/{args.frames}")

@@ -15,23 +15,15 @@ from std.python.bindings import PythonModuleBuilder
 
 from max.gpu.host import DeviceContext
 
-from mojosplat.binning import copy_i32
-from mojosplat.camera import Camera
-from mojosplat.common import F32Ptr, I32Ptr
-from mojosplat.common import I32Ptr as _I32, U32Ptr
-from mojosplat.rasterizer import ForwardState, Rasterizer, SplatParams, StateAllocator
-from mojosplat.render import Gaussians, Renderer
-
-comptime TILE_SIZE = 16
-comptime CHANNELS = 3
+from mojosplat.core.camera import Camera
+from mojosplat.core.splats import SplatParams
+from mojosplat.core.types import F32Ptr, I32Ptr, U32Ptr
+from mojosplat.gpu.arena import StateAllocator
+from mojosplat.render.rasterizer import ForwardState, Rasterizer
 
 
 def _f32(obj: PythonObject) raises -> F32Ptr:
     return F32Ptr(unsafe_from_address=Int(py=obj))
-
-
-def _i32(obj: PythonObject) raises -> I32Ptr:
-    return I32Ptr(unsafe_from_address=Int(py=obj))
 
 
 def _camera(cam: PythonObject) raises -> Camera:
@@ -116,13 +108,13 @@ def _state_from_py(t: PythonObject, cam: Camera, bg: SIMD[DType.float32, 4]) rai
     st.grid_w = Int(py=t[7])
     st.grid_h = Int(py=t[8])
     st.active_bases = Int(py=t[9])
-    st.primitive_ids = _I32(unsafe_from_address=Int(py=t[10]))
-    st.slot_of = _I32(unsafe_from_address=Int(py=t[11]))
+    st.primitive_ids = I32Ptr(unsafe_from_address=Int(py=t[10]))
+    st.slot_of = I32Ptr(unsafe_from_address=Int(py=t[11]))
     st.records = _f32(t[12])
     st.colors = _f32(t[13])
-    st.instance_slots = _I32(unsafe_from_address=Int(py=t[14]))
-    st.inst_a = _I32(unsafe_from_address=Int(py=t[15]))
-    st.inst_b = _I32(unsafe_from_address=Int(py=t[16]))
+    st.instance_slots = I32Ptr(unsafe_from_address=Int(py=t[14]))
+    st.inst_a = I32Ptr(unsafe_from_address=Int(py=t[15]))
+    st.inst_b = I32Ptr(unsafe_from_address=Int(py=t[16]))
     st.tile_offsets = _u32(t[17])
     st.bucket_start = _u32(t[18])
     st.bucket_tile = _u32(t[19])
@@ -136,18 +128,15 @@ def _state_from_py(t: PythonObject, cam: Camera, bg: SIMD[DType.float32, 4]) rai
 
 
 struct Context(Movable, Writable):
-    """Holds a Mojo DeviceContext (GPU 0) and the renderers' workspaces."""
+    """Holds a Mojo DeviceContext (GPU 0) and the rasterizer's workspaces."""
 
-    var renderer: Renderer[TILE_SIZE, CHANNELS]  # gsplat-compatible stages
-    var rasterizer: Rasterizer[]  # Faster-GS style forward
+    var rasterizer: Rasterizer[]
 
     def __init__(out self) raises:
-        var ctx = DeviceContext()
-        self.renderer = Renderer[TILE_SIZE, CHANNELS](ctx)
-        self.rasterizer = Rasterizer(ctx)
+        self.rasterizer = Rasterizer(DeviceContext())
 
     def write_to(self, mut writer: Some[Writer]):
-        writer.write("mojosplat Context(tile_size=", TILE_SIZE, ", channels=", CHANNELS, ")")
+        writer.write("mojosplat Context(tile=", Rasterizer[].tile_w, "x", Rasterizer[].tile_h, ")")
 
     def write_repr_to(self, mut writer: Some[Writer]):
         self.write_to(writer)
@@ -155,91 +144,6 @@ struct Context(Movable, Writable):
     @staticmethod
     def py_init(out self: Context, args: PythonObject, kwargs: PythonObject) raises:
         self = Context()
-
-    @staticmethod
-    def project(
-        self_: Pointer[Self, MutUnsafeAnyOrigin],
-        gaussian_ptrs: PythonObject,  # (means3d, scales, quats, opacities)
-        out_ptrs: PythonObject,  # (means2d, conics, depths, radii)
-        camera: PythonObject,
-        n: PythonObject,
-    ) raises -> PythonObject:
-        var g = Gaussians(
-            _f32(gaussian_ptrs[0]), _f32(gaussian_ptrs[1]), _f32(gaussian_ptrs[2]),
-            _f32(gaussian_ptrs[3]), _f32(gaussian_ptrs[3]), Int(py=n),
-        )
-        self_[].renderer.project(
-            g, _camera(camera), _f32(out_ptrs[0]), _f32(out_ptrs[1]),
-            _f32(out_ptrs[2]), _i32(out_ptrs[3]),
-        )
-        self_[].renderer.ctx.synchronize()
-        return PythonObject(None)
-
-    @staticmethod
-    def bin(
-        self_: Pointer[Self, MutUnsafeAnyOrigin],
-        in_ptrs: PythonObject,  # (means2d, radii, depths)
-        n: PythonObject,
-        width: PythonObject,
-        height: PythonObject,
-    ) raises -> PythonObject:
-        """Bin into renderer memory; returns M. Fetch with `read_bins`."""
-        var m = self_[].renderer.bin(
-            _f32(in_ptrs[0]), _i32(in_ptrs[1]), _f32(in_ptrs[2]),
-            Int(py=n), Int(py=width), Int(py=height),
-        )
-        self_[].renderer.ctx.synchronize()
-        return PythonObject(m)
-
-    @staticmethod
-    def read_bins(
-        self_: Pointer[Self, MutUnsafeAnyOrigin],
-        ids_ptr: PythonObject,  # out int32 [M]
-        offsets_ptr: PythonObject,  # out int32 [num_tiles + 1]
-        num_tiles: PythonObject,
-    ) raises -> PythonObject:
-        """Copy the last binning result into torch-owned buffers."""
-        ref r = self_[].renderer
-        var ctx = r.ctx
-        copy_i32(ctx, ctx.stream(), r.sorted_ids(), _i32(ids_ptr), r.num_intersections)
-        copy_i32(ctx, ctx.stream(), r.tile_offsets_ptr(), _i32(offsets_ptr), Int(py=num_tiles) + 1)
-        ctx.synchronize()
-        return PythonObject(None)
-
-    @staticmethod
-    def rasterize(
-        self_: Pointer[Self, MutUnsafeAnyOrigin],
-        ptrs: PythonObject,  # (means2d, conics, colors, opacities, tile_offsets, ids, image)
-        background: PythonObject,
-        width: PythonObject,
-        height: PythonObject,
-    ) raises -> PythonObject:
-        self_[].renderer.rasterize(
-            _f32(ptrs[0]), _f32(ptrs[1]), _f32(ptrs[2]), _f32(ptrs[3]),
-            _background(background), _i32(ptrs[4]), _i32(ptrs[5]), _f32(ptrs[6]),
-            Int(py=width), Int(py=height),
-        )
-        self_[].renderer.ctx.synchronize()
-        return PythonObject(None)
-
-    @staticmethod
-    def render(
-        self_: Pointer[Self, MutUnsafeAnyOrigin],
-        gaussian_ptrs: PythonObject,  # (means3d, scales, quats, opacities, colors)
-        image_ptr: PythonObject,
-        camera: PythonObject,
-        background: PythonObject,
-        n: PythonObject,
-    ) raises -> PythonObject:
-        """Full pipeline; returns the number of tile intersections."""
-        var g = Gaussians(
-            _f32(gaussian_ptrs[0]), _f32(gaussian_ptrs[1]), _f32(gaussian_ptrs[2]),
-            _f32(gaussian_ptrs[3]), _f32(gaussian_ptrs[4]), Int(py=n),
-        )
-        self_[].renderer.render(g, _camera(camera), _background(background), _f32(image_ptr))
-        self_[].renderer.ctx.synchronize()
-        return PythonObject(self_[].renderer.num_intersections)
-
 
     @staticmethod
     def render_splats(
@@ -250,12 +154,8 @@ struct Context(Movable, Writable):
         sizes: PythonObject,  # (N, shN bases per Gaussian, sh_degree)
     ) raises -> PythonObject:
         """Faster-GS style render from raw parameters; returns (visible, instances)."""
-        var splats = SplatParams(
-            _f32(ptrs[0]), _f32(ptrs[1]), _f32(ptrs[2]), _f32(ptrs[3]),
-            _f32(ptrs[4]), _f32(ptrs[5]), Int(py=sizes[0]), Int(py=sizes[1]),
-        )
         ref r = self_[].rasterizer
-        r.render(splats, _camera(camera), _background(background), _f32(ptrs[6]), Int(py=sizes[2]))
+        r.render(_splats(ptrs, sizes), _camera(camera), _background(background), _f32(ptrs[6]), Int(py=sizes[2]))
         r.ctx.synchronize()
         return Python.tuple(r.num_visible, r.num_instances)
 
@@ -307,20 +207,10 @@ def PyInit__mojosplat() abi("C") -> PythonObject:
         _ = (
             m.add_type[Context]("Context")
             .def_py_init[Context.py_init]()
-            .def_method[Context.project]("project")
-            .def_method[Context.bin]("bin")
-            .def_method[Context.read_bins]("read_bins")
-            .def_method[Context.rasterize]("rasterize")
-            .def_method[Context.render]("render")
             .def_method[Context.render_splats]("render_splats")
             .def_method[Context.forward_train]("forward_train")
             .def_method[Context.backward]("backward")
         )
-        m.def_function[_tile_size]("tile_size")
         return m.finalize()
     except e:
         abort(String("failed to create _mojosplat module: ", e))
-
-
-def _tile_size() raises -> PythonObject:
-    return PythonObject(TILE_SIZE)

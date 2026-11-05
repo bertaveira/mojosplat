@@ -2,9 +2,10 @@
 
 ## Faster-GS
 
-The rasterizer in `mojosplat/` (`rasterizer.mojo`, `preprocess.mojo`,
-`sh.mojo`, `instances.mojo`, `blend.mojo`, `backward.mojo`) is a Mojo port of,
-and derived from, the CUDA backend of Faster-GS:
+The rasterizer in `mojosplat/render/` (`rasterizer.mojo`, `preprocess.mojo`,
+`sh.mojo`, `instances.mojo`, `blend.mojo`, `blend_backward.mojo`,
+`preprocess_backward.mojo`) and the SH constants in `mojosplat/core/math.mojo`
+are a Mojo port of, and derived from, the CUDA backend of Faster-GS:
 
 - Project: https://github.com/nerficg-project/faster-gaussian-splatting
 - Paper: F. Hahlbohm, L. Franke, M. Eisemann, M. Magnor,

@@ -13,9 +13,9 @@ max-core = "==26.7.0"
 
 [tasks]
 test = { cmd = "bash scripts/run_mojo_tests.sh", description = "Run the pure-Mojo test-suite" }
-render = { cmd = "mojo run -I . examples/render_splat.mojo", description = "Render a .splat file to an image" }
-bench = { cmd = "mojo run -I . examples/benchmark.mojo", description = "Benchmark the render pipeline" }
-fmt = "mojo format mojosplat tests examples bindings"
+render = { cmd = "mojo run -I . tools/render.mojo", description = "Render a .splat file to an image" }
+bench = { cmd = "mojo run -I . tools/bench.mojo", description = "Benchmark the rasterizer" }
+fmt = "mojo format mojosplat tests tools examples bindings"
 
 # --- Optional: PyTorch bindings (torch lives only in this environment) -----
 [feature.torch.dependencies]
@@ -31,7 +31,7 @@ gsplat = { git = "https://github.com/bertaveira/gsplat.git" }
 mojosplat-torch = { path = "bindings/torch", editable = true }
 
 [feature.torch.tasks]
-build-ext = { cmd = "mojo build -I . bindings/torch/src/_mojosplat.mojo --emit shared-lib -o bindings/torch/mojosplat_torch/_mojosplat.so", description = "Build the Mojo Python extension", inputs = ["mojosplat/*.mojo", "bindings/torch/src/*.mojo"], outputs = ["bindings/torch/mojosplat_torch/_mojosplat.so"] }
+build-ext = { cmd = "mojo build -I . bindings/torch/src/_mojosplat.mojo --emit shared-lib -o bindings/torch/mojosplat_torch/_mojosplat.so", description = "Build the Mojo Python extension", inputs = ["mojosplat/**/*.mojo", "bindings/torch/src/*.mojo"], outputs = ["bindings/torch/mojosplat_torch/_mojosplat.so"] }
 test-torch = { cmd = "pytest bindings/torch/tests -q", env = { PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1" }, depends-on = ["build-ext"], description = "Run the PyTorch binding tests (vs gsplat)" }
 
 [environments]

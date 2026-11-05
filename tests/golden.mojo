@@ -1,7 +1,7 @@
 """Helpers to load the golden reference data in tests/data/golden/."""
 
-from mojosplat.camera import Camera
-from mojosplat.io import read_array
+from mojosplat.core.camera import Camera
+from mojosplat.io.arrays import read_array
 
 comptime GOLDEN_DIR = "tests/data/golden/"
 
