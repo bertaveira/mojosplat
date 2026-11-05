@@ -178,3 +178,11 @@ cython_debug/
 *.egg-info
 # magic environments
 .magic
+# Local artifacts (renders, profiling dumps, sample scenes)
+*.splat
+*.ptx
+*.mp4
+*.gif
+kgen.trace.json*
+output/
+.rightnow/
