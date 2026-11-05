@@ -17,7 +17,7 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   render/       the rasterizer: forward (inference + training) and backward
   model/        owning storage of the Gaussians
   io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
-  train/        dataset (done); loss, metrics, optimizer, densification, trainer (planned)
+  train/        dataset, loss (L1 + SSIM), PSNR, Adam, trainer; densification planned
 tools/          command-line programs (render, bench; planned: train, eval)
 examples/       short API demos
 tests/          mirrors the package; golden data + generators in tests/data/
@@ -46,9 +46,11 @@ call comes from a `StateAllocator` (`gpu/arena.mojo`).
 
 ## Training (planned)
 
-### SplatStore: one owner for every per-Gaussian row
+### Splats: one owner for every per-Gaussian row
 
-The central abstraction, in `model/`. It owns, for capacity C >= n Gaussians:
+The central abstraction, `Splats` in `model/` (`SplatView` is its
+non-owning pointer view, `HostSplats` the CPU copy for file I/O). It owns,
+for capacity C >= n Gaussians:
 
 - the six raw parameter arrays (means, log scales, quaternions, opacity
   logits, sh0, shN),
@@ -112,10 +114,11 @@ MCMC can be added later as a second strategy on the same store operations.
 
 0. Refactor into this layout, remove the gsplat-compatible pipeline. **Done.**
 1. Data: COLMAP reader, JPEG decode, PLY read/write, dataset. **Done.**
-2. SplatStore + Adam, fused L1+SSIM, PSNR, minimal trainer without
-   densification (loss must drop on Mip-NeRF360 garden).
-3. Classic densification, schedules, kNN scale initialization; full 30k run
-   on garden vs published per-scene PSNR.
+2. Splats with capacity + training state, Adam, L1+SSIM, PSNR, kNN
+   initialization, trainer without densification. **Done:** garden, 30k
+   iterations in 38 s, 24.8 dB test PSNR with the 138k SfM Gaussians.
+3. Classic densification (clone/split/prune, opacity reset) on the Splats
+   row operations; full 30k run on garden vs published per-scene PSNR.
 4. Performance: Adam fused into the backward, Morton reordering; compare with
    Faster-GS's 2m43s Mip-NeRF360 average on an RTX 5090.
 5. Evaluation tool over the Mip-NeRF360 scenes; README.

@@ -1,12 +1,12 @@
 """MojoSplat: 3D Gaussian Splatting (forward and backward) in Mojo.
 
 Packages:
-    core    plain types: pointers, Camera, SplatView view, SH constants
+    core    plain types: pointers, Camera, SplatView, SH constants
     gpu     generic GPU building blocks: scan, radix sort, fills, arenas
     render  the Faster-GS style Rasterizer (forward + backward)
-    model   owning storage of the Gaussians
+    model   Splats (owner of the Gaussians), initialization from points
     io      raw arrays, .splat / .ply scenes, COLMAP models, JPEG decoding, image output
-    train   datasets (COLMAP scenes); loss, optimizer and trainer to come
+    train   datasets, loss (L1 + SSIM), Adam, the training loop
 """
 
 from .core.camera import Camera
@@ -20,3 +20,4 @@ from .io.splat import SplatScene, load_splat
 from .model.splats import Splats
 from .render.rasterizer import ForwardState, Rasterizer
 from .train.dataset import Dataset, View, load_colmap_dataset
+from .train.trainer import TrainConfig, Trainer

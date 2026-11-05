@@ -16,6 +16,7 @@ libjpeg-turbo = ">=3.1"
 test = { cmd = "bash scripts/run_mojo_tests.sh", description = "Run the pure-Mojo test-suite" }
 render = { cmd = "mojo run -I . tools/render.mojo", description = "Render a .splat file to an image" }
 bench = { cmd = "mojo run -I . tools/bench.mojo", description = "Benchmark the rasterizer" }
+train = { cmd = "mojo run -I . tools/train.mojo", description = "Train a 3DGS model on a COLMAP scene" }
 fmt = "mojo format mojosplat tests tools examples bindings"
 
 # --- Optional: PyTorch bindings (torch lives only in this environment) -----
