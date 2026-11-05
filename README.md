@@ -209,9 +209,28 @@ To contribute:
 
 ## Acknowledgments
 
-- [Faster-GS](https://fhahlbohm.github.io/faster-gaussian-splatting) (Hahlbohm, Franke, Eisemann, Magnor) for the forward pipeline design and kernels behind `Rasterizer`
-- [StopThePop](https://github.com/r4dl/StopThePop-Rasterization) (Radl et al.) for the exact Gaussian/tile test and [Splatshop](https://github.com/m-schuetz/Splatshop) (Schütz et al.) for the two-stage sort, as adopted by Faster-GS
-- [GSplat](https://github.com/nerfstudio-project/gsplat) for the reference implementation
-- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) for the original method
-- [Modular](https://www.modular.com/) for the Mojo language
+MojoSplat's rasterizer and training recipe are a Mojo port of **[Faster-GS](https://fhahlbohm.github.io/faster-gaussian-splatting)** ([code](https://github.com/nerficg-project/faster-gaussian-splatting), Apache-2.0) by Florian Hahlbohm, Linus Franke, Martin Eisemann and Marcus Magnor. That covers:
+- the forward pipeline (preprocessing with exact tile culling, the two-stage sort, sub-tile blending);
+- the per-Gaussian backward pass;
+- the densification rules and hyperparameters.
 
+Faster-GS's paper and code were the blueprint for most of this repository. If you use MojoSplat, please cite their work:
+
+```bibtex
+@inproceedings{hahlbohm2026fastergs,
+  title     = {Faster-GS: Analyzing and Improving Gaussian Splatting Optimization},
+  author    = {Hahlbohm, Florian and Franke, Linus and Eisemann, Martin and Magnor, Marcus},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year      = {2026}
+}
+```
+
+Also thanks to:
+- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) (Kerbl, Kopanas, Leimkühler, Drettakis) for the original method, its SSIM loss and densification scheme;
+- the work Faster-GS builds on and that is reflected here:
+  - [Taming 3DGS](https://github.com/humansensinglab/taming-3dgs) (Mallick et al.) for the per-Gaussian backward pass;
+  - [StopThePop](https://github.com/r4dl/StopThePop-Rasterization) (Radl et al.) for the exact Gaussian/tile test;
+  - [Splatshop](https://github.com/m-schuetz/Splatshop) (Schütz et al.) for the separate depth and tile sorts;
+  - [fused-ssim](https://github.com/rahul-goel/fused-ssim) (Goel et al.) for the SSIM backward formulation;
+- [GSplat](https://github.com/nerfstudio-project/gsplat) for the reference implementation we validated against (and the earlier gsplat-compatible kernels);
+- [Modular](https://www.modular.com/) for the Mojo language.
