@@ -2,6 +2,7 @@
 
 One iteration `it` (0-based, Faster-GS's callback order):
     densify           if 600 <= it <= 14900 and it % 100 == 0 (see densify.mojo)
+    Morton reorder    if it <= 15000 and it % 5000 == 0 (model/morton.mojo)
     reset opacities   if 3000 <= it <= 14900 and it % 3000 == 0
     view  = next training view (random order, reshuffled every epoch)
     image, state = rasterizer.forward(splats, view.camera)       # saves backward state
@@ -20,6 +21,7 @@ from std.random import random_ui64, seed
 from ..core.types import dptr
 from ..io.ply import write_ply
 from ..model.init import splats_from_points
+from ..model.morton import morton_order
 from ..model.splats import Attr, Splats
 from ..render.rasterizer import Rasterizer
 from .adam import Adam
@@ -53,6 +55,8 @@ struct TrainConfig(Copyable, Movable):
     var opacity_reset_interval: Int
     var grad_threshold: Float32
     var percent_dense: Float32
+    var morton_interval: Int  # 0 disables Z-order reordering
+    var morton_until: Int
 
     def __init__(out self):
         self.iterations = 30_000
@@ -77,6 +81,8 @@ struct TrainConfig(Copyable, Movable):
         self.opacity_reset_interval = 3000
         self.grad_threshold = 0.0002
         self.percent_dense = 0.01
+        self.morton_interval = 5000
+        self.morton_until = 15_000
 
 
 def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> Float32:
@@ -154,6 +160,7 @@ struct Trainer(Movable):
     def _densification_callbacks(mut self, it: Int) raises:
         var c = self.config.copy()
         if not c.densify or it < c.densify_from or it > c.densify_until:
+            self._maybe_morton(it)
             return
         if (it - c.densify_from) % c.densify_interval == 0:
             self.last_densify = self.densifier.densify(
@@ -161,8 +168,14 @@ struct Trainer(Movable):
             )
             if it < c.densify_until:
                 self.splats.reset_densification()
+        self._maybe_morton(it)
         if it >= c.opacity_reset_interval and it % c.opacity_reset_interval == 0:
             self.densifier.reset_opacities(self.splats)
+
+    def _maybe_morton(mut self, it: Int) raises:
+        var c = self.config.copy()
+        if c.morton_interval > 0 and it <= c.morton_until and it % c.morton_interval == 0:
+            morton_order(self.splats)
 
     def step(mut self) raises -> Float64:
         """One training iteration. Returns the loss on logging iterations
@@ -184,21 +197,24 @@ struct Trainer(Movable):
         var stats = self.config.densify and it < self.config.densify_until
         self.rasterizer.backward(
             self.splats.view(), st, image, grad, self.splats.grad_view(),
-            self.splats.densification_ptr(), stats,
+            self.splats.densification_ptr(), stats, write_sh_rest=False,
         )
         self.adam.lr[Attr.MEANS] = exponential_lr(
             self.config.lr_means_init * self.dataset.scene_extent,
             self.config.lr_means_final * self.dataset.scene_extent,
             it + 1, self.config.lr_means_steps,
         )
-        self.adam.step(self.splats)
+        self.adam.step(self.splats, self.rasterizer.sh_rest_grad(st))
         self.iteration += 1
         return value if log_now else -1.0
 
     def finish(mut self) raises -> Int:
         """After training: prune Gaussians that can no longer affect any pixel
-        (opacity < 1/255) or are degenerate. Returns the number removed."""
-        return self.densifier.prune_final(self.splats)
+        (opacity < 1/255) or are degenerate, then Z-order them (faster
+        rendering later). Returns the number removed."""
+        var removed = self.densifier.prune_final(self.splats)
+        morton_order(self.splats)
+        return removed
 
     def evaluate(mut self, test: Bool = True) raises -> Float64:
         """Mean PSNR over the test (or training) views at the current state."""

@@ -47,3 +47,42 @@ struct Summer(Movable):
         for i in range(REDUCE_GRID):
             total += Float64(host[i])
         return total
+
+
+def _block_minmax3_kernel(src: F32Ptr, partials: F32Ptr, n: Int32):
+    """Per-block min/max of the x, y, z columns of src [n, 3] -> partials [block, 6]."""
+    var lo = SIMD[DType.float32, 4](Float32.MAX)
+    var hi = SIMD[DType.float32, 4](-Float32.MAX)
+    var i = block_idx.x * REDUCE_BLOCK + thread_idx.x
+    while i < Int(n):
+        var v = SIMD[DType.float32, 4](
+            src[unsafe_offset=i * 3], src[unsafe_offset=i * 3 + 1], src[unsafe_offset=i * 3 + 2], 0.0
+        )
+        lo = min(lo, v)
+        hi = max(hi, v)
+        i += REDUCE_GRID * REDUCE_BLOCK
+    comptime for k in range(3):
+        var mn = block.min[block_size=REDUCE_BLOCK, broadcast=False](lo[k])
+        var mx = block.max[block_size=REDUCE_BLOCK, broadcast=False](hi[k])
+        if thread_idx.x == 0:
+            partials[unsafe_offset=block_idx.x * 6 + k] = mn
+            partials[unsafe_offset=block_idx.x * 6 + 3 + k] = mx
+
+
+def bounds3(ctx: DeviceContext, src: F32Ptr, n: Int) raises -> Tuple[SIMD[DType.float32, 4], SIMD[DType.float32, 4]]:
+    """(min, max) of the rows of src [n, 3] (syncs)."""
+    var partials = ctx.enqueue_create_buffer[DType.float32](REDUCE_GRID * 6)
+    ctx.stream().enqueue_function(
+        ctx.compile_function[_block_minmax3_kernel](), src, dptr(partials), Int32(n),
+        grid_dim=REDUCE_GRID, block_dim=REDUCE_BLOCK,
+    )
+    var host = ctx.enqueue_create_host_buffer[DType.float32](REDUCE_GRID * 6)
+    ctx.enqueue_copy(host, partials)
+    ctx.synchronize()
+    var lo = SIMD[DType.float32, 4](Float32.MAX)
+    var hi = SIMD[DType.float32, 4](-Float32.MAX)
+    for b in range(REDUCE_GRID):
+        for k in range(3):
+            lo[k] = min(lo[k], host[b * 6 + k])
+            hi[k] = max(hi[k], host[b * 6 + 3 + k])
+    return (lo, hi)

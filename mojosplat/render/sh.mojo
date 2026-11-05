@@ -82,6 +82,48 @@ def _store_rgb(p: F32Ptr, i: Int, v: SIMD[DType.float32, 4]):
 
 
 @always_inline
+def _store_rest(write: Bool, p: F32Ptr, i: Int, v: SIMD[DType.float32, 4]):
+    if write:
+        _store_rgb(p, i, v)
+
+
+@always_inline
+def sh_rest_basis(k: Int, x: Float32, y: Float32, z: Float32) -> Float32:
+    """Value of higher-order SH basis k + 1 (k = 0..14) at the unit direction
+    (x, y, z), with the sign convention of `sh_to_color`: the color is
+    0.5 + C0 * sh0 + sum_k sh_rest[k] * sh_rest_basis(k)."""
+    if k == 0:
+        return -SH_C1 * y
+    elif k == 1:
+        return SH_C1 * z
+    elif k == 2:
+        return -SH_C1 * x
+    elif k == 3:
+        return SH_C2A * x * y
+    elif k == 4:
+        return -SH_C2A * y * z
+    elif k == 5:
+        return SH_C2B * z * z - SH_C2C
+    elif k == 6:
+        return -SH_C2A * x * z
+    elif k == 7:
+        return SH_C2D * (x * x - y * y)
+    elif k == 8:
+        return y * (SH_C3A * y * y - SH_C3B * x * x)
+    elif k == 9:
+        return SH_C3C * x * y * z
+    elif k == 10:
+        return y * (SH_C3D - SH_C3E * z * z)
+    elif k == 11:
+        return z * (SH_C3F * z * z - SH_C3G)
+    elif k == 12:
+        return x * (SH_C3D - SH_C3E * z * z)
+    elif k == 13:
+        return SH_C3H * z * (x * x - y * y)
+    return x * (SH_C3B * y * y - SH_C3A * x * x)
+
+
+@always_inline
 def _dot3(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> Float32:
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
@@ -96,15 +138,20 @@ def sh_to_color_backward(
     grad_color: SIMD[DType.float32, 4],  # dL/d(color before clamping)
     active_bases: Int,
     rest_stride: Int,
+    write_rest: Bool = True,
 ) -> SIMD[DType.float32, 4]:
     """Writes SH gradients of Gaussian `g`; returns dL/d(mean) through `dir`.
 
+    With `write_rest=False` the higher-order coefficient gradients are not
+    stored (they are basis(dir) * grad_color, which the fused optimizer
+    recomputes elementwise; see `sh_rest_basis`).
     Port of Faster-GS's `convert_sh_to_color_backward` (Apache-2.0).
     """
     _store_rgb(grad_sh0, g, SH_C0 * grad_color)
     var b = g * rest_stride
-    for k in range(max(active_bases - 1, 0), rest_stride):
-        _store_rgb(grad_sh_rest, b + k, SIMD[DType.float32, 4](0.0))
+    if write_rest:
+        for k in range(max(active_bases - 1, 0), rest_stride):
+            _store_rgb(grad_sh_rest, b + k, SIMD[DType.float32, 4](0.0))
     if active_bases <= 1:
         return SIMD[DType.float32, 4](0.0)
 
@@ -112,9 +159,9 @@ def sh_to_color_backward(
     var x = dir[0] * inv
     var y = dir[1] * inv
     var z = dir[2] * inv
-    _store_rgb(grad_sh_rest, b + 0, -SH_C1 * y * grad_color)
-    _store_rgb(grad_sh_rest, b + 1, SH_C1 * z * grad_color)
-    _store_rgb(grad_sh_rest, b + 2, -SH_C1 * x * grad_color)
+    _store_rest(write_rest, grad_sh_rest, b + 0, -SH_C1 * y * grad_color)
+    _store_rest(write_rest, grad_sh_rest, b + 1, SH_C1 * z * grad_color)
+    _store_rest(write_rest, grad_sh_rest, b + 2, -SH_C1 * x * grad_color)
     var gx = -SH_C1 * _rgb(sh_rest, b + 2)
     var gy = -SH_C1 * _rgb(sh_rest, b + 0)
     var gz = SH_C1 * _rgb(sh_rest, b + 1)
@@ -125,22 +172,22 @@ def sh_to_color_backward(
         var xy = x * y
         var xz = x * z
         var yz = y * z
-        _store_rgb(grad_sh_rest, b + 3, SH_C2A * xy * grad_color)
-        _store_rgb(grad_sh_rest, b + 4, -SH_C2A * yz * grad_color)
-        _store_rgb(grad_sh_rest, b + 5, (SH_C2B * zz - SH_C2C) * grad_color)
-        _store_rgb(grad_sh_rest, b + 6, -SH_C2A * xz * grad_color)
-        _store_rgb(grad_sh_rest, b + 7, SH_C2D * (xx - yy) * grad_color)
+        _store_rest(write_rest, grad_sh_rest, b + 3, SH_C2A * xy * grad_color)
+        _store_rest(write_rest, grad_sh_rest, b + 4, -SH_C2A * yz * grad_color)
+        _store_rest(write_rest, grad_sh_rest, b + 5, (SH_C2B * zz - SH_C2C) * grad_color)
+        _store_rest(write_rest, grad_sh_rest, b + 6, -SH_C2A * xz * grad_color)
+        _store_rest(write_rest, grad_sh_rest, b + 7, SH_C2D * (xx - yy) * grad_color)
         gx = gx + SH_C2A * y * _rgb(sh_rest, b + 3) - SH_C2A * z * _rgb(sh_rest, b + 6) + SH_C2A * x * _rgb(sh_rest, b + 7)
         gy = gy + SH_C2A * x * _rgb(sh_rest, b + 3) - SH_C2A * z * _rgb(sh_rest, b + 4) - SH_C2A * y * _rgb(sh_rest, b + 7)
         gz = gz - SH_C2A * y * _rgb(sh_rest, b + 4) + SH_C2E * z * _rgb(sh_rest, b + 5) - SH_C2A * x * _rgb(sh_rest, b + 6)
         if active_bases > 9:
-            _store_rgb(grad_sh_rest, b + 8, y * (SH_C3A * yy - SH_C3B * xx) * grad_color)
-            _store_rgb(grad_sh_rest, b + 9, SH_C3C * xy * z * grad_color)
-            _store_rgb(grad_sh_rest, b + 10, y * (SH_C3D - SH_C3E * zz) * grad_color)
-            _store_rgb(grad_sh_rest, b + 11, z * (SH_C3F * zz - SH_C3G) * grad_color)
-            _store_rgb(grad_sh_rest, b + 12, x * (SH_C3D - SH_C3E * zz) * grad_color)
-            _store_rgb(grad_sh_rest, b + 13, SH_C3H * z * (xx - yy) * grad_color)
-            _store_rgb(grad_sh_rest, b + 14, x * (SH_C3B * yy - SH_C3A * xx) * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 8, y * (SH_C3A * yy - SH_C3B * xx) * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 9, SH_C3C * xy * z * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 10, y * (SH_C3D - SH_C3E * zz) * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 11, z * (SH_C3F * zz - SH_C3G) * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 12, x * (SH_C3D - SH_C3E * zz) * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 13, SH_C3H * z * (xx - yy) * grad_color)
+            _store_rest(write_rest, grad_sh_rest, b + 14, x * (SH_C3B * yy - SH_C3A * xx) * grad_color)
             gx = (
                 gx - SH_C3I * xy * _rgb(sh_rest, b + 8) + SH_C3C * yz * _rgb(sh_rest, b + 9)
                 + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 12)

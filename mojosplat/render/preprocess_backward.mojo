@@ -18,6 +18,21 @@ from .preprocess import CLIP_MARGIN, DILATION
 from .sh import sh_to_color_backward
 
 
+@fieldwise_init
+struct ShRestGrad(ImplicitlyCopyable, Movable):
+    """What an optimizer needs to recompute the higher-order SH gradients
+    elementwise instead of reading them from memory:
+        dL/d sh_rest[g, k, c] = sh_rest_basis(k, dir_g) * grad_color[slot_of[g], c]
+    for k < active_bases - 1 and visible g (slot_of[g] >= 0), else 0, with
+    dir_g the normalized (mean_g - camera position) *before* the update.
+    Valid until the rasterizer's next forward / backward."""
+
+    var slot_of: I32Ptr  # [N] slot of each Gaussian, -1 if culled
+    var grad_color: F32Ptr  # [slot, 3] dL/d(color before clamping)
+    var cam_pos: SIMD[DType.float32, 4]
+    var active_bases: Int
+
+
 def _preprocess_backward_kernel(
     means: F32Ptr,
     log_scales: F32Ptr,
@@ -37,6 +52,7 @@ def _preprocess_backward_kernel(
     out_sh_rest: F32Ptr,  # [N, rest_stride, 3]
     densification: F32Ptr,  # [2, N] (count, sum |dL/dmean2d_ndc|) if has_densification
     has_densification: Int32,  # Bool is not DevicePassable
+    write_sh_rest: Int32,  # 0: leave out_sh_rest untouched (fused optimizer recomputes it)
     n: Int32,
     active_bases: Int32,
     rest_stride: Int32,
@@ -53,8 +69,9 @@ def _preprocess_backward_kernel(
         comptime for k in range(4):
             out_rotations[unsafe_offset=g * 4 + k] = 0.0
         out_opacity[unsafe_offset=g] = 0.0
-        for k in range(Int(rest_stride) * 3):
-            out_sh_rest[unsafe_offset=g * Int(rest_stride) * 3 + k] = 0.0
+        if write_sh_rest != 0:
+            for k in range(Int(rest_stride) * 3):
+                out_sh_rest[unsafe_offset=g * Int(rest_stride) * 3 + k] = 0.0
         return
 
     var m0 = means[unsafe_offset=g * 3 + 0]
@@ -68,7 +85,8 @@ def _preprocess_backward_kernel(
     )
     var dir = SIMD[DType.float32, 4](m0 - cam[CAM_POS_X], m1 - cam[CAM_POS_Y], m2 - cam[CAM_POS_Z], 0.0)
     var dmean_color = sh_to_color_backward(
-        sh_rest, out_sh0, out_sh_rest, g, dir, gcol, Int(active_bases), Int(rest_stride)
+        sh_rest, out_sh0, out_sh_rest, g, dir, gcol, Int(active_bases), Int(rest_stride),
+        write_sh_rest != 0,
     )
     out_opacity[unsafe_offset=g] = grad_opacity_slot[unsafe_offset=s]
 
@@ -274,6 +292,7 @@ def preprocess_backward(
     n: Int,
     active_bases: Int,
     rest_stride: Int,
+    write_sh_rest: Bool = True,
 ) raises:
     if n == 0:
         return
@@ -282,7 +301,7 @@ def preprocess_backward(
         means, log_scales, rotations, sh_rest, cam, slot_of, grad_mean2d,
         grad_conic, grad_opacity_slot, grad_color, out_means, out_log_scales,
         out_rotations, out_opacity, out_sh0, out_sh_rest, densification,
-        Int32(1 if has_densification else 0), Int32(n), Int32(active_bases),
+        Int32(1 if has_densification else 0), Int32(1 if write_sh_rest else 0), Int32(n), Int32(active_bases),
         Int32(rest_stride),
         grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
     )

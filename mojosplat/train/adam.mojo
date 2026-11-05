@@ -7,10 +7,12 @@ a separate function so it can later be fused into the backward pass.
 """
 
 from max.gpu import block_idx, thread_idx
-from std.math import sqrt
+from std.math import rsqrt, sqrt
 
-from ..core.types import BLOCK_SIZE, F32Ptr, dptr, num_blocks
+from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, dptr, num_blocks
 from ..model.splats import Attr, Splats
+from ..render.preprocess_backward import ShRestGrad
+from ..render.sh import sh_rest_basis
 
 
 @always_inline
@@ -41,6 +43,38 @@ def _adam_kernel(
     exp_avg_sq[unsafe_offset=i] = r[2]
 
 
+def _adam_sh_rest_kernel(
+    param: F32Ptr, exp_avg: F32Ptr, exp_avg_sq: F32Ptr, means: F32Ptr,
+    slot_of: I32Ptr, grad_color: F32Ptr, cam_pos: SIMD[DType.float32, 4],
+    n: Int32, rest_stride: Int32, active_bases: Int32,
+    step_size: Float32, bc2_sqrt_rcp: Float32, beta1: Float32, beta2: Float32, eps: Float32,
+):
+    """Adam on sh_rest [N, K, 3] with the gradient recomputed per element
+    (basis(dir) * dL/dcolor) instead of read from a gradient buffer."""
+    var e = block_idx.x * BLOCK_SIZE + thread_idx.x
+    var per = Int(rest_stride) * 3
+    if e >= Int(n) * per:
+        return
+    var g = e // per
+    var k = (e % per) // 3
+    var c = e % 3
+    var grad: Float32 = 0.0
+    var slot = Int(slot_of[unsafe_offset=g])
+    if slot >= 0 and k < Int(active_bases) - 1:
+        var dx = means[unsafe_offset=g * 3 + 0] - cam_pos[0]
+        var dy = means[unsafe_offset=g * 3 + 1] - cam_pos[1]
+        var dz = means[unsafe_offset=g * 3 + 2] - cam_pos[2]
+        var inv = rsqrt(dx * dx + dy * dy + dz * dz)
+        grad = sh_rest_basis(k, dx * inv, dy * inv, dz * inv) * grad_color[unsafe_offset=slot * 3 + c]
+    var r = adam_update(
+        param[unsafe_offset=e], grad, exp_avg[unsafe_offset=e], exp_avg_sq[unsafe_offset=e],
+        step_size, bc2_sqrt_rcp, beta1, beta2, eps,
+    )
+    param[unsafe_offset=e] = r[0]
+    exp_avg[unsafe_offset=e] = r[1]
+    exp_avg_sq[unsafe_offset=e] = r[2]
+
+
 struct Adam(Movable):
     """Adam state shared by all groups: hyperparameters and the step count.
     The moments live in `Splats` (exp_avg / exp_avg_sq), next to the rows
@@ -63,7 +97,17 @@ struct Adam(Movable):
         self.step_count = 0
 
     def step(mut self, mut splats: Splats) raises:
-        """Apply one step to the first `count` rows using `splats.grads`."""
+        """One step on the first `count` rows, reading every gradient from
+        `splats.grads`."""
+        self._step(splats, Optional[ShRestGrad]())
+
+    def step(mut self, mut splats: Splats, sh_rest: ShRestGrad) raises:
+        """One step where the sh_rest gradients are recomputed elementwise
+        from `sh_rest` (the backward ran with write_sh_rest=False): saves
+        writing and reading the largest gradient buffer."""
+        self._step(splats, Optional(sh_rest))
+
+    def _step(mut self, mut splats: Splats, sh_rest: Optional[ShRestGrad]) raises:
         if not splats.training:
             raise Error("Adam.step: call splats.enable_training() first")
         self.step_count += 1
@@ -73,15 +117,35 @@ struct Adam(Movable):
         var bc2_sqrt_rcp = Float32(1.0 / sqrt(bc2))
         var ctx = splats.ctx
         var stream = ctx.stream()
+
+        @parameter
+        def step_size(a: Int) -> Float32:
+            return Float32(Float64(self.lr[a]) / bc1)
+
+        # sh_rest first: its recomputed gradient needs the means before they move.
+        if sh_rest:
+            var sg = sh_rest.value()
+            var n = splats.count * splats.width(Attr.SH_REST)
+            if n > 0:
+                stream.enqueue_function(
+                    ctx.compile_function[_adam_sh_rest_kernel](),
+                    dptr(splats.params[Attr.SH_REST]), dptr(splats.exp_avg[Attr.SH_REST]),
+                    dptr(splats.exp_avg_sq[Attr.SH_REST]), dptr(splats.params[Attr.MEANS]),
+                    sg.slot_of, sg.grad_color, sg.cam_pos, Int32(splats.count),
+                    Int32(splats.rest_stride), Int32(sg.active_bases),
+                    step_size(Attr.SH_REST), bc2_sqrt_rcp, self.beta1, self.beta2, self.eps,
+                    grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+                )
         var kernel = ctx.compile_function[_adam_kernel]()
         for a in range(Attr.COUNT):
+            if a == Attr.SH_REST and sh_rest:
+                continue
             var n = splats.count * splats.width(a)
             if n == 0:
                 continue
             stream.enqueue_function(
                 kernel, dptr(splats.params[a]), dptr(splats.grads[a]),
                 dptr(splats.exp_avg[a]), dptr(splats.exp_avg_sq[a]), Int32(n),
-                Float32(Float64(self.lr[a]) / bc1), bc2_sqrt_rcp, self.beta1,
-                self.beta2, self.eps,
+                step_size(a), bc2_sqrt_rcp, self.beta1, self.beta2, self.eps,
                 grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
             )

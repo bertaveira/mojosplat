@@ -31,9 +31,9 @@ from ..gpu.arena import DeviceArena, StateAllocator
 from ..gpu.elementwise import fill_f32
 from ..model.splats import Splats
 from .blend_backward import blend_backward
-from .preprocess_backward import preprocess_backward
+from .preprocess_backward import ShRestGrad, preprocess_backward
 from .blend import blend, bucket_bound, bucket_counts
-from ..core.camera import Camera
+from ..core.camera import CAM_POS_X, CAM_POS_Y, CAM_POS_Z, Camera
 from ..core.types import F32Ptr, I32Ptr, U16Ptr, U32Ptr, dptr, placeholder
 from .instances import create_instances, depth_ordering, tile_key_bits, tile_offsets
 from .preprocess import REC, preprocess
@@ -370,6 +370,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         grads: SplatView,
         densification: F32Ptr = placeholder[DType.float32](),
         has_densification: Bool = False,
+        write_sh_rest: Bool = True,
     ) raises:
         """Gradients of the loss w.r.t. the raw parameters.
 
@@ -379,6 +380,8 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         0), so they need no initialization. If
         `has_densification`, `densification` [2, N] accumulates (count,
         |dL/dmean2d| in NDC) per Gaussian, as used by 3DGS densification.
+        With `write_sh_rest=False`, `grads.sh_rest` is left untouched: a fused
+        optimizer recomputes those gradients from `sh_rest_grad(st)`.
         """
         var ctx = self.ctx
         var stream = ctx.stream()
@@ -405,7 +408,17 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
             splats.sh_rest, st.cam, st.slot_of, g_mean2d, g_conic,
             g_opacity, g_color, grads.means, grads.log_scales, grads.rotations,
             grads.opacity_logits, grads.sh0, grads.sh_rest, densification,
-            has_densification, n, st.active_bases, splats.rest_stride,
+            has_densification, n, st.active_bases, splats.rest_stride, write_sh_rest,
+        )
+
+    def sh_rest_grad(self, st: ForwardState) -> ShRestGrad:
+        """Inputs to recompute the higher-order SH gradients of the last
+        `backward` (on `st`) elementwise; valid until the next forward."""
+        var nv = max(st.n_visible, 1)
+        return ShRestGrad(
+            st.slot_of, dptr(self.grad_scratch).unsafe_offset(nv * 6),
+            SIMD[DType.float32, 4](st.cam[CAM_POS_X], st.cam[CAM_POS_Y], st.cam[CAM_POS_Z], 0.0),
+            st.active_bases,
         )
 
     # ------------------------------------------------------------------
