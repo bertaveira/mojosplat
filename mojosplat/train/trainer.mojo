@@ -18,6 +18,7 @@ from max.gpu.host import DeviceBuffer, DeviceContext
 from std.math import exp, log
 from std.random import random_ui64, seed
 
+from ..cli.args import Arg
 from ..core.types import dptr
 from ..io.ply import write_ply
 from ..model.init import splats_from_points
@@ -30,32 +31,58 @@ from .densify import DensifyStats, Densifier
 from .loss import PhotometricLoss
 
 
-struct TrainConfig(Copyable, Movable):
-    """Hyperparameters; defaults are Faster-GS's (= 3DGS's, opacity lr halved)."""
+struct TrainConfig(Copyable, Defaultable, Movable):
+    """Hyperparameters; defaults are Faster-GS's (= 3DGS's, opacity lr halved).
+    Every field is also a command-line option of `tools/train.mojo`
+    (`sh_degree` -> `--sh-degree`); the `Arg` annotations are its help."""
 
+    @__annotation(Arg("Number of training iterations"))
     var iterations: Int
+    @__annotation(Arg("Maximum spherical-harmonics degree (0-3)"))
     var sh_degree: Int
+    @__annotation(Arg("Raise the active SH degree by one every N iterations"))
     var sh_degree_interval: Int
+    @__annotation(Arg("Weight of D-SSIM in the loss (the rest is L1)"))
     var lambda_dssim: Float32
-    var lr_means_init: Float32  # multiplied by the scene extent
+    @__annotation(Arg("Initial learning rate of the means (times the scene extent)"))
+    var lr_means_init: Float32
+    @__annotation(Arg("Final learning rate of the means (times the scene extent)"))
     var lr_means_final: Float32
+    @__annotation(Arg("Iterations over which the means learning rate decays"))
     var lr_means_steps: Int
+    @__annotation(Arg("Learning rate of the log scales"))
     var lr_log_scales: Float32
+    @__annotation(Arg("Learning rate of the rotations"))
     var lr_rotations: Float32
+    @__annotation(Arg("Learning rate of the opacity logits"))
     var lr_opacity: Float32
+    @__annotation(Arg("Learning rate of the SH DC coefficients"))
     var lr_sh0: Float32
+    @__annotation(Arg("Learning rate of the higher SH coefficients"))
     var lr_sh_rest: Float32
+    @__annotation(Arg("Background color (RGB in [0, 1])"))
     var background: SIMD[DType.float32, 4]
+    @__annotation(Arg("Random seed"))
     var seed: Int
+    @__annotation(Arg("Read back the loss every N iterations (syncs the GPU)"))
     var log_interval: Int
+    @__annotation(Arg("Clone, split and prune Gaussians (classic 3DGS densification)"))
     var densify: Bool
+    @__annotation(Arg("First densification iteration"))
     var densify_from: Int
+    @__annotation(Arg("Last densification iteration"))
     var densify_until: Int
+    @__annotation(Arg("Densify every N iterations"))
     var densify_interval: Int
+    @__annotation(Arg("Reset opacities every N iterations (during densification)"))
     var opacity_reset_interval: Int
+    @__annotation(Arg("Densify Gaussians whose mean screen-space gradient exceeds this"))
     var grad_threshold: Float32
+    @__annotation(Arg("Clone below / split above this size (fraction of the scene extent)"))
     var percent_dense: Float32
-    var morton_interval: Int  # 0 disables Z-order reordering
+    @__annotation(Arg("Z-order (Morton) reordering every N iterations (0 = off)"))
+    var morton_interval: Int
+    @__annotation(Arg("Last Morton reordering iteration (before the final one)"))
     var morton_until: Int
 
     def __init__(out self):
