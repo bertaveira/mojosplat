@@ -33,8 +33,20 @@ from std.bit import count_trailing_zeros, pop_count
 from std.math import ceil, exp, floor, log, sqrt
 from std.memory import bitcast
 
-from ..core.camera import CAM_CX, CAM_CY, CAM_FAR, CAM_FX, CAM_FY, CAM_H, CAM_NEAR, CAM_POS_X, CAM_POS_Y, CAM_POS_Z, CAM_W
-from ..core.types import F32Ptr, I32Ptr, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
+from ..core.camera import (
+    CAM_CX,
+    CAM_CY,
+    CAM_FAR,
+    CAM_FX,
+    CAM_FY,
+    CAM_H,
+    CAM_NEAR,
+    CAM_POS_X,
+    CAM_POS_Y,
+    CAM_POS_Z,
+    CAM_W,
+)
+from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
 from .sh import sh_to_color
 
 comptime MIN_ALPHA: Float32 = 1.0 / 255.0
@@ -55,9 +67,7 @@ def pack_bounds(x0: Int, x1: Int, y0: Int, y1: Int) -> UInt64:
 @always_inline
 def unpack_bounds(b: UInt64) -> SIMD[DType.int32, 4]:
     """-> (x0, x1, y0, y1)."""
-    return SIMD[DType.int32, 4](
-        Int32(b & 0xFFFF), Int32((b >> 16) & 0xFFFF), Int32((b >> 32) & 0xFFFF), Int32(b >> 48)
-    )
+    return SIMD[DType.int32, 4](Int32(b & 0xFFFF), Int32((b >> 16) & 0xFFFF), Int32((b >> 32) & 0xFFFF), Int32(b >> 48))
 
 
 # Packed per-slot record: [mx, my, conic a, conic b, conic c, opacity,
@@ -67,12 +77,25 @@ comptime REC = 8
 
 @always_inline
 def store_record(
-    rec: F32Ptr, slot: Int, mx: Float32, my: Float32, ca: Float32, cb: Float32,
-    cc: Float32, opacity: Float32, bounds: UInt64,
+    rec: F32Ptr,
+    slot: Int,
+    mx: Float32,
+    my: Float32,
+    ca: Float32,
+    cb: Float32,
+    cc: Float32,
+    opacity: Float32,
+    bounds: UInt64,
 ):
     var v = SIMD[DType.float32, REC](
-        mx, my, ca, cb, cc, opacity,
-        bitcast[DType.float32](UInt32(bounds & 0xFFFFFFFF)), bitcast[DType.float32](UInt32(bounds >> 32)),
+        mx,
+        my,
+        ca,
+        cb,
+        cc,
+        opacity,
+        bitcast[DType.float32](UInt32(bounds & 0xFFFFFFFF)),
+        bitcast[DType.float32](UInt32(bounds >> 32)),
     )
     rec.unsafe_offset(slot * REC).unsafe_bitcast[SIMD[DType.float32, REC]]()[] = v
 
@@ -154,7 +177,7 @@ def _preprocess_kernel[
     opacity_logits: F32Ptr,  # [N]
     sh0: F32Ptr,  # [N, 3]
     sh_rest: F32Ptr,  # [N, rest_stride, 3]
-    cam: SIMD[DType.float32, 32],
+    cam: KernelVector[DType.float32, 32],
     depth_keys: U32Ptr,  # out [slot] depth bits (sort keys)
     slots: I32Ptr,  # out [slot] = slot (sort values)
     primitive_ids: I32Ptr,  # out [slot] Gaussian index
@@ -298,9 +321,7 @@ def _preprocess_kernel[
     var touched = 0
     if active:
         for t in range(min(tile_count, N_SEQUENTIAL)):
-            if will_contribute[tile_w, tile_h](
-                smx, smy, ca, cb, cc, tx0 + t % tw, ty0 + t // tw, power_threshold
-            ):
+            if will_contribute[tile_w, tile_h](smx, smy, ca, cb, cc, tx0 + t % tw, ty0 + t // tw, power_threshold):
                 touched += 1
     var coop = warp.vote[LANE_MASK_DTYPE](active and tile_count > N_SEQUENTIAL)
     while coop != 0:  # warp-uniform loop over lanes that need help
@@ -336,9 +357,7 @@ def _preprocess_kernel[
     var inst = warp.sum(UInt32(touched) if visible else UInt32(0))
     var base = UInt32(0)
     if lane == Int(leader):
-        base = Atomic[UInt32].fetch_add[ordering=Ordering.RELAXED](
-            counters, UInt32(pop_count(vis_mask))
-        )
+        base = Atomic[UInt32].fetch_add[ordering=Ordering.RELAXED](counters, UInt32(pop_count(vis_mask)))
         _ = Atomic[UInt32].fetch_add[ordering=Ordering.RELAXED](counters.unsafe_offset(1), inst)
     base = warp.shuffle_idx(base, leader)
     if not visible:
@@ -353,9 +372,7 @@ def _preprocess_kernel[
         slot_of[unsafe_offset=g] = Int32(slot)
     n_touched[unsafe_offset=slot] = UInt32(touched)
     store_record(records, slot, mx, my, ca, cb, cc, opacity, pack_bounds(x0, x1, y0, y1))
-    var dir = SIMD[DType.float32, 4](
-        m0 - cam[CAM_POS_X], m1 - cam[CAM_POS_Y], m2 - cam[CAM_POS_Z], 0.0
-    )
+    var dir = SIMD[DType.float32, 4](m0 - cam[CAM_POS_X], m1 - cam[CAM_POS_Y], m2 - cam[CAM_POS_Z], 0.0)
     # Stored unclamped: blending clamps at 0, the backward needs the mask.
     var rgb = sh_to_color(sh0, sh_rest, g, dir, Int(active_bases), Int(rest_stride))
     colors[unsafe_offset=slot * 3 + 0] = rgb[0]
@@ -393,8 +410,26 @@ def preprocess[
         return
     stream.enqueue_function(
         ctx.compile_function[_preprocess_kernel[tile_w, tile_h, train]](),
-        means, log_scales, rotations, opacity_logits, sh0, sh_rest, cam,
-        depth_keys, slots, primitive_ids, n_touched, records, colors, counters, slot_of, Int32(n), Int32(grid_w), Int32(grid_h),
-        Int32(active_bases), Int32(rest_stride),
-        grid_dim=num_blocks(n, PREPROCESS_BLOCK), block_dim=PREPROCESS_BLOCK,
+        means,
+        log_scales,
+        rotations,
+        opacity_logits,
+        sh0,
+        sh_rest,
+        KernelVector[DType.float32, 32](cam),
+        depth_keys,
+        slots,
+        primitive_ids,
+        n_touched,
+        records,
+        colors,
+        counters,
+        slot_of,
+        Int32(n),
+        Int32(grid_w),
+        Int32(grid_h),
+        Int32(active_bases),
+        Int32(rest_stride),
+        grid_dim=num_blocks(n, PREPROCESS_BLOCK),
+        block_dim=PREPROCESS_BLOCK,
     )

@@ -15,7 +15,7 @@ normalized into their bounding cube, 21 bits per axis interleaved into a
 from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceContext
 
-from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, U64Ptr, dptr, num_blocks
+from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, KernelVector, U64Ptr, dptr, num_blocks
 from ..gpu.reduce import bounds3
 from ..gpu.sort import radix_sort_pairs, sort_hist_size, sort_partials_size
 from .splats import Attr, Splats
@@ -33,7 +33,7 @@ def _split_by_3(a: UInt32) -> UInt64:
 
 
 def _morton_kernel(
-    means: F32Ptr, keys: U64Ptr, values: I32Ptr, lo: SIMD[DType.float32, 4], inv_size: Float32, n: Int32
+    means: F32Ptr, keys: U64Ptr, values: I32Ptr, lo: KernelVector[DType.float32, 4], inv_size: Float32, n: Int32
 ):
     var i = block_idx.x * BLOCK_SIZE + thread_idx.x
     if i >= Int(n):
@@ -65,13 +65,27 @@ def morton_order(mut splats: Splats) raises:
     var total = ctx.enqueue_create_buffer[DType.uint32](1)
     stream.enqueue_function(
         ctx.compile_function[_morton_kernel](),
-        dptr(splats.params[Attr.MEANS]), dptr(keys_a), dptr(vals_a), lo,
-        Float32(1.0) / max(size, Float32(1e-20)), Int32(n),
-        grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+        dptr(splats.params[Attr.MEANS]),
+        dptr(keys_a),
+        dptr(vals_a),
+        KernelVector[DType.float32, 4](lo),
+        Float32(1.0) / max(size, Float32(1e-20)),
+        Int32(n),
+        grid_dim=num_blocks(n),
+        block_dim=BLOCK_SIZE,
     )
     var in_b = radix_sort_pairs[DType.uint64](
-        ctx, stream, dptr(keys_a), dptr(vals_a), dptr(keys_b), dptr(vals_b),
-        dptr(hist), dptr(partials), dptr(total), n, 63,
+        ctx,
+        stream,
+        dptr(keys_a),
+        dptr(vals_a),
+        dptr(keys_b),
+        dptr(vals_b),
+        dptr(hist),
+        dptr(partials),
+        dptr(total),
+        n,
+        63,
     )
     splats.gather(dptr(vals_b) if in_b else dptr(vals_a), n, n)
     ctx.synchronize()

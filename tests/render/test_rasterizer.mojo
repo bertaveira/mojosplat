@@ -15,8 +15,14 @@ from mojosplat.render.rasterizer import Rasterizer
 
 def load_splats(ctx: DeviceContext, s: GoldenScene) raises -> Splats:
     return Splats(
-        ctx, s.f32("means3d.f32"), s.f32("log_scales.f32"), s.f32("quats.f32"),
-        s.f32("opacity_logits.f32"), s.f32("sh0.f32"), s.f32("shN.f32"), s.sh_rest,
+        ctx,
+        s.f32("means3d.f32"),
+        s.f32("log_scales.f32"),
+        s.f32("quats.f32"),
+        s.f32("opacity_logits.f32"),
+        s.f32("sh0.f32"),
+        s.f32("shN.f32"),
+        s.sh_rest,
     )
 
 

@@ -19,10 +19,13 @@ from mojosplat.cli import Arg, Table, bold, dim, done, fmt_fixed, fmt_thousands,
 struct BenchArgs(Defaultable, Movable):
     @__annotation(Arg("Scene to render (.splat or .ply)", positional=True))
     var scene: String
+
     @__annotation(Arg("Timed frames", short="n"))
     var runs: Int
+
     @__annotation(Arg("Image width", short="W"))
     var width: Int
+
     @__annotation(Arg("Image height", short="H"))
     var height: Int
 

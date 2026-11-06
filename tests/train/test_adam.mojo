@@ -22,12 +22,14 @@ def test_matches_torch() raises:
     var names: List[String] = ["means", "log_scales", "rotations", "opacity_logits", "sh0", "sh_rest"]
     var ctx = DeviceContext()
     var splats = Splats(
-        ctx, read_array[DType.float32](D + "init_means.f32"),
+        ctx,
+        read_array[DType.float32](D + "init_means.f32"),
         read_array[DType.float32](D + "init_log_scales.f32"),
         read_array[DType.float32](D + "init_rotations.f32"),
         read_array[DType.float32](D + "init_opacity_logits.f32"),
         read_array[DType.float32](D + "init_sh0.f32"),
-        read_array[DType.float32](D + "init_sh_rest.f32"), Int(meta["sh_rest"]),
+        read_array[DType.float32](D + "init_sh_rest.f32"),
+        Int(meta["sh_rest"]),
         capacity=n + 5,  # spare capacity must not matter
     )
     splats.enable_training()
@@ -47,6 +49,7 @@ def test_matches_torch() raises:
             var g = upload(ctx, step_grad)
             copy_f32(ctx, dptr(splats.grads[a]), dptr(g), w)
             ctx.synchronize()
+            _ = g^
         adam.step(splats)
     ctx.synchronize()
     for a in range(Attr.COUNT):
@@ -63,15 +66,19 @@ def test_matches_torch() raises:
             assert_true(max_rel < 1e-4, String(checks[c], names[a], " max rel err ", max_rel))
 
 
-
-
 def _step_once(fused: Bool) raises -> List[List[Float32]]:
     """One forward/backward/Adam step on the SH-degree-3 golden scene."""
     var s = GoldenScene("splats_small")
     var ctx = DeviceContext()
     var splats = Splats(
-        ctx, s.f32("means3d.f32"), s.f32("log_scales.f32"), s.f32("quats.f32"),
-        s.f32("opacity_logits.f32"), s.f32("sh0.f32"), s.f32("shN.f32"), s.sh_rest,
+        ctx,
+        s.f32("means3d.f32"),
+        s.f32("log_scales.f32"),
+        s.f32("quats.f32"),
+        s.f32("opacity_logits.f32"),
+        s.f32("sh0.f32"),
+        s.f32("shN.f32"),
+        s.sh_rest,
     )
     splats.enable_training()
     var npix = s.width * s.height * 3
@@ -95,6 +102,7 @@ def _step_once(fused: Bool) raises -> List[List[Float32]]:
         out.append(download(ctx, splats.exp_avg[a], w))
         out.append(download(ctx, splats.exp_avg_sq[a], w))
     _ = grad_image^
+    _ = (image^, r^, st^)
     return out^
 
 

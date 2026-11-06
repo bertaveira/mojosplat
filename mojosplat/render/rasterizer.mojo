@@ -392,18 +392,55 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         fill_f32(ctx, g_mean2d, 0.0, nv * 9)
         if st.n_instances > 0:
             blend_backward[Self.tile_w, Self.tile_h](
-                ctx, stream, st.n_bucket_blocks, st.tile_offsets, st.bucket_start,
-                st.bucket_tile, st.tile_max_n, st.instance_slots, st.records,
-                st.colors, st.background, image, grad_image, st.final_T,
-                st.n_processed, st.snapshots, g_mean2d, g_conic, g_opacity,
-                g_color, st.n_tiles, st.width, st.height,
+                ctx,
+                stream,
+                st.n_bucket_blocks,
+                st.tile_offsets,
+                st.bucket_start,
+                st.bucket_tile,
+                st.tile_max_n,
+                st.instance_slots,
+                st.records,
+                st.colors,
+                st.background,
+                image,
+                grad_image,
+                st.final_T,
+                st.n_processed,
+                st.snapshots,
+                g_mean2d,
+                g_conic,
+                g_opacity,
+                g_color,
+                st.n_tiles,
+                st.width,
+                st.height,
             )
         preprocess_backward(
-            ctx, stream, splats.means, splats.log_scales, splats.rotations,
-            splats.sh_rest, st.cam, st.slot_of, g_mean2d, g_conic,
-            g_opacity, g_color, grads.means, grads.log_scales, grads.rotations,
-            grads.opacity_logits, grads.sh0, grads.sh_rest, densification,
-            has_densification, n, st.active_bases, splats.rest_stride, write_sh_rest,
+            ctx,
+            stream,
+            splats.means,
+            splats.log_scales,
+            splats.rotations,
+            splats.sh_rest,
+            st.cam,
+            st.slot_of,
+            g_mean2d,
+            g_conic,
+            g_opacity,
+            g_color,
+            grads.means,
+            grads.log_scales,
+            grads.rotations,
+            grads.opacity_logits,
+            grads.sh0,
+            grads.sh_rest,
+            densification,
+            has_densification,
+            n,
+            st.active_bases,
+            splats.rest_stride,
+            write_sh_rest,
         )
 
     def sh_rest_grad(self, st: ForwardState) -> ShRestGrad:
@@ -411,7 +448,8 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         `backward` (on `st`) elementwise; valid until the next forward."""
         var nv = max(st.n_visible, 1)
         return ShRestGrad(
-            st.slot_of, dptr(self.grad_scratch).unsafe_offset(nv * 6),
+            st.slot_of,
+            dptr(self.grad_scratch).unsafe_offset(nv * 6),
             SIMD[DType.float32, 4](st.cam[CAM_POS_X], st.cam[CAM_POS_Y], st.cam[CAM_POS_Z], 0.0),
             st.active_bases,
         )
@@ -448,11 +486,28 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         var ctx = self.ctx
         self.counters.enqueue_fill(0)
         preprocess[Self.tile_w, Self.tile_h, train](
-            ctx, ctx.stream(), splats.means, splats.log_scales, splats.rotations,
-            splats.opacity_logits, splats.sh0, splats.sh_rest, st.cam,
-            dptr(self.depth_keys_a), dptr(self.slots_a), st.primitive_ids,
-            dptr(self.n_touched), st.records, st.colors, dptr(self.counters),
-            st.slot_of, st.n, st.grid_w, st.grid_h, st.active_bases, splats.rest_stride,
+            ctx,
+            ctx.stream(),
+            splats.means,
+            splats.log_scales,
+            splats.rotations,
+            splats.opacity_logits,
+            splats.sh0,
+            splats.sh_rest,
+            st.cam,
+            dptr(self.depth_keys_a),
+            dptr(self.slots_a),
+            st.primitive_ids,
+            dptr(self.n_touched),
+            st.records,
+            st.colors,
+            dptr(self.counters),
+            st.slot_of,
+            st.n,
+            st.grid_w,
+            st.grid_h,
+            st.active_bases,
+            splats.rest_stride,
         )
         ctx.enqueue_copy(self.host_counters, self.counters)
         ctx.synchronize()
@@ -475,9 +530,17 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         var ids_sorted = dptr(self.slots_a)
         if n_vis > 1:
             var in_b = radix_sort_pairs[DType.uint32](
-                ctx, stream, dptr(self.depth_keys_a), dptr(self.slots_a),
-                dptr(self.depth_keys_b), dptr(self.slots_b), dptr(self.sort_hist),
-                dptr(self.sort_partials), dptr(self.sort_total), n_vis, 32,
+                ctx,
+                stream,
+                dptr(self.depth_keys_a),
+                dptr(self.slots_a),
+                dptr(self.depth_keys_b),
+                dptr(self.slots_b),
+                dptr(self.sort_hist),
+                dptr(self.sort_partials),
+                dptr(self.sort_total),
+                n_vis,
+                32,
             )
             ids_sorted = dptr(self.slots_b) if in_b else dptr(self.slots_a)
         self._mark(t, 1, ms)
@@ -487,18 +550,41 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         if m > 0:
             depth_ordering(ctx, stream, ids_sorted, dptr(self.n_touched), dptr(self.offsets), n_vis)
             exclusive_scan[DType.uint32](
-                ctx, stream, dptr(self.offsets), dptr(self.offsets),
-                dptr(self.scan_total), dptr(self.scan_partials), n_vis,
+                ctx,
+                stream,
+                dptr(self.offsets),
+                dptr(self.offsets),
+                dptr(self.scan_total),
+                dptr(self.scan_partials),
+                n_vis,
             )
             if key_bits <= 16:
                 create_instances[DType.uint16, Self.tile_w, Self.tile_h](
-                    ctx, stream, ids_sorted, dptr(self.offsets), dptr(self.n_touched),
-                    st.records, self._keys16(False), st.inst_a, st.grid_w, n_tiles, n_vis,
+                    ctx,
+                    stream,
+                    ids_sorted,
+                    dptr(self.offsets),
+                    dptr(self.n_touched),
+                    st.records,
+                    self._keys16(False),
+                    st.inst_a,
+                    st.grid_w,
+                    n_tiles,
+                    n_vis,
                 )
             else:
                 create_instances[DType.uint32, Self.tile_w, Self.tile_h](
-                    ctx, stream, ids_sorted, dptr(self.offsets), dptr(self.n_touched),
-                    st.records, dptr(self.keys_a), st.inst_a, st.grid_w, n_tiles, n_vis,
+                    ctx,
+                    stream,
+                    ids_sorted,
+                    dptr(self.offsets),
+                    dptr(self.n_touched),
+                    st.records,
+                    dptr(self.keys_a),
+                    st.inst_a,
+                    st.grid_w,
+                    n_tiles,
+                    n_vis,
                 )
         self._mark(t, 2, ms)
 
@@ -507,17 +593,33 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         if key_bits <= 16:
             if m > 1:
                 in_b = radix_sort_pairs[DType.uint16](
-                    ctx, stream, self._keys16(False), st.inst_a, self._keys16(True),
-                    st.inst_b, dptr(self.sort_hist), dptr(self.sort_partials),
-                    dptr(self.sort_total), m, key_bits,
+                    ctx,
+                    stream,
+                    self._keys16(False),
+                    st.inst_a,
+                    self._keys16(True),
+                    st.inst_b,
+                    dptr(self.sort_hist),
+                    dptr(self.sort_partials),
+                    dptr(self.sort_total),
+                    m,
+                    key_bits,
                 )
             tile_offsets[DType.uint16](ctx, stream, self._keys16(in_b), st.tile_offsets, m, n_tiles)
         else:
             if m > 1:
                 in_b = radix_sort_pairs[DType.uint32](
-                    ctx, stream, dptr(self.keys_a), st.inst_a, dptr(self.keys_b),
-                    st.inst_b, dptr(self.sort_hist), dptr(self.sort_partials),
-                    dptr(self.sort_total), m, key_bits,
+                    ctx,
+                    stream,
+                    dptr(self.keys_a),
+                    st.inst_a,
+                    dptr(self.keys_b),
+                    st.inst_b,
+                    dptr(self.sort_hist),
+                    dptr(self.sort_partials),
+                    dptr(self.sort_total),
+                    m,
+                    key_bits,
                 )
             var keys = dptr(self.keys_b) if in_b else dptr(self.keys_a)
             tile_offsets[DType.uint32](ctx, stream, keys, st.tile_offsets, m, n_tiles)
@@ -528,19 +630,44 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
             # Bucket layout: ceil(instances / 32) per tile, scanned.
             bucket_counts(ctx, stream, st.tile_offsets, st.bucket_start, n_tiles)
             exclusive_scan[DType.uint32](
-                ctx, stream, st.bucket_start, st.bucket_start,
-                st.bucket_start.unsafe_offset(n_tiles), dptr(self.scan_partials), n_tiles,
+                ctx,
+                stream,
+                st.bucket_start,
+                st.bucket_start,
+                st.bucket_start.unsafe_offset(n_tiles),
+                dptr(self.scan_partials),
+                n_tiles,
             )
             blend[Self.tile_w, Self.tile_h, Self.CDIM, True](
-                ctx, stream, st.tile_offsets, st.instance_slots, st.records,
-                st.colors, st.background, image, st.width, st.height,
-                st.bucket_start, st.bucket_tile, st.snapshots, st.final_T,
-                st.n_processed, st.tile_max_n,
+                ctx,
+                stream,
+                st.tile_offsets,
+                st.instance_slots,
+                st.records,
+                st.colors,
+                st.background,
+                image,
+                st.width,
+                st.height,
+                st.bucket_start,
+                st.bucket_tile,
+                st.snapshots,
+                st.final_T,
+                st.n_processed,
+                st.tile_max_n,
             )
         else:
             blend[Self.tile_w, Self.tile_h, Self.CDIM](
-                ctx, stream, st.tile_offsets, st.instance_slots, st.records,
-                st.colors, st.background, image, st.width, st.height,
+                ctx,
+                stream,
+                st.tile_offsets,
+                st.instance_slots,
+                st.records,
+                st.colors,
+                st.background,
+                image,
+                st.width,
+                st.height,
             )
         self._mark(t, 4, ms)
 

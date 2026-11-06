@@ -28,7 +28,9 @@ struct Dataset(Movable):
     var points: ColmapPoints  # sparse SfM points (initialization)
     var scene_extent: Float32  # 1.1 x max camera distance from the mean camera center
 
-    def __init__(out self, var train: List[View], var test: List[View], var points: ColmapPoints, scene_extent: Float32):
+    def __init__(
+        out self, var train: List[View], var test: List[View], var points: ColmapPoints, scene_extent: Float32
+    ):
         self.train = train^
         self.test = test^
         self.points = points^
@@ -90,8 +92,15 @@ def load_colmap_dataset(
         var sx = Float64(img.width) / Float64(cam.width)
         var sy = Float64(img.height) / Float64(cam.height)
         var camera = Camera(
-            im.view_matrix(), Float32(k[0] * sx), Float32(k[1] * sy), Float32(k[2] * sx),
-            Float32(k[3] * sy), img.width, img.height, near, far,
+            im.view_matrix(),
+            Float32(k[0] * sx),
+            Float32(k[1] * sy),
+            Float32(k[2] * sx),
+            Float32(k[3] * sy),
+            img.width,
+            img.height,
+            near,
+            far,
         )
         var view = View(im.name, camera, upload(ctx, img.pixels))
         if test_every > 0 and i % test_every == 0:

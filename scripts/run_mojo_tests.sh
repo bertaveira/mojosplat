@@ -4,7 +4,11 @@
 set -u
 cd "$(dirname "$0")/.."
 files=("$@")
-[ ${#files[@]} -eq 0 ] && mapfile -t files < <(find tests -name "test_*.mojo" | sort)
+if [ ${#files[@]} -eq 0 ]; then
+  while IFS= read -r f; do
+    files+=("$f")
+  done < <(find tests -name "test_*.mojo" | sort)
+fi
 status=0
 for f in "${files[@]}"; do
   echo "=== $f"

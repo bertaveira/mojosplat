@@ -39,8 +39,13 @@ def _max3(p: F32Ptr, g: Int) -> Float32:
 
 
 def _classify_kernel(
-    log_scales: F32Ptr, info: F32Ptr, dup: U32Ptr, split: U32Ptr, n: Int32,
-    grad_threshold: Float32, log_small: Float32,
+    log_scales: F32Ptr,
+    info: F32Ptr,
+    dup: U32Ptr,
+    split: U32Ptr,
+    n: Int32,
+    grad_threshold: Float32,
+    log_small: Float32,
 ):
     var g = block_idx.x * BLOCK_SIZE + thread_idx.x
     if g >= Int(n):
@@ -53,8 +58,14 @@ def _classify_kernel(
 
 
 def _build_index_kernel(
-    dup: U32Ptr, dup_off: U32Ptr, split: U32Ptr, split_off: U32Ptr, index: I32Ptr,
-    n: Int32, n_dup: Int32, n_split: Int32,
+    dup: U32Ptr,
+    dup_off: U32Ptr,
+    split: U32Ptr,
+    split_off: U32Ptr,
+    index: I32Ptr,
+    n: Int32,
+    n_dup: Int32,
+    n_split: Int32,
 ):
     """index = [0..n) ++ cloned rows ++ split rows ++ split rows."""
     var g = block_idx.x * BLOCK_SIZE + thread_idx.x
@@ -70,8 +81,15 @@ def _build_index_kernel(
 
 
 def _split_children_kernel(
-    means: F32Ptr, log_scales: F32Ptr, rotations: F32Ptr, randn: F32Ptr, use_randn: Int32,
-    seed: UInt64, first: Int32, count: Int32, log_shrink: Float32,
+    means: F32Ptr,
+    log_scales: F32Ptr,
+    rotations: F32Ptr,
+    randn: F32Ptr,
+    use_randn: Int32,
+    seed: UInt64,
+    first: Int32,
+    count: Int32,
+    log_shrink: Float32,
 ):
     """Move child rows [first, first + count) by R diag(s) z, shrink scales.
     z ~ N(0, I) from Philox (stream `j` of `seed`), or read from `randn`
@@ -100,16 +118,30 @@ def _split_children_kernel(
     x *= inv
     y *= inv
     z *= inv
-    means[unsafe_offset=r * 3 + 0] += (1 - 2 * (y * y + z * z)) * s0 + 2 * (x * y - w * z) * s1 + 2 * (x * z + w * y) * s2
-    means[unsafe_offset=r * 3 + 1] += 2 * (x * y + w * z) * s0 + (1 - 2 * (x * x + z * z)) * s1 + 2 * (y * z - w * x) * s2
-    means[unsafe_offset=r * 3 + 2] += 2 * (x * z - w * y) * s0 + 2 * (y * z + w * x) * s1 + (1 - 2 * (x * x + y * y)) * s2
+    means[unsafe_offset=r * 3 + 0] += (
+        (1 - 2 * (y * y + z * z)) * s0 + 2 * (x * y - w * z) * s1 + 2 * (x * z + w * y) * s2
+    )
+    means[unsafe_offset=r * 3 + 1] += (
+        2 * (x * y + w * z) * s0 + (1 - 2 * (x * x + z * z)) * s1 + 2 * (y * z - w * x) * s2
+    )
+    means[unsafe_offset=r * 3 + 2] += (
+        2 * (x * z - w * y) * s0 + 2 * (y * z + w * x) * s1 + (1 - 2 * (x * x + y * y)) * s2
+    )
     comptime for k in range(3):
         log_scales[unsafe_offset=r * 3 + k] += log_shrink
 
 
 def _prune_flags_kernel(
-    log_scales: F32Ptr, rotations: F32Ptr, opacity_logits: F32Ptr, split: U32Ptr, keep: U32Ptr,
-    n_out: Int32, n_orig: Int32, min_opacity_logit: Float32, prune_large: Int32, log_max_scale: Float32,
+    log_scales: F32Ptr,
+    rotations: F32Ptr,
+    opacity_logits: F32Ptr,
+    split: U32Ptr,
+    keep: U32Ptr,
+    n_out: Int32,
+    n_orig: Int32,
+    min_opacity_logit: Float32,
+    prune_large: Int32,
+    log_max_scale: Float32,
 ):
     var g = block_idx.x * BLOCK_SIZE + thread_idx.x
     if g >= Int(n_out):
@@ -174,9 +206,7 @@ struct Densifier(Movable):
         """Exclusive scan of 0/1 flags; returns the total (syncs)."""
         var partials = self.ctx.enqueue_create_buffer[DType.uint32](scan_workspace_size(max(n, 1)))
         var total = self.ctx.enqueue_create_buffer[DType.uint32](1)
-        exclusive_scan[DType.uint32](
-            self.ctx, self.ctx.stream(), flags, offsets, dptr(total), dptr(partials), n
-        )
+        exclusive_scan[DType.uint32](self.ctx, self.ctx.stream(), flags, offsets, dptr(total), dptr(partials), n)
         var host = self.ctx.enqueue_create_host_buffer[DType.uint32](1)
         self.ctx.enqueue_copy(host, total)
         self.ctx.synchronize()
@@ -184,7 +214,10 @@ struct Densifier(Movable):
         return Int(host[0])
 
     def densify(
-        mut self, mut splats: Splats, scene_extent: Float32, prune_large: Bool,
+        mut self,
+        mut splats: Splats,
+        scene_extent: Float32,
+        prune_large: Bool,
         randn_override: List[Float32] = List[Float32](),
     ) raises -> DensifyStats:
         """One clone / split / prune step. Uses (and does not reset) the
@@ -202,10 +235,15 @@ struct Densifier(Movable):
         var split_off = ctx.enqueue_create_buffer[DType.uint32](max(n, 1))
         stream.enqueue_function(
             ctx.compile_function[_classify_kernel](),
-            dptr(splats.params[Attr.LOG_SCALES]), splats.densification_ptr(), dptr(dup),
-            dptr(split), Int32(n), self.grad_threshold,
+            dptr(splats.params[Attr.LOG_SCALES]),
+            splats.densification_ptr(),
+            dptr(dup),
+            dptr(split),
+            Int32(n),
+            self.grad_threshold,
             Float32(log(Float64(self.percent_dense * scene_extent))),
-            grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+            grid_dim=num_blocks(n),
+            block_dim=BLOCK_SIZE,
         )
         st.cloned = self._scan(dptr(dup), dptr(dup_off), n)
         st.split = self._scan(dptr(split), dptr(split_off), n)
@@ -215,9 +253,16 @@ struct Densifier(Movable):
         var index = ctx.enqueue_create_buffer[DType.int32](max(n_out, 1))
         stream.enqueue_function(
             ctx.compile_function[_build_index_kernel](),
-            dptr(dup), dptr(dup_off), dptr(split), dptr(split_off), dptr(index),
-            Int32(n), Int32(st.cloned), Int32(st.split),
-            grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+            dptr(dup),
+            dptr(dup_off),
+            dptr(split),
+            dptr(split_off),
+            dptr(index),
+            Int32(n),
+            Int32(st.cloned),
+            Int32(st.split),
+            grid_dim=num_blocks(n),
+            block_dim=BLOCK_SIZE,
         )
         splats.gather(dptr(index), n_out, n)
         var n_children = 2 * st.split
@@ -228,10 +273,17 @@ struct Densifier(Movable):
             var dz = upload(ctx, randn_override)  # 1 element when unused
             stream.enqueue_function(
                 ctx.compile_function[_split_children_kernel](),
-                dptr(splats.params[Attr.MEANS]), dptr(splats.params[Attr.LOG_SCALES]),
-                dptr(splats.params[Attr.ROTATIONS]), dptr(dz), Int32(1 if use_override else 0),
-                random_ui64(0, UInt64.MAX), Int32(n + st.cloned), Int32(n_children), Float32(log(0.625)),
-                grid_dim=num_blocks(n_children), block_dim=BLOCK_SIZE,
+                dptr(splats.params[Attr.MEANS]),
+                dptr(splats.params[Attr.LOG_SCALES]),
+                dptr(splats.params[Attr.ROTATIONS]),
+                dptr(dz),
+                Int32(1 if use_override else 0),
+                random_ui64(0, UInt64.MAX),
+                Int32(n + st.cloned),
+                Int32(n_children),
+                Float32(log(0.625)),
+                grid_dim=num_blocks(n_children),
+                block_dim=BLOCK_SIZE,
             )
             ctx.synchronize()
             _ = dz^
@@ -241,18 +293,29 @@ struct Densifier(Movable):
         var keep_off = ctx.enqueue_create_buffer[DType.uint32](max(n_out, 1))
         stream.enqueue_function(
             ctx.compile_function[_prune_flags_kernel](),
-            dptr(splats.params[Attr.LOG_SCALES]), dptr(splats.params[Attr.ROTATIONS]),
-            dptr(splats.params[Attr.OPACITY_LOGITS]), dptr(split), dptr(keep),
-            Int32(n_out), Int32(n), _logit(self.min_opacity), Int32(1 if prune_large else 0),
+            dptr(splats.params[Attr.LOG_SCALES]),
+            dptr(splats.params[Attr.ROTATIONS]),
+            dptr(splats.params[Attr.OPACITY_LOGITS]),
+            dptr(split),
+            dptr(keep),
+            Int32(n_out),
+            Int32(n),
+            _logit(self.min_opacity),
+            Int32(1 if prune_large else 0),
             Float32(log(Float64(self.max_scale_fraction * scene_extent))),
-            grid_dim=num_blocks(n_out), block_dim=BLOCK_SIZE,
+            grid_dim=num_blocks(n_out),
+            block_dim=BLOCK_SIZE,
         )
         var n_keep = self._scan(dptr(keep), dptr(keep_off), n_out)
         var keep_index = ctx.enqueue_create_buffer[DType.int32](max(n_keep, 1))
         stream.enqueue_function(
             ctx.compile_function[_compact_index_kernel](),
-            dptr(keep), dptr(keep_off), dptr(keep_index), Int32(n_out),
-            grid_dim=num_blocks(n_out), block_dim=BLOCK_SIZE,
+            dptr(keep),
+            dptr(keep_off),
+            dptr(keep_index),
+            Int32(n_out),
+            grid_dim=num_blocks(n_out),
+            block_dim=BLOCK_SIZE,
         )
         splats.gather(dptr(keep_index), n_keep, n_keep)
         ctx.synchronize()
@@ -267,8 +330,11 @@ struct Densifier(Movable):
         var ctx = self.ctx
         ctx.stream().enqueue_function(
             ctx.compile_function[_cap_kernel](),
-            dptr(splats.params[Attr.OPACITY_LOGITS]), Int32(n), _logit(max_opacity),
-            grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+            dptr(splats.params[Attr.OPACITY_LOGITS]),
+            Int32(n),
+            _logit(max_opacity),
+            grid_dim=num_blocks(n),
+            block_dim=BLOCK_SIZE,
         )
         fill_f32(ctx, dptr(splats.exp_avg[Attr.OPACITY_LOGITS]), 0.0, n)
         fill_f32(ctx, dptr(splats.exp_avg_sq[Attr.OPACITY_LOGITS]), 0.0, n)
@@ -283,17 +349,29 @@ struct Densifier(Movable):
         var keep_off = ctx.enqueue_create_buffer[DType.uint32](max(n, 1))
         ctx.stream().enqueue_function(
             ctx.compile_function[_prune_flags_kernel](),
-            dptr(splats.params[Attr.LOG_SCALES]), dptr(splats.params[Attr.ROTATIONS]),
-            dptr(splats.params[Attr.OPACITY_LOGITS]), dptr(split), dptr(keep),
-            Int32(n), Int32(n), _logit(min_opacity), Int32(0), Float32(0.0),
-            grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+            dptr(splats.params[Attr.LOG_SCALES]),
+            dptr(splats.params[Attr.ROTATIONS]),
+            dptr(splats.params[Attr.OPACITY_LOGITS]),
+            dptr(split),
+            dptr(keep),
+            Int32(n),
+            Int32(n),
+            _logit(min_opacity),
+            Int32(0),
+            Float32(0.0),
+            grid_dim=num_blocks(n),
+            block_dim=BLOCK_SIZE,
         )
         var n_keep = self._scan(dptr(keep), dptr(keep_off), n)
         var keep_index = ctx.enqueue_create_buffer[DType.int32](max(n_keep, 1))
         ctx.stream().enqueue_function(
             ctx.compile_function[_compact_index_kernel](),
-            dptr(keep), dptr(keep_off), dptr(keep_index), Int32(n),
-            grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+            dptr(keep),
+            dptr(keep_off),
+            dptr(keep_index),
+            Int32(n),
+            grid_dim=num_blocks(n),
+            block_dim=BLOCK_SIZE,
         )
         splats.gather(dptr(keep_index), n_keep, n_keep)
         ctx.synchronize()

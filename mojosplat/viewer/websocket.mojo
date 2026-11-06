@@ -32,7 +32,9 @@ def sha1(msg: List[UInt8]) -> List[UInt8]:
     for chunk in range(0, len(data), 64):
         for t in range(16):
             var b = chunk + 4 * t
-            w[t] = (UInt32(data[b]) << 24) | (UInt32(data[b + 1]) << 16) | (UInt32(data[b + 2]) << 8) | UInt32(data[b + 3])
+            w[t] = (
+                (UInt32(data[b]) << 24) | (UInt32(data[b + 1]) << 16) | (UInt32(data[b + 2]) << 8) | UInt32(data[b + 3])
+            )
         for t in range(16, 80):
             w[t] = _rotl(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1)
         var a = h0
@@ -95,7 +97,12 @@ def header_value(request: String, name: String) -> String:
 
 def http_response(status: String, content_type: String, body: String) -> List[UInt8]:
     var head = String(
-        "HTTP/1.1 ", status, "\r\nContent-Type: ", content_type, "\r\nContent-Length: ", body.byte_length(),
+        "HTTP/1.1 ",
+        status,
+        "\r\nContent-Type: ",
+        content_type,
+        "\r\nContent-Length: ",
+        body.byte_length(),
         "\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
     )
     var out = List[UInt8](capacity=head.byte_length() + body.byte_length())
@@ -109,7 +116,9 @@ def http_response(status: String, content_type: String, body: String) -> List[UI
 def upgrade_response(client_key: String) -> List[UInt8]:
     var head = String(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n",
-        "Sec-WebSocket-Accept: ", accept_key(client_key), "\r\n\r\n",
+        "Sec-WebSocket-Accept: ",
+        accept_key(client_key),
+        "\r\n\r\n",
     )
     var out = List[UInt8](capacity=head.byte_length())
     for b in head.as_bytes():

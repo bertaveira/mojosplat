@@ -36,7 +36,7 @@ from std.bit import count_trailing_zeros
 from std.math import exp2
 from std.memory import stack_allocation
 
-from ..core.types import F32Ptr, I32Ptr, LANE_MASK_DTYPE, U32Ptr, placeholder
+from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, U32Ptr, placeholder
 from .preprocess import MIN_ALPHA, load_record, record_bounds, unpack_bounds
 
 comptime T_MIN: Float32 = 1e-4
@@ -52,7 +52,7 @@ def _blend_kernel[
     instance_ids: I32Ptr,  # [M] slots sorted by (tile, depth)
     records: F32Ptr,  # [slot, REC]
     colors: F32Ptr,  # [slot, CDIM] (clamped at 0 here)
-    background: SIMD[DType.float32, 4],
+    background_arg: KernelVector[DType.float32, 4],
     image: F32Ptr,  # out [H, W, CDIM]
     width: Int32,
     height: Int32,
@@ -65,12 +65,15 @@ def _blend_kernel[
     n_processed: U32Ptr,  # out [H * W] tile-local index + 1 of the last used Gaussian
     tile_max_n: U32Ptr,  # out [n_tiles] max of n_processed over the tile
 ):
+    var background = background_arg.value
     comptime BLOCK = tile_w * tile_h
     comptime WARPS = BLOCK // WARP_SIZE
     comptime SUBGRID_W = tile_w // SUBTILE_W
     comptime STRIDE = 12  # floats per Gaussian in the slab
     comptime assert CDIM <= 3, "slab holds 3 color channels"
-    comptime assert tile_w % SUBTILE_W == 0 and tile_h % SUBTILE_H == 0, "tile must split into 8 x (WARP_SIZE/8) sub-tiles"
+    comptime assert (
+        tile_w % SUBTILE_W == 0 and tile_h % SUBTILE_H == 0
+    ), "tile must split into 8 x (WARP_SIZE/8) sub-tiles"
 
     var slab_all = stack_allocation[WARPS * WARP_SIZE * STRIDE, Float32, address_space=AddressSpace.SHARED]()
     var rank = thread_idx.x
@@ -123,10 +126,7 @@ def _blend_kernel[
             var g = Int(instance_ids[unsafe_offset=fetch])
             var rec = load_record(records, g)
             var b = unpack_bounds(record_bounds(rec))
-            overlaps = (
-                Int(b[0]) < sub_x1 and sub_x0 < Int(b[1])
-                and Int(b[2]) < sub_y1 and sub_y0 < Int(b[3])
-            )
+            overlaps = Int(b[0]) < sub_x1 and sub_x0 < Int(b[1]) and Int(b[2]) < sub_y1 and sub_y0 < Int(b[3])
             if overlaps:
                 var c = SIMD[DType.float32, 4](0.0)
                 comptime for k in range(CDIM):
@@ -190,23 +190,22 @@ def _blend_kernel[
             tile_max_n[unsafe_offset=tile_id] = mm
 
 
-def _bucket_count_kernel(
-    tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int32
-):
+def _bucket_count_kernel(tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int32):
     var t = block_idx.x * 256 + thread_idx.x
     if t < Int(n_tiles):
         var n = tile_offsets[unsafe_offset=t + 1] - tile_offsets[unsafe_offset=t]
         counts[unsafe_offset=t] = (n + UInt32(WARP_SIZE - 1)) // UInt32(WARP_SIZE)
 
 
-def bucket_counts(
-    ctx: DeviceContext, stream: DeviceStream, tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int
-) raises:
+def bucket_counts(ctx: DeviceContext, stream: DeviceStream, tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int) raises:
     """Buckets (32 instances each) per tile; scan these to get bucket_start."""
     stream.enqueue_function(
         ctx.compile_function[_bucket_count_kernel](),
-        tile_offsets, counts, Int32(n_tiles),
-        grid_dim=max(1, (n_tiles + 255) // 256), block_dim=256,
+        tile_offsets,
+        counts,
+        Int32(n_tiles),
+        grid_dim=max(1, (n_tiles + 255) // 256),
+        block_dim=256,
     )
 
 
@@ -239,8 +238,21 @@ def blend[
     var grid_h = (height + tile_h - 1) // tile_h
     stream.enqueue_function(
         ctx.compile_function[_blend_kernel[tile_w, tile_h, CDIM, train]](),
-        tile_offsets, instance_ids, records, colors, background, image,
-        Int32(width), Int32(height), Int32(grid_w), bucket_start, bucket_tile,
-        snapshots, final_T, n_processed, tile_max_n,
-        grid_dim=(grid_w, grid_h), block_dim=tile_w * tile_h,
+        tile_offsets,
+        instance_ids,
+        records,
+        colors,
+        KernelVector[DType.float32, 4](background),
+        image,
+        Int32(width),
+        Int32(height),
+        Int32(grid_w),
+        bucket_start,
+        bucket_tile,
+        snapshots,
+        final_T,
+        n_processed,
+        tile_max_n,
+        grid_dim=(grid_w, grid_h),
+        block_dim=tile_w * tile_h,
     )

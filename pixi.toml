@@ -19,7 +19,8 @@ bench = { cmd = "mojo run -I . tools/bench.mojo", description = "Benchmark the r
 train = { cmd = "mojo run -I . tools/train.mojo", description = "Train a 3DGS model on a COLMAP scene" }
 eval = { cmd = "mojo run -I . tools/eval.mojo", description = "Evaluate a trained model on the held-out views" }
 view = { cmd = "mojo run -I . tools/view.mojo", description = "Open a model in the web viewer" }
-fmt = "mojo format mojosplat tests tools bindings"
+fmt = { cmd = "mojo format -q -l 120 mojosplat tests tools bindings", description = "Format all Mojo sources (120 columns)" }
+fmt-check = { cmd = "mojo format -q -l 120 mojosplat tests tools bindings && git diff --exit-code -- '*.mojo'", description = "Fail if formatting changes any Mojo file" }
 
 # --- Optional: PyTorch bindings (torch lives only in this environment) -----
 # Linux only: gsplat (the reference) needs CUDA.

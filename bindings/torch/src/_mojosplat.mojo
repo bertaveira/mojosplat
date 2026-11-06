@@ -53,7 +53,7 @@ def _background(bg: PythonObject) raises -> SIMD[DType.float32, 4]:
     return out
 
 
-struct PyAllocator(StateAllocator, Movable):
+struct PyAllocator(Movable, StateAllocator):
     """StateAllocator backed by a Python callable `alloc(nbytes) -> address`
     (torch.empty on the caching allocator; the Python side keeps the tensors
     alive until the backward)."""
@@ -73,8 +73,14 @@ def _u32(obj: PythonObject) raises -> U32Ptr:
 
 def _splats(ptrs: PythonObject, sizes: PythonObject) raises -> SplatView:
     return SplatView(
-        _f32(ptrs[0]), _f32(ptrs[1]), _f32(ptrs[2]), _f32(ptrs[3]),
-        _f32(ptrs[4]), _f32(ptrs[5]), Int(py=sizes[0]), Int(py=sizes[1]),
+        _f32(ptrs[0]),
+        _f32(ptrs[1]),
+        _f32(ptrs[2]),
+        _f32(ptrs[3]),
+        _f32(ptrs[4]),
+        _f32(ptrs[5]),
+        Int(py=sizes[0]),
+        Int(py=sizes[1]),
     )
 
 
@@ -82,15 +88,33 @@ def _state_to_py(st: ForwardState) raises -> PythonObject:
     """ForwardState -> list of ints (sizes, then device addresses)."""
     var t = Python.list()
     for v in [
-        st.n, st.n_visible, st.n_instances, st.n_tiles, st.n_bucket_blocks,
-        st.width, st.height, st.grid_w, st.grid_h, st.active_bases,
+        st.n,
+        st.n_visible,
+        st.n_instances,
+        st.n_tiles,
+        st.n_bucket_blocks,
+        st.width,
+        st.height,
+        st.grid_w,
+        st.grid_h,
+        st.active_bases,
     ]:
         t.append(v)
     for a in [
-        Int(st.primitive_ids), Int(st.slot_of), Int(st.records), Int(st.colors),
-        Int(st.instance_slots), Int(st.inst_a), Int(st.inst_b), Int(st.tile_offsets),
-        Int(st.bucket_start), Int(st.bucket_tile), Int(st.snapshots), Int(st.final_T),
-        Int(st.n_processed), Int(st.tile_max_n),
+        Int(st.primitive_ids),
+        Int(st.slot_of),
+        Int(st.records),
+        Int(st.colors),
+        Int(st.instance_slots),
+        Int(st.inst_a),
+        Int(st.inst_b),
+        Int(st.tile_offsets),
+        Int(st.bucket_start),
+        Int(st.bucket_tile),
+        Int(st.snapshots),
+        Int(st.final_T),
+        Int(st.n_processed),
+        Int(st.tile_max_n),
     ]:
         t.append(a)
     return t
@@ -159,7 +183,6 @@ struct Context(Movable, Writable):
         r.ctx.synchronize()
         return Python.tuple(r.num_visible, r.num_instances)
 
-
     @staticmethod
     def forward_train(
         self_: Pointer[Self, MutUnsafeAnyOrigin],
@@ -172,8 +195,12 @@ struct Context(Movable, Writable):
         var allocator = PyAllocator(alloc)
         ref r = self_[].rasterizer
         var st = r.forward(
-            _splats(ptrs, sizes), _camera(cam_bg[0]), _background(cam_bg[1]),
-            _f32(ptrs[6]), Int(py=sizes[2]), allocator,
+            _splats(ptrs, sizes),
+            _camera(cam_bg[0]),
+            _background(cam_bg[1]),
+            _f32(ptrs[6]),
+            Int(py=sizes[2]),
+            allocator,
         )
         r.ctx.synchronize()
         return _state_to_py(st)
@@ -193,8 +220,13 @@ struct Context(Movable, Writable):
         var dens = _f32(grad_ptrs[6]) if has_dens else _f32(grad_ptrs[0])
         ref r = self_[].rasterizer
         r.backward(
-            _splats(ptrs, sizes), st, _f32(ptrs[6]), _f32(ptrs[7]),
-            _splats(grad_ptrs, sizes), dens, has_dens,
+            _splats(ptrs, sizes),
+            st,
+            _f32(ptrs[6]),
+            _f32(ptrs[7]),
+            _splats(grad_ptrs, sizes),
+            dens,
+            has_dens,
         )
         r.ctx.synchronize()
         return PythonObject(None)

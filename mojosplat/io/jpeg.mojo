@@ -49,10 +49,7 @@ def _load_turbojpeg() raises -> OwnedDLHandle:
             return OwnedDLHandle(path)
         except:
             pass
-    raise Error(
-        "libturbojpeg not found: run inside the pixi environment (pixi run ...) "
-        "or install libjpeg-turbo"
-    )
+    raise Error("libturbojpeg not found: run inside the pixi environment (pixi run ...) or install libjpeg-turbo")
 
 
 struct JpegDecoder(Movable):
@@ -92,8 +89,12 @@ struct JpegDecoder(Movable):
         var h = Int(tj_get(self.handle, c_int(_TJPARAM_JPEGHEIGHT)))
         var pixels = List[UInt8](length=w * h * 3, fill=0)
         var rc = decompress(
-            self.handle, src, len(data), pixels.unsafe_ptr().as_unsafe_any_origin(),
-            c_int(0), c_int(_TJPF_RGB),
+            self.handle,
+            src,
+            len(data),
+            pixels.unsafe_ptr().as_unsafe_any_origin(),
+            c_int(0),
+            c_int(_TJPF_RGB),
         )
         # tj3Decompress8 returns -1 for recoverable warnings too (e.g. extraneous
         # bytes before a marker); the image is complete then (TJERR_WARNING = 0).
@@ -151,8 +152,14 @@ struct JpegEncoder(Movable):
         var buf_addr = Int(self.data.unsafe_ptr())
         var size = UInt(bound)
         var rc = self.lib.get_function[c_int]("tj3Compress8")(
-            self.handle, rgb.unsafe_ptr().as_unsafe_any_origin(), c_int(width), c_int(0), c_int(height),
-            c_int(_TJPF_RGB), Pointer(to=buf_addr), Pointer(to=size),
+            self.handle,
+            rgb.unsafe_ptr().as_unsafe_any_origin(),
+            c_int(width),
+            c_int(0),
+            c_int(height),
+            c_int(_TJPF_RGB),
+            Pointer(to=buf_addr),
+            Pointer(to=size),
         )
         if rc != 0 and self.lib.get_function[c_int]("tj3GetErrorCode")(self.handle) != 0:
             raise Error("JPEG encoding failed")

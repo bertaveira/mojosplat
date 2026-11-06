@@ -89,7 +89,9 @@ def write_ply(path: String, s: HostSplats) raises:
     var opacity = s.opacity_logits.unsafe_ptr()
     var rotations = s.rotations.unsafe_ptr()
 
-    def rows(chunk: Int) {var dst, var means, var sh0, var log_scales, var sh_rest, var opacity, var rotations, var P, var K, var n}:
+    def rows(
+        chunk: Int,
+    ) {var dst, var means, var sh0, var log_scales, var sh_rest, var opacity, var rotations, var P, var K, var n}:
         for g in range(chunk * _CHUNK, min((chunk + 1) * _CHUNK, n)):
             var o = dst.unsafe_offset(g * P)
             for k in range(3):
@@ -159,10 +161,17 @@ def read_ply(path: String) raises -> HostSplats:
     var K = n_rest // 3
 
     var c_xyz = SIMD[DType.int32, 4](Int32(_col(names, "x")), Int32(_col(names, "y")), Int32(_col(names, "z")), 0)
-    var c_dc = SIMD[DType.int32, 4](Int32(_col(names, "f_dc_0")), Int32(_col(names, "f_dc_1")), Int32(_col(names, "f_dc_2")), 0)
-    var c_sc = SIMD[DType.int32, 4](Int32(_col(names, "scale_0")), Int32(_col(names, "scale_1")), Int32(_col(names, "scale_2")), 0)
+    var c_dc = SIMD[DType.int32, 4](
+        Int32(_col(names, "f_dc_0")), Int32(_col(names, "f_dc_1")), Int32(_col(names, "f_dc_2")), 0
+    )
+    var c_sc = SIMD[DType.int32, 4](
+        Int32(_col(names, "scale_0")), Int32(_col(names, "scale_1")), Int32(_col(names, "scale_2")), 0
+    )
     var c_rot = SIMD[DType.int32, 4](
-        Int32(_col(names, "rot_0")), Int32(_col(names, "rot_1")), Int32(_col(names, "rot_2")), Int32(_col(names, "rot_3"))
+        Int32(_col(names, "rot_0")),
+        Int32(_col(names, "rot_1")),
+        Int32(_col(names, "rot_2")),
+        Int32(_col(names, "rot_3")),
     )
     var c_op = _col(names, "opacity")
     var c_rest = List[Int](capacity=n_rest)
@@ -193,7 +202,26 @@ def read_ply(path: String) raises -> HostSplats:
     var opacity = s.opacity_logits.unsafe_ptr()
     var rotations = s.rotations.unsafe_ptr()
 
-    def rows(chunk: Int) {var src, var rest_cols, var means, var sh0, var log_scales, var sh_rest, var opacity, var rotations, var c_xyz, var c_dc, var c_sc, var c_rot, var c_op, var P, var K, var count}:
+    def rows(
+        chunk: Int,
+    ) {
+        var src,
+        var rest_cols,
+        var means,
+        var sh0,
+        var log_scales,
+        var sh_rest,
+        var opacity,
+        var rotations,
+        var c_xyz,
+        var c_dc,
+        var c_sc,
+        var c_rot,
+        var c_op,
+        var P,
+        var K,
+        var count,
+    }:
         for g in range(chunk * _CHUNK, min((chunk + 1) * _CHUNK, count)):
             var row = src.unsafe_offset(g * P)
             for k in range(3):

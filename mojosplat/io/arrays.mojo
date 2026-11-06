@@ -39,9 +39,7 @@ def write_array[dtype: DType](path: String, values: List[Scalar[dtype]]) raises:
 # ---------------------------------------------------------------------------
 
 
-def upload[
-    dtype: DType
-](ctx: DeviceContext, values: List[Scalar[dtype]]) raises -> DeviceBuffer[dtype]:
+def upload[dtype: DType](ctx: DeviceContext, values: List[Scalar[dtype]]) raises -> DeviceBuffer[dtype]:
     """Copy a host list into a new device buffer (enqueued on ctx's stream)."""
     var dev = ctx.enqueue_create_buffer[dtype](max(len(values), 1))
     if len(values) > 0:
@@ -50,9 +48,7 @@ def upload[
     return dev^
 
 
-def download[
-    dtype: DType
-](ctx: DeviceContext, buf: DeviceBuffer[dtype], count: Int) raises -> List[Scalar[dtype]]:
+def download[dtype: DType](ctx: DeviceContext, buf: DeviceBuffer[dtype], count: Int) raises -> List[Scalar[dtype]]:
     """Copy the first `count` elements of a device buffer back to the host."""
     var out = List[Scalar[dtype]](unsafe_uninit_length=count)
     if count > 0:

@@ -30,11 +30,7 @@ def scan_workspace_size(n: Int) -> Int:
 
 def _reduce_kernel[
     dtype: DType
-](
-    input: Pointer[Scalar[dtype], MutUntrackedOrigin],
-    partials: Pointer[Scalar[dtype], MutUntrackedOrigin],
-    n: Int32,
-):
+](input: Pointer[Scalar[dtype], MutUntrackedOrigin], partials: Pointer[Scalar[dtype], MutUntrackedOrigin], n: Int32,):
     var base = block_idx.x * SCAN_TILE
     var acc = Scalar[dtype](0)
     comptime for i in range(SCAN_ITEMS):
@@ -78,9 +74,7 @@ def _downsweep_kernel[
     partials: Pointer[Scalar[dtype], MutUntrackedOrigin],
     n: Int32,
 ):
-    var tile = stack_allocation[
-        SCAN_TILE, Scalar[dtype], address_space=AddressSpace.SHARED
-    ]()
+    var tile = stack_allocation[SCAN_TILE, Scalar[dtype], address_space=AddressSpace.SHARED]()
     var base = block_idx.x * SCAN_TILE
     var t = thread_idx.x
 
@@ -98,9 +92,9 @@ def _downsweep_kernel[
     var thread_sum = Scalar[dtype](0)
     comptime for i in range(SCAN_ITEMS):
         thread_sum += tile[unsafe_offset=t * SCAN_ITEMS + i]
-    var running = block.prefix_sum[block_size=SCAN_BLOCK, exclusive=True](
-        thread_sum
-    ) + partials[unsafe_offset=block_idx.x]
+    var running = (
+        block.prefix_sum[block_size=SCAN_BLOCK, exclusive=True](thread_sum) + partials[unsafe_offset=block_idx.x]
+    )
     barrier()
     comptime for i in range(SCAN_ITEMS):
         var v = tile[unsafe_offset=t * SCAN_ITEMS + i]
@@ -134,16 +128,26 @@ def exclusive_scan[
     var num_tiles = scan_workspace_size(n)
     stream.enqueue_function(
         ctx.compile_function[_reduce_kernel[dtype]](),
-        input, partials, Int32(n),
-        grid_dim=num_tiles, block_dim=SCAN_BLOCK,
+        input,
+        partials,
+        Int32(n),
+        grid_dim=num_tiles,
+        block_dim=SCAN_BLOCK,
     )
     stream.enqueue_function(
         ctx.compile_function[_scan_tops_kernel[dtype]](),
-        partials, total, Int32(num_tiles),
-        grid_dim=1, block_dim=SCAN_BLOCK,
+        partials,
+        total,
+        Int32(num_tiles),
+        grid_dim=1,
+        block_dim=SCAN_BLOCK,
     )
     stream.enqueue_function(
         ctx.compile_function[_downsweep_kernel[dtype]](),
-        input, output, partials, Int32(n),
-        grid_dim=num_tiles, block_dim=SCAN_BLOCK,
+        input,
+        output,
+        partials,
+        Int32(n),
+        grid_dim=num_tiles,
+        block_dim=SCAN_BLOCK,
     )

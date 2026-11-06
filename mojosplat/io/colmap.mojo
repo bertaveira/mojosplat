@@ -53,10 +53,15 @@ struct ColmapCamera(Copyable, Movable):
             return SIMD[DType.float64, 4](self.params[0], self.params[0], self.params[1], self.params[2])
         elif self.model == 1:
             return SIMD[DType.float64, 4](self.params[0], self.params[1], self.params[2], self.params[3])
-        raise Error(String(
-            "camera ", self.id, ": only undistorted SIMPLE_PINHOLE/PINHOLE models are supported (model id ",
-            self.model, "); undistort the images with COLMAP first",
-        ))
+        raise Error(
+            String(
+                "camera ",
+                self.id,
+                ": only undistorted SIMPLE_PINHOLE/PINHOLE models are supported (model id ",
+                self.model,
+                "); undistort the images with COLMAP first",
+            )
+        )
 
 
 @fieldwise_init

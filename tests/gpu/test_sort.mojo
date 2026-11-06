@@ -7,9 +7,7 @@ from mojosplat.io.arrays import download, upload
 from mojosplat.gpu.sort import radix_sort_pairs, sort_hist_size, sort_partials_size
 
 
-def check_sort[
-    kd: DType = DType.uint64
-](n: Int, end_bit: Int, high_cardinality: Bool) raises:
+def check_sort[kd: DType = DType.uint64](n: Int, end_bit: Int, high_cardinality: Bool) raises:
     seed(n + end_bit)
     var ctx = DeviceContext()
     var keys = List[Scalar[kd]](capacity=n)
@@ -33,10 +31,21 @@ def check_sort[
     var d_part = ctx.enqueue_create_buffer[DType.uint32](sort_partials_size(n))
     var d_total = ctx.enqueue_create_buffer[DType.uint32](1)
     var in_b = radix_sort_pairs[kd](
-        ctx, ctx.stream(), dptr(d_ka), dptr(d_va), dptr(d_kb), dptr(d_vb),
-        dptr(d_hist), dptr(d_part), dptr(d_total), n, end_bit,
+        ctx,
+        ctx.stream(),
+        dptr(d_ka),
+        dptr(d_va),
+        dptr(d_kb),
+        dptr(d_vb),
+        dptr(d_hist),
+        dptr(d_part),
+        dptr(d_total),
+        n,
+        end_bit,
     )
     ctx.synchronize()
+    # Raw kernel pointers don't retain their owners through asynchronous work.
+    _ = (d_hist^, d_part^, d_total^)
     var out_k = download(ctx, d_kb, n) if in_b else download(ctx, d_ka, n)
     var out_v = download(ctx, d_vb, n) if in_b else download(ctx, d_va, n)
 

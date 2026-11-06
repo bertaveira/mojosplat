@@ -101,9 +101,7 @@ def _create_instances_kernel[
         while t - lane < s_count:
             var tx = s_tx0 + t % s_tw
             var ty = s_ty0 + t // s_tw
-            var hit = t < s_count and will_contribute[tile_w, tile_h](
-                s_mx, s_my, s_ca, s_cb, s_cc, tx, ty, s_pt
-            )
+            var hit = t < s_count and will_contribute[tile_w, tile_h](s_mx, s_my, s_ca, s_cb, s_cc, tx, ty, s_pt)
             var hits = warp.vote[LANE_MASK_DTYPE](hit)
             if hit:
                 var dst = s_w + Int(pop_count(hits & lt))
@@ -154,8 +152,12 @@ def depth_ordering(
 ) raises:
     stream.enqueue_function(
         ctx.compile_function[_depth_ordering_kernel](),
-        sorted_ids, n_touched, counts, Int32(n_visible),
-        grid_dim=num_blocks(n_visible), block_dim=BLOCK_SIZE,
+        sorted_ids,
+        n_touched,
+        counts,
+        Int32(n_visible),
+        grid_dim=num_blocks(n_visible),
+        block_dim=BLOCK_SIZE,
     )
 
 
@@ -176,8 +178,17 @@ def create_instances[
 ) raises:
     stream.enqueue_function(
         ctx.compile_function[_create_instances_kernel[key_dtype, tile_w, tile_h]](),
-        sorted_ids, offsets, n_touched, records, keys, instance_ids, Int32(grid_w), Int32(n_tiles), Int32(n_visible),
-        grid_dim=num_blocks(n_visible), block_dim=BLOCK_SIZE,
+        sorted_ids,
+        offsets,
+        n_touched,
+        records,
+        keys,
+        instance_ids,
+        Int32(grid_w),
+        Int32(n_tiles),
+        Int32(n_visible),
+        grid_dim=num_blocks(n_visible),
+        block_dim=BLOCK_SIZE,
     )
 
 
@@ -197,8 +208,12 @@ def tile_offsets[
         return
     stream.enqueue_function(
         ctx.compile_function[_tile_offsets_kernel[key_dtype]](),
-        keys, offsets, Int32(m), Int32(n_tiles),
-        grid_dim=num_blocks(m), block_dim=BLOCK_SIZE,
+        keys,
+        offsets,
+        Int32(m),
+        Int32(n_tiles),
+        grid_dim=num_blocks(m),
+        block_dim=BLOCK_SIZE,
     )
 
 

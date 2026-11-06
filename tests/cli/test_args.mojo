@@ -21,12 +21,15 @@ struct Inner(Defaultable, Movable):
 struct Opts(Defaultable, Movable):
     @__annotation(Arg("Scene", positional=True))
     var scene: String
+
     @__annotation(Arg("Model", positional=True))
     var model: String
+
     @__annotation(Arg("Output", short="o"))
     var out: String
     var max_steps: Int
     var scale: Float64
+
     @__annotation(Arg("Training"))
     var train: Inner
 
@@ -54,10 +57,21 @@ def test_defaults_and_positionals() raises:
 
 
 def test_flags() raises:
-    var o = parse([
-        "--max-steps", "7", "garden", "-o", "x.png", "--scale=2.5", "--lr", "0.001",
-        "--no-densify", "--background", "1,0.5,0",
-    ])
+    var o = parse(
+        [
+            "--max-steps",
+            "7",
+            "garden",
+            "-o",
+            "x.png",
+            "--scale=2.5",
+            "--lr",
+            "0.001",
+            "--no-densify",
+            "--background",
+            "1,0.5,0",
+        ]
+    )
     assert_equal(o.scene, "garden")
     assert_equal(o.max_steps, 7)
     assert_equal(o.out, "x.png")
