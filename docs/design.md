@@ -61,7 +61,7 @@ M-series GPUs. Warp-level code is written for any warp size: lane masks use
 there instead of 12. Platform differences on the host side are
 `comptime if CompilationTarget.is_macos()` branches.
 
-Rules for kernels, all from Mojo 1.2 on Metal (Apple M2 Pro):
+Rules for kernels, all from Mojo 1.2 on Metal (Apple M1 Pro):
 
 - **Vector kernel arguments are `KernelVector[dtype, width]`, never a bare
   `SIMD`.** Mojo lowers a by-value SIMD argument to an AIR vector parameter,

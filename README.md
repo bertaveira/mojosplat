@@ -7,7 +7,7 @@ https://github.com/user-attachments/assets/606288c3-1d81-4fa7-9edd-ad549de8cda0
 Gaussian Splatting codebases are usually Python orchestrating hand-written CUDA kernels, tied to NVIDIA GPUs. Mojo promises CUDA-level performance in a single, Python-like language that also targets AMD and Apple GPUs. MojoSplat is a full, fast 3DGS implementation built to test that promise.
 
 - **Train a scene with one command.** COLMAP dataset in, `.ply` out (the standard 3DGS format).
-- **Fast.** Matches the quality of [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting), a state-of-the-art CUDA implementation, and trains slightly faster: Mip-NeRF360 garden in 3½ minutes on an RTX 5090. Rendering and a training step are about 2× faster than gsplat.
+- **Fast.** Matches the quality of [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting), a state-of-the-art CUDA implementation, and trains slightly faster: Mip-NeRF360 garden in under 3½ minutes on an RTX 5090. Rendering and a training step are about 2× faster than gsplat.
 - **Faithful.** Images and gradients match a float64 reference implementation to about 1e-6.
 - **Usable from PyTorch.** Bindings with autograd provide a fast drop-in rasterizer for existing training code.
 
@@ -36,19 +36,13 @@ RTX 5090, Mip-NeRF360 garden (`images_4`, 30k iterations), Faster-GS run from it
 
 | | PSNR | SSIM | LPIPS | Gaussians | Training time |
 |---|---|---|---|---|---|
-| **MojoSplat** | **27.49** | 0.865 | 0.122 | 4.2M | **3m31s** |
+| **MojoSplat** | **27.46** | 0.866 | 0.122 | 4.2M | **3m25s** |
 | [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) (CUDA + PyTorch) | 27.44 | 0.866 | 0.121 | 4.1M | 3m48s |
-| 3DGS (published) | 27.41 | 0.868 | 0.103 | ~5.8M | — |
+| 3DGS (published) | 27.41 | 0.868 | —\* | ~5.8M | — |
 
-bicycle.splat (6.1M Gaussians, 1280×720) compared with gsplat:
+\* The 3DGS paper's LPIPS (0.103) is not comparable: its evaluation code passes images in [0, 1] to an LPIPS network that expects [-1, 1], which lowers the score. The other rows use LPIPS-VGG on correctly scaled images.
 
-| | MojoSplat | gsplat |
-|---|---|---|
-| Render, pure Mojo | **1.21 ms** | — |
-| Render via PyTorch | **1.28 ms** | 2.59 ms |
-| Training step via PyTorch | **4.00 ms** | 8.29 ms |
-
-Reproduce with `pixi run bench` and `bindings/torch/examples/benchmark_render.py`.
+On an Apple M1 Pro, the same garden run reaches 27.43 dB PSNR with 4.2M Gaussians in 1h03m.
 
 ## Using the library
 
