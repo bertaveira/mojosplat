@@ -5,7 +5,7 @@ C1 = 0.01^2, C2 = 0.03^2, zero padding, averaged over pixels and channels.
 The window is separable, so the forward is a horizontal then a vertical
 pass over the five local moments (I, T, I^2, T^2, I T).
 
-Backward (as in fused-ssim, Mallick et al.): with the target T constant,
+Backward (as in fused-ssim, Goel et al., MIT): with the target T constant,
 SSIM(p) depends on the image through mu1 = G*I, E11 = G*I^2, E12 = G*(I T),
 so
     dL/dI(x) = (G*dmu1)(x) + 2 I(x) (G*dE11)(x) + T(x) (G*dE12)(x)

@@ -168,6 +168,7 @@ struct Densifier(Movable):
         var host = self.ctx.enqueue_create_host_buffer[DType.uint32](1)
         self.ctx.enqueue_copy(host, total)
         self.ctx.synchronize()
+        _ = partials^  # keep the scan scratch alive until the kernels finished
         return Int(host[0])
 
     def densify(

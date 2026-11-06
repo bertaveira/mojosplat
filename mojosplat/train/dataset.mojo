@@ -100,4 +100,6 @@ def load_colmap_dataset(
             train_cams.append(camera)
             train.append(view^)
     var extent = scene_extent(train_cams)
+    if len(train) == 0:
+        raise Error(String(root, ": no training views (", len(test), " test views)"))
     return Dataset(train^, test^, model.points.copy(), extent)

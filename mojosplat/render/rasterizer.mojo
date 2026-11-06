@@ -1,4 +1,4 @@
-"""Faster-GS style forward rasterizer (inference path).
+"""Faster-GS style rasterizer: forward (inference and training) and backward.
 
 Inference (`render`) and training (`forward` + `backward`) share the
 pipeline (one host sync, to size the instance buffers):
@@ -13,7 +13,7 @@ pipeline (one host sync, to size the instance buffers):
   blend            per-tile front-to-back compositing with sub-tile skipping
 
 `forward` additionally saves the state the per-Gaussian backward needs
-(see blend.mojo / backward.mojo) into buffers obtained from a
+(see blend.mojo / blend_backward.mojo) into buffers obtained from a
 `StateAllocator`, and returns it as a `ForwardState`, so several forwards can
 be in flight before their backward passes (e.g. torch autograd).
 
@@ -22,6 +22,7 @@ scales, unnormalized quaternions, opacity logits and SH coefficients.
 Design and kernels follow Faster-GS (Hahlbohm et al., CVPR 2026, Apache-2.0).
 """
 
+from max.gpu import WARP_SIZE
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.memory import ArcPointer
 from std.time import perf_counter_ns
@@ -105,7 +106,7 @@ struct ForwardState(ImplicitlyCopyable, Movable):
         self.tile_max_n = placeholder[DType.uint32]()
 
 
-struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
+struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16](Movable):
     """Forward renderer and its backward; owns and reuses scratch buffers."""
 
     comptime CDIM = 3
@@ -149,7 +150,6 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
     # Results of the last render / forward
     var num_visible: Int
     var num_instances: Int
-    var last_instances: I32Ptr
     # Optional per-stage timing (adds syncs)
     var profile: Bool
     var stage_ms: SIMD[DType.float64, 8]  # preprocess, depth sort, instances, tile sort, blend, -, -, total
@@ -187,7 +187,6 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
         self.arena = ArcPointer(DeviceArena(ctx))
         self.num_visible = 0
         self.num_instances = 0
-        self.last_instances = placeholder[DType.int32]()
         self.profile = False
         self.stage_ms = SIMD[DType.float64, 8](0)
 
@@ -250,10 +249,6 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
             var now = Int(perf_counter_ns())
             ms[slot] = Float64(now - t) / 1e6
             t = now
-
-    def instance_ids(self) -> I32Ptr:
-        """Slots of the last render sorted by (tile, depth)."""
-        return self.last_instances
 
     # ------------------------------------------------------------------
     # Public API
@@ -527,7 +522,6 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12](Movable):
             var keys = dptr(self.keys_b) if in_b else dptr(self.keys_a)
             tile_offsets[DType.uint32](ctx, stream, keys, st.tile_offsets, m, n_tiles)
         st.instance_slots = st.inst_b if in_b else st.inst_a
-        self.last_instances = st.instance_slots
         self._mark(t, 3, ms)
 
         comptime if train:

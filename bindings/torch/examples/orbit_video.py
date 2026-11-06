@@ -1,7 +1,7 @@
 """Render an orbit video around a .splat scene.
 
 Usage:
-    uv run python examples/orbit_video.py [path/to/scene.splat] [options]
+    pixi run -e torch python bindings/torch/examples/orbit_video.py [path/to/scene.splat] [options]
 
 Produces orbit.mp4 (or --output path). Requires CUDA and ffmpeg.
 """

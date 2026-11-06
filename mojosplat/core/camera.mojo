@@ -72,19 +72,12 @@ struct Camera(ImplicitlyCopyable, Movable):
             p[i] = self.view[i]
         var W = Float32(self.width)
         var H = Float32(self.height)
-        var tan_fov_x = 0.5 * W / self.fx
-        var tan_fov_y = 0.5 * H / self.fy
         p[CAM_FX] = self.fx
         p[CAM_FY] = self.fy
         p[CAM_CX] = self.cx
         p[CAM_CY] = self.cy
         p[CAM_W] = W
         p[CAM_H] = H
-        # Frustum limits used to clamp the Jacobian (as in gsplat).
-        p[CAM_LIM_X_POS] = (W - self.cx) / self.fx + 0.3 * tan_fov_x
-        p[CAM_LIM_X_NEG] = self.cx / self.fx + 0.3 * tan_fov_x
-        p[CAM_LIM_Y_POS] = (H - self.cy) / self.fy + 0.3 * tan_fov_y
-        p[CAM_LIM_Y_NEG] = self.cy / self.fy + 0.3 * tan_fov_y
         p[CAM_NEAR] = self.near
         p[CAM_FAR] = self.far
         var pos = self.position()
@@ -110,10 +103,7 @@ comptime CAM_CX = 14
 comptime CAM_CY = 15
 comptime CAM_W = 16
 comptime CAM_H = 17
-comptime CAM_LIM_X_POS = 18
-comptime CAM_LIM_X_NEG = 19
-comptime CAM_LIM_Y_POS = 20
-comptime CAM_LIM_Y_NEG = 21
+# 18..21 unused (the preprocess clamps with CLIP_MARGIN).
 comptime CAM_NEAR = 22
 comptime CAM_FAR = 23
 comptime CAM_POS_X = 24

@@ -87,7 +87,9 @@ struct JpegDecoder(Movable):
             self.handle, src, len(data), pixels.unsafe_ptr().as_unsafe_any_origin(),
             c_int(0), c_int(_TJPF_RGB),
         )
-        if rc != 0:
+        # tj3Decompress8 returns -1 for recoverable warnings too (e.g. extraneous
+        # bytes before a marker); the image is complete then (TJERR_WARNING = 0).
+        if rc != 0 and self.lib.get_function[c_int]("tj3GetErrorCode")(self.handle) != 0:
             var err = self._error(String("JPEG decoding failed: ", name))
             raise err^
         return Image8(w, h, pixels^)

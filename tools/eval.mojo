@@ -22,6 +22,14 @@ from mojosplat import Rasterizer, Splats, download, read_ply, write_png
 from mojosplat.train.dataset import load_colmap_dataset
 
 
+def _value(flag: StringSlice, i: Int) raises -> String:
+    """The command-line argument after `flag` (raises if it is missing)."""
+    var args = argv()
+    if i >= len(args):
+        raise Error(String("missing value after ", flag))
+    return String(args[i])
+
+
 def main() raises:
     var args = argv()
     var positional = List[String]()
@@ -31,10 +39,10 @@ def main() raises:
     while i < len(args):
         var a = String(args[i])
         if a == "--images":
-            images = String(args[i + 1])
+            images = _value(args[i], i + 1)
             i += 2
         elif a == "--save":
-            save = String(args[i + 1])
+            save = _value(args[i], i + 1)
             i += 2
         else:
             positional.append(a)
@@ -43,6 +51,8 @@ def main() raises:
         raise Error("usage: eval <scene> <model.ply> [--images images_4] [--save dir]")
     var ctx = DeviceContext()
     var ds = load_colmap_dataset(ctx, positional[0], images)
+    if len(ds.test) == 0:
+        raise Error("the scene has no test views (every 8th image is held out)")
     var splats = Splats.from_host(ctx, read_ply(positional[1]))
     print("Model:", splats.count, "Gaussians |", len(ds.test), "test views")
     if save.byte_length() > 0:

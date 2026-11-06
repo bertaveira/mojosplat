@@ -113,9 +113,11 @@ def read_ply(path: String) raises -> HostSplats:
             if len(parts) < 2 or parts[1] != "binary_little_endian":
                 raise Error(String(path, ": only binary_little_endian PLY is supported"))
         elif parts[0] == "element":
-            if parts[1] != "vertex" or count >= 0:
+            if len(parts) != 3 or parts[1] != "vertex" or count >= 0:
                 raise Error(String(path, ": expected a single 'vertex' element"))
             count = Int(parts[2])
+            if count < 0:
+                raise Error(String(path, ": negative vertex count"))
         elif parts[0] == "property":
             if len(parts) != 3 or parts[1] != "float":
                 raise Error(String(path, ": only 'property float <name>' is supported, got: ", line))

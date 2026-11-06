@@ -15,9 +15,8 @@ Design (reduce-then-scan, 8-bit digits, one pass per digit):
              memory; a per-digit scan across warps then gives every key its
              final position. Order within a digit is preserved (stable).
 
-Only the low `end_bit` bits are sorted. For gsplat-style intersection keys
-`(tile_id << 32) | depth_bits` that is `32 + bit_width(num_tiles)`, which
-saves whole passes compared to sorting all 64 bits.
+Only the low `end_bit` bits are sorted (ceil(end_bit / 8) passes), which
+saves whole passes when the keys use fewer bits than their type.
 
 The approach follows the classic GPU radix sort literature (Merrill &
 Grimshaw 2011; Adinets & Merrill, "Onesweep", 2022), not any specific code.
@@ -32,7 +31,7 @@ from std.atomic import Atomic, Ordering
 from std.bit import count_trailing_zeros, pop_count
 from std.memory import stack_allocation
 
-from ..core.types import I32Ptr, U32Ptr
+from ..core.types import LANE_MASK_DTYPE, I32Ptr, LaneMask, U32Ptr
 from .scan import exclusive_scan, scan_workspace_size
 
 comptime RADIX_BITS = 8
@@ -69,7 +68,6 @@ def _upsweep_kernel[
     shift: UInt32,
 ):
     comptime assert SORT_BLOCK == RADIX, "one thread per digit in the epilogue"
-    comptime assert WARP_SIZE == 32, "32-lane warps assumed (UInt32 lane masks)"
     var s_hist = stack_allocation[
         RADIX, UInt32, address_space=AddressSpace.SHARED
     ]()
@@ -85,10 +83,10 @@ def _upsweep_kernel[
         if idx < Int(n):
             digit = UInt32((keys[unsafe_offset=idx] >> Scalar[key_dtype](shift)) & RADIX_MASK)
         # Aggregate equal digits within the warp: one atomic per group.
-        var peers = warp.match_any[mask_type=DType.uint32](digit)
+        var peers = warp.match_any[mask_type=LANE_MASK_DTYPE](digit)
         if digit < RADIX and lane == Int(count_trailing_zeros(peers)):
             _ = Atomic[UInt32].fetch_add[ordering=Ordering.RELAXED](
-                s_hist.unsafe_offset(Int(digit)), pop_count(peers)
+                s_hist.unsafe_offset(Int(digit)), UInt32(pop_count(peers))
             )
     barrier()
     hist[unsafe_offset=t * Int(num_parts) + block_idx.x] = s_hist[unsafe_offset=t]
@@ -118,7 +116,7 @@ def _downsweep_kernel[
         s_warp_hist[unsafe_offset=hist_row + j * WARP_SIZE + lane] = 0
     syncwarp()
 
-    var lt_mask = (UInt32(1) << UInt32(lane)) - 1
+    var lt_mask = (LaneMask(1) << LaneMask(lane)) - 1
     var base = block_idx.x * SORT_PART + w * WARP_SPAN
     var keys = SIMD[key_dtype, SORT_ITEMS](0)
     var vals = SIMD[DType.int32, SORT_ITEMS](0)
@@ -134,14 +132,14 @@ def _downsweep_kernel[
             keys[r] = k
             vals[r] = vals_in[unsafe_offset=idx]
             digit = UInt32((k >> Scalar[key_dtype](shift)) & RADIX_MASK)
-        var peers = warp.match_any[mask_type=DType.uint32](digit)
+        var peers = warp.match_any[mask_type=LANE_MASK_DTYPE](digit)
         var leader = count_trailing_zeros(peers)
         var prior = UInt32(0)
         if digit < RADIX and lane == Int(leader):
             prior = s_warp_hist[unsafe_offset=hist_row + Int(digit)]
-            s_warp_hist[unsafe_offset=hist_row + Int(digit)] = prior + pop_count(peers)
-        prior = warp.shuffle_idx(prior, leader)
-        ranks[r] = prior + pop_count(peers & lt_mask)
+            s_warp_hist[unsafe_offset=hist_row + Int(digit)] = prior + UInt32(pop_count(peers))
+        prior = warp.shuffle_idx(prior, UInt32(leader))
+        ranks[r] = prior + UInt32(pop_count(peers & lt_mask))
         syncwarp()
     barrier()
 

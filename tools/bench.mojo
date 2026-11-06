@@ -29,6 +29,14 @@ def summarize(label: String, mut times: List[Float64]):
     )
 
 
+def _value(flag: StringSlice, i: Int) raises -> String:
+    """The command-line argument after `flag` (raises if it is missing)."""
+    var args = argv()
+    if i >= len(args):
+        raise Error(String("missing value after ", flag))
+    return String(args[i])
+
+
 def main() raises:
     var args = argv()
     var path = String("examples/bicycle.splat")
@@ -39,13 +47,13 @@ def main() raises:
     while i < len(args):
         var a = String(args[i])
         if a == "-n":
-            runs = Int(String(args[i + 1]))
+            runs = Int(_value(args[i], i + 1))
             i += 2
         elif a == "-W":
-            W = Int(String(args[i + 1]))
+            W = Int(_value(args[i], i + 1))
             i += 2
         elif a == "-H":
-            H = Int(String(args[i + 1]))
+            H = Int(_value(args[i], i + 1))
             i += 2
         else:
             path = a

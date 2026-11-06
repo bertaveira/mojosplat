@@ -32,7 +32,7 @@ pixi run eval data/mipnerf360/garden output/garden/point_cloud.ply   # test-view
 
 ```bash
 pixi run render output/garden/point_cloud.ply -o render.png
-curl -L -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
+curl -L --create-dirs -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
 pixi run render examples/bicycle.splat -o render.png -W 1920 -H 1080
 ```
 
@@ -136,7 +136,7 @@ Details, design decisions and measurements are in [`docs/design.md`](docs/design
 
 ## Roadmap
 
-- **AMD and Apple Silicon.** The kernels already compile for AMD RDNA3/RDNA4 and Apple M-series GPUs. They still need validating and tuning on real hardware. AMD MI300 (64-wide wavefronts) needs small changes.
+- **AMD and Apple Silicon.** Every kernel, training included, already compiles for AMD (RDNA3, RDNA4, MI300) and Apple M-series GPUs. They still need validating and tuning on real hardware.
 - **Benchmarks.** All Mip-NeRF360 scenes, plus Tanks&Temples and Deep Blending, compared with Faster-GS.
 - **Faster training options.** Skip optimizer updates for Gaussians not seen in a view, and 16-bit optimizer state.
 - **More training methods.** MCMC densification and anti-aliasing (Mip-Splatting style filters).
@@ -147,7 +147,7 @@ Contributions are welcome. Please include tests: most components are checked aga
 
 ## License
 
-[MIT](LICENSE). Code ported from Faster-GS (Apache-2.0) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MojoSplat targets Mojo 1.2 / MAX 26.7. MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE), which is free to use and not redistributed here.
+[MIT](LICENSE). Code ported from Faster-GS (Apache-2.0), NeRFICG (MIT) and fused-ssim (MIT) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MojoSplat targets Mojo 1.2 / MAX 26.7. MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE), which is free to use and not redistributed here.
 
 ## Acknowledgments
 

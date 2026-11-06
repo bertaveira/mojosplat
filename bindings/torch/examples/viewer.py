@@ -1,7 +1,7 @@
 """Interactive 3DGS viewer — open a .splat file in the browser via viser.
 
 Usage:
-    uv run python examples/viewer.py [path/to/scene.splat] [options]
+    pixi run -e torch python bindings/torch/examples/viewer.py [path/to/scene.splat] [options]
 
 Then open the printed URL in a browser. Drag to orbit, scroll to zoom.
 The scene re-renders on every camera move.

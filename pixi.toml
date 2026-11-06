@@ -18,7 +18,7 @@ render = { cmd = "mojo run -I . tools/render.mojo", description = "Render a .spl
 bench = { cmd = "mojo run -I . tools/bench.mojo", description = "Benchmark the rasterizer" }
 train = { cmd = "mojo run -I . tools/train.mojo", description = "Train a 3DGS model on a COLMAP scene" }
 eval = { cmd = "mojo run -I . tools/eval.mojo", description = "Evaluate a trained model on the held-out views" }
-fmt = "mojo format mojosplat tests tools examples bindings"
+fmt = "mojo format mojosplat tests tools bindings"
 
 # --- Optional: PyTorch bindings (torch lives only in this environment) -----
 [feature.torch.dependencies]

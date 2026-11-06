@@ -133,7 +133,7 @@ def _check_end(r: ByteReader) raises:
 
 def read_cameras_bin(path: String) raises -> List[ColmapCamera]:
     var r = ByteReader.open(path)
-    var n = Int(r.u64())
+    var n = r.count(24)  # camera_id, model_id, width, height
     var out = List[ColmapCamera](capacity=n)
     for _ in range(n):
         var cid = Int(r.i32())
@@ -150,7 +150,7 @@ def read_cameras_bin(path: String) raises -> List[ColmapCamera]:
 
 def read_images_bin(path: String) raises -> List[ColmapImage]:
     var r = ByteReader.open(path)
-    var n = Int(r.u64())
+    var n = r.count(69)  # id, qvec, tvec, camera_id, name NUL, n2d
     var out = List[ColmapImage](capacity=n)
     for _ in range(n):
         var iid = Int(r.i32())
@@ -162,7 +162,7 @@ def read_images_bin(path: String) raises -> List[ColmapImage]:
             t[k] = r.f64()
         var cid = Int(r.i32())
         var name = r.cstring()
-        var n2d = Int(r.u64())
+        var n2d = r.count(24)
         r.skip(n2d * 24)  # (x: f64, y: f64, point3D_id: i64) per 2D point
         out.append(ColmapImage(iid, q, t, cid, name^))
     _check_end(r)
@@ -171,7 +171,7 @@ def read_images_bin(path: String) raises -> List[ColmapImage]:
 
 def read_points3d_bin(path: String) raises -> ColmapPoints:
     var r = ByteReader.open(path)
-    var n = Int(r.u64())
+    var n = r.count(51)  # id, xyz, rgb, error, track length
     var pts = ColmapPoints()
     pts.xyz.reserve(n * 3)
     pts.rgb.reserve(n * 3)
@@ -182,7 +182,7 @@ def read_points3d_bin(path: String) raises -> ColmapPoints:
         for _ in range(3):
             pts.rgb.append(r.u8())
         _ = r.f64()  # reprojection error
-        var track = Int(r.u64())
+        var track = r.count(8)
         r.skip(track * 8)  # (image_id: i32, point2D_idx: i32)
     _check_end(r)
     return pts^

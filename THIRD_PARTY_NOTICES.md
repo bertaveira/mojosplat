@@ -5,7 +5,10 @@
 The rasterizer in `mojosplat/render/` (`rasterizer.mojo`, `preprocess.mojo`,
 `sh.mojo`, `instances.mojo`, `blend.mojo`, `blend_backward.mojo`,
 `preprocess_backward.mojo`) and the SH constants in `mojosplat/core/math.mojo`
-are a Mojo port of, and derived from, the CUDA backend of Faster-GS:
+are a Mojo port of, and derived from, the CUDA backend of Faster-GS. The
+densification in `mojosplat/train/densify.mojo` (clone / split / prune,
+opacity reset) and the training schedule in `mojosplat/train/trainer.mojo`
+follow Faster-GS's `adaptive_density_control` and trainer callbacks:
 
 - Project: https://github.com/nerficg-project/faster-gaussian-splatting
 - Paper: F. Hahlbohm, L. Franke, M. Eisemann, M. Magnor,
@@ -27,3 +30,43 @@ Faster-GS in turn credits StopThePop (Radl et al., 2024) for the exact
 Gaussian/tile intersection test and the instance-range extraction, and
 Splatshop (Schütz et al.) for the separate depth and tile sorts, and
 Taming 3DGS (Mallick et al., 2024) for the per-Gaussian backward pass.
+
+## NeRFICG
+
+The Morton (Z-order) encoding in `mojosplat/model/morton.mojo` follows
+NeRFICG's `MortonEncoding` (itself after Schütz et al.). The metric code used
+for the comparison in the README (PSNR / SSIM / LPIPS) is NeRFICG's; it is not
+part of this repository.
+
+- Project: https://github.com/nerficg-project/nerficg
+- Copyright (c) 2026 Moritz Kappel, Florian Hahlbohm, Timon Scholz
+- License: MIT
+
+## fused-ssim
+
+The SSIM backward in `mojosplat/train/loss.mojo` (gradient through the local
+moments, computed with separable Gaussian passes) follows fused-ssim:
+
+- Project: https://github.com/rahul-goel/fused-ssim
+- Copyright (c) 2024 Rahul Goel
+- License: MIT
+
+## MIT License text (NeRFICG, fused-ssim)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -5,8 +5,9 @@ room for `capacity` Gaussians, of which the first `count` are live. Training
 state is allocated only by `enable_training()`: per attribute a gradient
 buffer and the Adam moments (exp_avg, exp_avg_sq), plus the densification
 statistics. Every per-Gaussian array is indexed by `Attr`, so operations
-that must touch all of them (growing the capacity now; append / compact /
-permute for densification) are one loop.
+that must touch all of them are one loop: `reserve` grows the capacity, and
+`gather` (rows by index, optionally zeroing the moments of new rows) is the
+single row operation behind clone / split, pruning and Morton reordering.
 
 Mojo code passes `Splats` around (it keeps the memory alive); kernels get a
 `SplatView` of raw pointers.

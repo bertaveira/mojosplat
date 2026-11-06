@@ -18,6 +18,14 @@ from mojosplat import (
 )
 
 
+def _value(flag: StringSlice, i: Int) raises -> String:
+    """The command-line argument after `flag` (raises if it is missing)."""
+    var args = argv()
+    if i >= len(args):
+        raise Error(String("missing value after ", flag))
+    return String(args[i])
+
+
 def main() raises:
     var args = argv()
     var path = String("examples/bicycle.splat")
@@ -31,19 +39,19 @@ def main() raises:
     while i < len(args):
         var a = String(args[i])
         if a == "-o":
-            out = String(args[i + 1])
+            out = _value(args[i], i + 1)
             i += 2
         elif a == "--raw":
-            raw = String(args[i + 1])
+            raw = _value(args[i], i + 1)
             i += 2
         elif a == "-W":
-            W = Int(String(args[i + 1]))
+            W = Int(_value(args[i], i + 1))
             i += 2
         elif a == "-H":
-            H = Int(String(args[i + 1]))
+            H = Int(_value(args[i], i + 1))
             i += 2
         elif a == "--fx":
-            fx = Float32(Float64(String(args[i + 1])))
+            fx = Float32(Float64(_value(args[i], i + 1)))
             i += 2
         elif a == "--cam":
             for k in range(3):

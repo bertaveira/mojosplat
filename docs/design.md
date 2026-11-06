@@ -1,7 +1,7 @@
 # MojoSplat design
 
-Architecture of the library and the plan for training 3D Gaussian Splatting
-models entirely in Mojo (no Python). Prior art studied:
+Architecture of the library and of training 3D Gaussian Splatting models
+entirely in Mojo (no Python). Prior art studied:
 [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting)
 (Apache-2.0, the source of the rasterizer kernels),
 [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio) (GPL-3.0: ideas only, no code),
@@ -18,20 +18,15 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   model/        owning storage of the Gaussians
   io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
   train/        dataset, loss (L1 + SSIM), PSNR, Adam, densification, trainer
-tools/          command-line programs (render, bench; planned: train, eval)
-examples/       short API demos
+tools/          command-line programs: train, eval, render, bench
 tests/          mirrors the package; golden data + generators in tests/data/
-dev/            (planned) kernel experiments and sweeps that never ship
 bindings/torch/ PyTorch extension (render_splats with autograd)
 ```
 
 Dependencies point one way: `core` <- `gpu` <- `model` <- `render` <- `train`
 <- `tools`. `gpu/` knows nothing about splats; `render/` is usable for
 inference without any training code. Executables live in `tools/` (as in
-llama.cpp), each a thin `main` around a `run(args)` function so they can later
-be combined into one `mojosplat <command>` binary. Code shared only by
-programs (argument parsing, progress output) goes in `tools/common/`, not in
-the library.
+llama.cpp) and stay thin: argument parsing and output around library calls.
 
 ## Rasterizer
 
@@ -44,71 +39,70 @@ per-Gaussian (one warp per 32 instances, pixel state passed by shuffles) plus
 a coalesced preprocess backward in Gaussian order. State that must outlive a
 call comes from a `StateAllocator` (`gpu/arena.mojo`).
 
-## Training (planned)
+## Training
+
+`Trainer` (`train/trainer.mojo`) runs the 3DGS recipe with Faster-GS's
+defaults (`TrainConfig`); its docstring lists the order of one iteration.
 
 ### Splats: one owner for every per-Gaussian row
 
 The central abstraction, `Splats` in `model/` (`SplatView` is its
 non-owning pointer view, `HostSplats` the CPU copy for file I/O). It owns,
-for capacity C >= n Gaussians:
+for capacity C >= n Gaussians, every per-Gaussian array, indexed by `Attr`:
 
 - the six raw parameter arrays (means, log scales, quaternions, opacity
   logits, sh0, shN),
-- when training: their Adam moments (m, v) and the densification statistics.
+- after `enable_training()`: their gradients, Adam moments (m, v) and the
+  densification statistics.
 
-Capacity grows by 1.5x; `n` is the live count. The row operations are
-implemented **only here** and apply to every array at once:
-
-- `append(rows)` / `gather_append(index)` for clone and split,
-- `compact(keep_mask)` for pruning (stream compaction with `gpu/scan`),
-- `permute(order)` for Morton (Z-order) reordering,
-- `reset_moments(rows)`.
-
-The renderer keeps taking a `SplatView` view; the Adam kernel sees the same
-per-attribute layout. Densification strategies only call store operations,
-which keeps the bookkeeping that LichtFeld Studio spreads over its model,
-optimizer and each strategy in one place, and makes "one more per-Gaussian
-array" a one-line change.
+There is one row operation, `gather(index, n_out, zero_moments_from)`,
+applied to every array at once: clone and split append rows (the index is
+all rows followed by the copies; moments of the new rows are zeroed),
+pruning keeps the surviving rows, Morton reordering permutes them. The
+renderer takes a `SplatView`; the Adam kernel sees the same per-attribute
+layout. This keeps the bookkeeping that LichtFeld Studio spreads over its
+model, optimizer and each strategy in one place, and makes "one more
+per-Gaussian array" a one-line change.
 
 ### Optimizer
 
-Adam with per-attribute learning rates (means decay exponentially; SH rest at
-1/20 of the DC rate) and bias corrections computed on the host (as llm.c,
-ggml and Faster-GS do). First a standalone kernel: one 2D launch over all
-attributes, per-attribute settings in a small packed argument, and the
-per-element update as a separate `@always_inline` function. Later the same
-function is fused into the preprocess backward (Faster-GS's biggest training
-speedup after the per-Gaussian backward).
+Adam with PyTorch semantics and per-attribute learning rates (means decay
+exponentially, scaled by the scene extent; SH rest at 1/20 of the DC rate),
+bias corrections computed on the host (as llm.c, ggml and Faster-GS do). The
+SH-rest update is fused with its gradient: Adam recomputes
+basis(dir) * dL/dcolor elementwise, so the backward never writes it.
 
 ### Densification
 
-A small interface (`post_backward(iter)`, `is_refining(iter)`), not owning the
-optimizer. Classic 3DGS first, with Faster-GS's defaults: densify from
-iteration 600 to 14,900 every 100 (gradient threshold 2e-4, percent dense
-0.01), opacity reset every 3,000 iterations plus once at 500, Morton
-reordering every 5,000 until 15,000. Pruning compacts at densification steps.
-MCMC can be added later as a second strategy on the same store operations.
+`Densifier` (`train/densify.mojo`), classic 3DGS with Faster-GS's defaults:
+densify from iteration 600 to 14,900 every 100 (gradient threshold 2e-4,
+percent dense 0.01, prune opacity < 0.005, and Gaussians larger than 0.1 x
+the scene extent after the first opacity reset), opacity reset every 3,000
+iterations (Faster-GS resets once more at 500 only with a non-black
+background; MojoSplat trains on black), Morton reordering every 5,000 until
+15,000 and once at the end, and a final prune of opacity < 1/255. MCMC can
+be added later as a second strategy on the same `gather`.
 
 ### Loss, data, I/O
 
-- Loss: fused L1 + D-SSIM forward and backward (port of fused-ssim, MIT),
-  0.8 L1 + 0.2 D-SSIM.
-- Metrics: PSNR and SSIM in Mojo; LPIPS computed afterwards in Python until
-  we have our own VGG.
+- Loss: L1 + D-SSIM forward and backward with separable passes (backward as
+  in fused-ssim, MIT), 0.8 L1 + 0.2 D-SSIM.
+- Metrics: PSNR in Mojo (`tools/eval.mojo`); SSIM and LPIPS computed from
+  its saved renders in Python until we have our own VGG.
 - Data: COLMAP binary reader, JPEG decoding via libjpeg-turbo (TurboJPEG 3
-  API through Mojo's C FFI), every 8th image held out, images preloaded to
-  the GPU.
-- Export: PLY in the standard 3DGS layout; checkpoints as safetensors
-  (parameters) plus a separate optimizer-state file (as llm.c).
+  API through Mojo's C FFI), every 8th image held out, images kept on the
+  GPU as 8-bit.
+- Export: PLY in the standard 3DGS layout. Checkpoints with optimizer state
+  are not implemented yet.
 
 ### Testing
 
-1. Kernels: golden data from float64 references (as now).
+1. Kernels: golden data from float64 references.
 2. Optimizer: several steps against `torch.optim.Adam` with per-group rates.
-3. Store row operations: against numpy indexing on all arrays.
-4. Training: a few steps' loss against a Python reference, and save ->
-   resume -> continue with tolerances (float atomics make the backward
-   non-bitwise-deterministic).
+3. Densification: one step against a torch transcription of Faster-GS's
+   `adaptive_density_control`.
+4. Training: a short run on garden must lower the loss and raise test PSNR
+   (float atomics make the backward non-bitwise-deterministic).
 
 ## Roadmap
 

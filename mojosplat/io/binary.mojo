@@ -31,8 +31,20 @@ struct ByteReader(Movable):
             raise Error(String("unexpected end of file in ", self.name, " at byte ", self.pos))
 
     def skip(mut self, n: Int) raises:
+        if n < 0:
+            raise Error(String("negative skip in ", self.name, " at byte ", self.pos))
         self._need(n)
         self.pos += n
+
+    def count(mut self, min_record_bytes: Int) raises -> Int:
+        """Read a u64 element count, checking that `count` records of at least
+        `min_record_bytes` each fit in the rest of the file (so a corrupt
+        count raises instead of over-allocating or wrapping negative)."""
+        var at = self.pos
+        var n = self.u64()
+        if n > UInt64(self.remaining() // max(min_record_bytes, 1)):
+            raise Error(String("corrupt count ", n, " in ", self.name, " at byte ", at))
+        return Int(n)
 
     def u8(mut self) raises -> UInt8:
         self._need(1)

@@ -20,6 +20,14 @@ from mojosplat.train.dataset import load_colmap_dataset
 from mojosplat.train.trainer import TrainConfig, Trainer
 
 
+def _value(flag: StringSlice, i: Int) raises -> String:
+    """The command-line argument after `flag` (raises if it is missing)."""
+    var args = argv()
+    if i >= len(args):
+        raise Error(String("missing value after ", flag))
+    return String(args[i])
+
+
 def main() raises:
     var args = argv()
     var scene = String("data/mipnerf360/garden")
@@ -30,22 +38,22 @@ def main() raises:
     while i < len(args):
         var a = String(args[i])
         if a == "--iters":
-            config.iterations = Int(String(args[i + 1]))
+            config.iterations = Int(_value(args[i], i + 1))
             i += 2
         elif a == "--images":
-            images = String(args[i + 1])
+            images = _value(args[i], i + 1)
             i += 2
         elif a == "--out":
-            out = String(args[i + 1])
+            out = _value(args[i], i + 1)
             i += 2
         elif a == "--log":
-            config.log_interval = Int(String(args[i + 1]))
+            config.log_interval = Int(_value(args[i], i + 1))
             i += 2
         elif a == "--no-densify":
             config.densify = False
             i += 1
         elif a == "--sh-degree":
-            config.sh_degree = Int(String(args[i + 1]))
+            config.sh_degree = Int(_value(args[i], i + 1))
             i += 2
         else:
             scene = a
