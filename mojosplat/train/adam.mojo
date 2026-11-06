@@ -88,9 +88,11 @@ def _adam_sh_rest_kernel(
     var per = Int(rest_stride) * 3
     if e >= Int(n) * per:
         return
-    var g = e // per
-    var k = (e % per) // 3
-    var c = e % 3
+    # 32-bit index math: 64-bit division is very slow on Apple GPUs.
+    var g = Int(UInt32(e) // UInt32(per))
+    var rem = UInt32(e) - UInt32(g) * UInt32(per)
+    var k = Int(rem // 3)
+    var c = Int(rem % 3)
     var grad: Float32 = 0.0
     var slot = Int(slot_of[unsafe_offset=g])
     if slot >= 0 and k < Int(active_bases) - 1:

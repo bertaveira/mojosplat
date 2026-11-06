@@ -54,8 +54,9 @@ def _moments_h_kernel(
     var idx = block_idx.x * BLOCK_SIZE + thread_idx.x
     if idx >= n:
         return
-    var c = idx % 3
-    var x = (idx // 3) % Int(width)
+    # 32-bit index math: 64-bit division is very slow on Apple GPUs.
+    var c = Int(UInt32(idx) % 3)
+    var x = Int((UInt32(idx) // 3) % UInt32(width))
     var row = idx - (x * 3 + c)  # start of this row ([y, 0, 0])
     var acc = SIMD[DType.float32, 8](0.0)
     comptime for k in range(WINDOW):
@@ -88,7 +89,7 @@ def _ssim_v_kernel(
     if idx >= n:
         return
     var stride = Int(width) * 3
-    var y = idx // stride
+    var y = Int(UInt32(idx) // UInt32(stride))
     var acc = SIMD[DType.float32, 8](0.0)
     comptime for k in range(WINDOW):
         var yy = y + k - HALF
@@ -122,8 +123,9 @@ def _grad_h_kernel(d3: F32Ptr, hd3: F32Ptr, width: Int32, height: Int32, gw: Ker
     var idx = block_idx.x * BLOCK_SIZE + thread_idx.x
     if idx >= n:
         return
-    var c = idx % 3
-    var x = (idx // 3) % Int(width)
+    # 32-bit index math: 64-bit division is very slow on Apple GPUs.
+    var c = Int(UInt32(idx) % 3)
+    var x = Int((UInt32(idx) // 3) % UInt32(width))
     var row = idx - (x * 3 + c)
     var acc = SIMD[DType.float32, 4](0.0)
     comptime for k in range(WINDOW):
@@ -152,7 +154,7 @@ def _grad_v_kernel(
     if idx >= n:
         return
     var stride = Int(width) * 3
-    var y = idx // stride
+    var y = Int(UInt32(idx) // UInt32(stride))
     var acc = SIMD[DType.float32, 4](0.0)
     comptime for k in range(WINDOW):
         var yy = y + k - HALF
