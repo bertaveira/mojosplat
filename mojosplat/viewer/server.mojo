@@ -435,7 +435,10 @@ struct Viewer(Movable):
             c.out = upgrade_response(key)
             c.sent = 0
             c.websocket = True
-            append_text(c.out, self.init_json)
+            # Training may have finished since _make_init built this message.
+            append_text(c.out, self.init_json.replace(
+                '"training":true', '"training":true' if self.training else '"training":false'
+            ))
             append_text(c.out, self.stats_json)
         elif path == "/" or path == "/index.html":
             c.out = http_response("200 OK", "text/html; charset=utf-8", String(PAGE))
