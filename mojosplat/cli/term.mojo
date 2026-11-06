@@ -193,6 +193,10 @@ struct ProgressBar(Movable):
     def elapsed(self) -> Float64:
         return seconds_since(self.t_start)
 
+    def exclude(mut self, seconds: Float64):
+        """Leave `seconds` (e.g. a pause) out of the elapsed time and rate."""
+        self.t_start += Int(seconds * 1e9)
+
     def _line(self, step: Int, info: String) -> String:
         var frac = min(Float64(step) / Float64(self.total), 1.0)
         var elapsed = self.elapsed()

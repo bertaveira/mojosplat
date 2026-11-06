@@ -19,6 +19,7 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
   train/        dataset, loss (L1 + SSIM), PSNR, Adam, densification, trainer
   cli/          command-line options from config structs, terminal output
+  viewer/       web viewer: HTTP + WebSocket server, JPEG frames
 tools/          command-line programs: train, eval, render, bench
 tests/          mirrors the package; golden data + generators in tests/data/
 bindings/torch/ PyTorch extension (render_splats with autograd)
@@ -37,6 +38,20 @@ field gives its help text. Configs such as `TrainConfig` carry these
 annotations themselves, so a new field is documented and settable from the
 command line with no tool changes. `@__annotation` is Mojo's field-metadata
 syntax; the leading underscores suggest it may still change.
+
+`viewer/` is a small single-threaded web server written in Mojo over libc
+sockets (`poll` + MSG_DONTWAIT; no variadic C calls, which Mojo's FFI cannot
+make portably on Apple arm64). It serves one embedded HTML/JS page; the page
+sends its camera over a WebSocket and gets JPEG frames back (rendered with
+the viewer's own `Rasterizer`, quantized on the GPU, encoded with
+libjpeg-turbo). The owner calls `update()` between training steps: a frame
+is rendered when a browser's camera moved (up to `--max-fps`) or a few
+times a second while training changes the scene (`--refresh-fps`), and
+only once the previous frame was fully sent, so slow connections get fewer
+frames instead of slowing training. Measured on garden: no overhead with no
+browser connected, ~2% while watching at 5 fps. lightbug_http, the main
+Mojo HTTP library, targets Mojo 0.26 and has no WebSockets; what the viewer
+needs (one page and the WebSocket upgrade) is ~150 lines.
 
 ## Rasterizer
 
