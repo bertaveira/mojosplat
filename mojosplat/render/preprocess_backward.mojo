@@ -13,7 +13,7 @@ from max.gpu.host import DeviceContext, DeviceStream
 from std.math import exp, sqrt
 
 from ..core.camera import CAM_CX, CAM_CY, CAM_FX, CAM_FY, CAM_H, CAM_POS_X, CAM_POS_Y, CAM_POS_Z, CAM_W
-from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, num_blocks
+from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, KernelVector, num_blocks
 from .preprocess import CLIP_MARGIN, DILATION
 from .sh import sh_to_color_backward
 
@@ -38,7 +38,7 @@ def _preprocess_backward_kernel(
     log_scales: F32Ptr,
     rotations: F32Ptr,
     sh_rest: F32Ptr,
-    cam: SIMD[DType.float32, 32],
+    cam: KernelVector[DType.float32, 32],
     slot_of: I32Ptr,  # [N] slot of each Gaussian, -1 if culled
     grad_mean2d: F32Ptr,  # [slot, 2]
     grad_conic: F32Ptr,  # [slot, 3]
@@ -79,12 +79,9 @@ def _preprocess_backward_kernel(
     var m2 = means[unsafe_offset=g * 3 + 2]
 
     # SH -> color backward (also yields a mean gradient through the view dir).
-    var gcol = SIMD[DType.float32, 4](
-        grad_color[unsafe_offset=s * 3 + 0],
-        grad_color[unsafe_offset=s * 3 + 1],
-        grad_color[unsafe_offset=s * 3 + 2],
-        0.0,
-    )
+    var gcol = SIMD[DType.float32, 4](0.0)
+    comptime for c in range(3):
+        gcol[c] = grad_color[unsafe_offset=s * 3 + c]
     var dir = SIMD[DType.float32, 4](m0 - cam[CAM_POS_X], m1 - cam[CAM_POS_Y], m2 - cam[CAM_POS_Z], 0.0)
     var dmean_color = sh_to_color_backward(
         sh_rest,
@@ -325,7 +322,7 @@ def preprocess_backward(
         log_scales,
         rotations,
         sh_rest,
-        cam,
+        KernelVector[DType.float32, 32](cam),
         slot_of,
         grad_mean2d,
         grad_conic,

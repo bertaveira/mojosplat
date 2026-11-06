@@ -19,6 +19,9 @@ def check_scan(n: Int, max_val: UInt64) raises:
     var d_partials = ctx.enqueue_create_buffer[DType.int32](scan_workspace_size(n))
     exclusive_scan[DType.int32](ctx, ctx.stream(), dptr(d_in), dptr(d_out), dptr(d_total), dptr(d_partials), n)
     ctx.synchronize()
+    # dptr erases the owning buffer's origin; keep inputs and scratch alive
+    # until all asynchronous kernels have finished.
+    _ = (d_in^, d_partials^)
     var out = download(ctx, d_out, n)
     var total = download(ctx, d_total, 1)
     var running: Int32 = 0
@@ -49,6 +52,7 @@ def test_scan_in_place() raises:
     var d_partials = ctx.enqueue_create_buffer[DType.int32](scan_workspace_size(n))
     exclusive_scan[DType.int32](ctx, ctx.stream(), dptr(d), dptr(d), dptr(d_total), dptr(d_partials), n)
     ctx.synchronize()
+    _ = (d_total^, d_partials^)
     var out = download(ctx, d, n)
     var running: Int32 = 0
     for i in range(n):

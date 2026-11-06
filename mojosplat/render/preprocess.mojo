@@ -46,7 +46,7 @@ from ..core.camera import (
     CAM_POS_Z,
     CAM_W,
 )
-from ..core.types import F32Ptr, I32Ptr, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
+from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
 from .sh import sh_to_color
 
 comptime MIN_ALPHA: Float32 = 1.0 / 255.0
@@ -177,7 +177,7 @@ def _preprocess_kernel[
     opacity_logits: F32Ptr,  # [N]
     sh0: F32Ptr,  # [N, 3]
     sh_rest: F32Ptr,  # [N, rest_stride, 3]
-    cam: SIMD[DType.float32, 32],
+    cam: KernelVector[DType.float32, 32],
     depth_keys: U32Ptr,  # out [slot] depth bits (sort keys)
     slots: I32Ptr,  # out [slot] = slot (sort values)
     primitive_ids: I32Ptr,  # out [slot] Gaussian index
@@ -416,7 +416,7 @@ def preprocess[
         opacity_logits,
         sh0,
         sh_rest,
-        cam,
+        KernelVector[DType.float32, 32](cam),
         depth_keys,
         slots,
         primitive_ids,

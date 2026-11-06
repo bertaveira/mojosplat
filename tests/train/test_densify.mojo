@@ -23,6 +23,7 @@ def set_buffer(ctx: DeviceContext, dst: DeviceBuffer[DType.float32], values: Lis
     var src = upload(ctx, values)
     copy_f32(ctx, dptr(dst), dptr(src), len(values))
     ctx.synchronize()
+    _ = src^
 
 
 def test_matches_faster_gs() raises:

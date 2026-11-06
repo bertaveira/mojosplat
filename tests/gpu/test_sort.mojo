@@ -44,6 +44,8 @@ def check_sort[kd: DType = DType.uint64](n: Int, end_bit: Int, high_cardinality:
         end_bit,
     )
     ctx.synchronize()
+    # Raw kernel pointers don't retain their owners through asynchronous work.
+    _ = (d_hist^, d_part^, d_total^)
     var out_k = download(ctx, d_kb, n) if in_b else download(ctx, d_ka, n)
     var out_v = download(ctx, d_vb, n) if in_b else download(ctx, d_va, n)
 

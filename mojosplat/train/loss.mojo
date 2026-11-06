@@ -18,7 +18,7 @@ from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
 from std.math import exp, log10
 
-from ..core.types import BLOCK_SIZE, F32Ptr, U8Ptr, dptr, num_blocks
+from ..core.types import BLOCK_SIZE, F32Ptr, U8Ptr, KernelVector, dptr, num_blocks
 from ..gpu.reduce import Summer
 
 comptime WINDOW = 11
@@ -47,7 +47,7 @@ def _target(t: U8Ptr, i: Int) -> Float32:
 
 
 def _moments_h_kernel(
-    image: F32Ptr, target: U8Ptr, h5: F32Ptr, width: Int32, height: Int32, gw: SIMD[DType.float32, 16]
+    image: F32Ptr, target: U8Ptr, h5: F32Ptr, width: Int32, height: Int32, gw: KernelVector[DType.float32, 16]
 ):
     """Horizontal Gaussian pass of (I, T, I^2, T^2, I T) -> h5 [5, N]."""
     var n = Int(width) * Int(height) * 3
@@ -77,7 +77,7 @@ def _ssim_v_kernel(
     loss_px: F32Ptr,
     width: Int32,
     height: Int32,
-    gw: SIMD[DType.float32, 16],
+    gw: KernelVector[DType.float32, 16],
     lam: Float32,
     inv_n: Float32,
 ):
@@ -94,16 +94,10 @@ def _ssim_v_kernel(
         var yy = y + k - HALF
         if yy >= 0 and yy < Int(height):
             var j = idx + (k - HALF) * stride
-            acc += gw[k] * SIMD[DType.float32, 8](
-                h5[unsafe_offset=j],
-                h5[unsafe_offset=n + j],
-                h5[unsafe_offset=2 * n + j],
-                h5[unsafe_offset=3 * n + j],
-                h5[unsafe_offset=4 * n + j],
-                0,
-                0,
-                0,
-            )
+            # Explicit lanes avoid Mojo 1.2's mixed-address-space SIMD
+            # constructor lowering on Metal.
+            comptime for q in range(5):
+                acc[q] += gw[k] * h5[unsafe_offset=q * n + j]
     var mu1 = acc[0]
     var mu2 = acc[1]
     var s11 = acc[2] - mu1 * mu1
@@ -123,7 +117,7 @@ def _ssim_v_kernel(
     loss_px[unsafe_offset=idx] = (1.0 - lam) * abs(diff) + lam * (1.0 - ssim)
 
 
-def _grad_h_kernel(d3: F32Ptr, hd3: F32Ptr, width: Int32, height: Int32, gw: SIMD[DType.float32, 16]):
+def _grad_h_kernel(d3: F32Ptr, hd3: F32Ptr, width: Int32, height: Int32, gw: KernelVector[DType.float32, 16]):
     var n = Int(width) * Int(height) * 3
     var idx = block_idx.x * BLOCK_SIZE + thread_idx.x
     if idx >= n:
@@ -136,9 +130,8 @@ def _grad_h_kernel(d3: F32Ptr, hd3: F32Ptr, width: Int32, height: Int32, gw: SIM
         var xx = x + k - HALF
         if xx >= 0 and xx < Int(width):
             var j = row + xx * 3 + c
-            acc += gw[k] * SIMD[DType.float32, 4](
-                d3[unsafe_offset=j], d3[unsafe_offset=n + j], d3[unsafe_offset=2 * n + j], 0
-            )
+            comptime for q in range(3):
+                acc[q] += gw[k] * d3[unsafe_offset=q * n + j]
     comptime for q in range(3):
         hd3[unsafe_offset=q * n + idx] = acc[q]
 
@@ -150,7 +143,7 @@ def _grad_v_kernel(
     grad: F32Ptr,
     width: Int32,
     height: Int32,
-    gw: SIMD[DType.float32, 16],
+    gw: KernelVector[DType.float32, 16],
     lam: Float32,
     inv_n: Float32,
 ):
@@ -165,9 +158,8 @@ def _grad_v_kernel(
         var yy = y + k - HALF
         if yy >= 0 and yy < Int(height):
             var j = idx + (k - HALF) * stride
-            acc += gw[k] * SIMD[DType.float32, 4](
-                hd3[unsafe_offset=j], hd3[unsafe_offset=n + j], hd3[unsafe_offset=2 * n + j], 0
-            )
+            comptime for q in range(3):
+                acc[q] += gw[k] * hd3[unsafe_offset=q * n + j]
     var i = image[unsafe_offset=idx]
     var t = _target(target, idx)
     var d = i - t
@@ -193,7 +185,7 @@ struct PhotometricLoss(Movable):
     var hd3: DeviceBuffer[DType.float32]
     var px: DeviceBuffer[DType.float32]
     var summer: Summer
-    var gw: SIMD[DType.float32, 16]
+    var gw: KernelVector[DType.float32, 16]
 
     def __init__(out self, ctx: DeviceContext, lambda_dssim: Float32 = 0.2) raises:
         self.ctx = ctx
@@ -204,7 +196,7 @@ struct PhotometricLoss(Movable):
         self.hd3 = ctx.enqueue_create_buffer[DType.float32](1)
         self.px = ctx.enqueue_create_buffer[DType.float32](1)
         self.summer = Summer(ctx)
-        self.gw = gaussian_window()
+        self.gw = KernelVector[DType.float32, 16](gaussian_window())
 
     def _reserve(mut self, n: Int) raises:
         if n <= self.cap:

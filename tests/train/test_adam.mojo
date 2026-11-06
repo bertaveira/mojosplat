@@ -49,6 +49,7 @@ def test_matches_torch() raises:
             var g = upload(ctx, step_grad)
             copy_f32(ctx, dptr(splats.grads[a]), dptr(g), w)
             ctx.synchronize()
+            _ = g^
         adam.step(splats)
     ctx.synchronize()
     for a in range(Attr.COUNT):
@@ -101,6 +102,7 @@ def _step_once(fused: Bool) raises -> List[List[Float32]]:
         out.append(download(ctx, splats.exp_avg[a], w))
         out.append(download(ctx, splats.exp_avg_sq[a], w))
     _ = grad_image^
+    _ = (image^, r^, st^)
     return out^
 
 

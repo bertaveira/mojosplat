@@ -9,7 +9,7 @@ a separate function so it can later be fused into the backward pass.
 from max.gpu import block_idx, thread_idx
 from std.math import rsqrt, sqrt
 
-from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, dptr, num_blocks
+from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, KernelVector, dptr, num_blocks
 from ..model.splats import Attr, Splats
 from ..render.preprocess_backward import ShRestGrad
 from ..render.sh import sh_rest_basis
@@ -72,7 +72,7 @@ def _adam_sh_rest_kernel(
     means: F32Ptr,
     slot_of: I32Ptr,
     grad_color: F32Ptr,
-    cam_pos: SIMD[DType.float32, 4],
+    cam_pos: KernelVector[DType.float32, 4],
     n: Int32,
     rest_stride: Int32,
     active_bases: Int32,
@@ -178,7 +178,7 @@ struct Adam(Movable):
                     dptr(splats.params[Attr.MEANS]),
                     sg.slot_of,
                     sg.grad_color,
-                    sg.cam_pos,
+                    KernelVector[DType.float32, 4](sg.cam_pos),
                     Int32(splats.count),
                     Int32(splats.rest_stride),
                     Int32(sg.active_bases),

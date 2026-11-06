@@ -35,10 +35,13 @@ from ..core.types import F32Ptr
 
 
 @always_inline
-def _rgb(p: F32Ptr, i: Int) -> SIMD[DType.float32, 4]:
-    return SIMD[DType.float32, 4](
-        p[unsafe_offset=i * 3 + 0], p[unsafe_offset=i * 3 + 1], p[unsafe_offset=i * 3 + 2], 0.0
-    )
+def load_rgb(p: F32Ptr, i: Int) -> SIMD[DType.float32, 4]:
+    # Avoid mixing device references and local values in the variadic SIMD
+    # constructor (Mojo 1.2 Metal address-space lowering bug).
+    var rgb = SIMD[DType.float32, 4](0.0)
+    comptime for c in range(3):
+        rgb[c] = p[unsafe_offset=i * 3 + c]
+    return rgb
 
 
 @always_inline
@@ -51,7 +54,7 @@ def sh_to_color(
     rest_stride: Int,
 ) -> SIMD[DType.float32, 4]:
     """RGB (lane 3 unused) of Gaussian `g` seen along `dir`, before clamping."""
-    var result = 0.5 + SH_C0 * _rgb(sh0, g)
+    var result = 0.5 + SH_C0 * load_rgb(sh0, g)
     if active_bases > 1:
         var inv = rsqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
         var x = dir[0] * inv
@@ -60,9 +63,9 @@ def sh_to_color(
         var b = g * rest_stride
         result = (
             result
-            - SH_C1 * y * _rgb(sh_rest, b + 0)
-            + SH_C1 * z * _rgb(sh_rest, b + 1)
-            - SH_C1 * x * _rgb(sh_rest, b + 2)
+            - SH_C1 * y * load_rgb(sh_rest, b + 0)
+            + SH_C1 * z * load_rgb(sh_rest, b + 1)
+            - SH_C1 * x * load_rgb(sh_rest, b + 2)
         )
         if active_bases > 4:
             var xx = x * x
@@ -73,22 +76,22 @@ def sh_to_color(
             var yz = y * z
             result = (
                 result
-                + SH_C2A * xy * _rgb(sh_rest, b + 3)
-                - SH_C2A * yz * _rgb(sh_rest, b + 4)
-                + (SH_C2B * zz - SH_C2C) * _rgb(sh_rest, b + 5)
-                - SH_C2A * xz * _rgb(sh_rest, b + 6)
-                + SH_C2D * (xx - yy) * _rgb(sh_rest, b + 7)
+                + SH_C2A * xy * load_rgb(sh_rest, b + 3)
+                - SH_C2A * yz * load_rgb(sh_rest, b + 4)
+                + (SH_C2B * zz - SH_C2C) * load_rgb(sh_rest, b + 5)
+                - SH_C2A * xz * load_rgb(sh_rest, b + 6)
+                + SH_C2D * (xx - yy) * load_rgb(sh_rest, b + 7)
             )
             if active_bases > 9:
                 result = (
                     result
-                    + y * (SH_C3A * yy - SH_C3B * xx) * _rgb(sh_rest, b + 8)
-                    + SH_C3C * xy * z * _rgb(sh_rest, b + 9)
-                    + y * (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 10)
-                    + z * (SH_C3F * zz - SH_C3G) * _rgb(sh_rest, b + 11)
-                    + x * (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 12)
-                    + SH_C3H * z * (xx - yy) * _rgb(sh_rest, b + 13)
-                    + x * (SH_C3B * yy - SH_C3A * xx) * _rgb(sh_rest, b + 14)
+                    + y * (SH_C3A * yy - SH_C3B * xx) * load_rgb(sh_rest, b + 8)
+                    + SH_C3C * xy * z * load_rgb(sh_rest, b + 9)
+                    + y * (SH_C3D - SH_C3E * zz) * load_rgb(sh_rest, b + 10)
+                    + z * (SH_C3F * zz - SH_C3G) * load_rgb(sh_rest, b + 11)
+                    + x * (SH_C3D - SH_C3E * zz) * load_rgb(sh_rest, b + 12)
+                    + SH_C3H * z * (xx - yy) * load_rgb(sh_rest, b + 13)
+                    + x * (SH_C3B * yy - SH_C3A * xx) * load_rgb(sh_rest, b + 14)
                 )
     return result
 
@@ -181,9 +184,9 @@ def sh_to_color_backward(
     _store_rest(write_rest, grad_sh_rest, b + 0, -SH_C1 * y * grad_color)
     _store_rest(write_rest, grad_sh_rest, b + 1, SH_C1 * z * grad_color)
     _store_rest(write_rest, grad_sh_rest, b + 2, -SH_C1 * x * grad_color)
-    var gx = -SH_C1 * _rgb(sh_rest, b + 2)
-    var gy = -SH_C1 * _rgb(sh_rest, b + 0)
-    var gz = SH_C1 * _rgb(sh_rest, b + 1)
+    var gx = -SH_C1 * load_rgb(sh_rest, b + 2)
+    var gy = -SH_C1 * load_rgb(sh_rest, b + 0)
+    var gz = SH_C1 * load_rgb(sh_rest, b + 1)
     if active_bases > 4:
         var xx = x * x
         var yy = y * y
@@ -198,21 +201,21 @@ def sh_to_color_backward(
         _store_rest(write_rest, grad_sh_rest, b + 7, SH_C2D * (xx - yy) * grad_color)
         gx = (
             gx
-            + SH_C2A * y * _rgb(sh_rest, b + 3)
-            - SH_C2A * z * _rgb(sh_rest, b + 6)
-            + SH_C2A * x * _rgb(sh_rest, b + 7)
+            + SH_C2A * y * load_rgb(sh_rest, b + 3)
+            - SH_C2A * z * load_rgb(sh_rest, b + 6)
+            + SH_C2A * x * load_rgb(sh_rest, b + 7)
         )
         gy = (
             gy
-            + SH_C2A * x * _rgb(sh_rest, b + 3)
-            - SH_C2A * z * _rgb(sh_rest, b + 4)
-            - SH_C2A * y * _rgb(sh_rest, b + 7)
+            + SH_C2A * x * load_rgb(sh_rest, b + 3)
+            - SH_C2A * z * load_rgb(sh_rest, b + 4)
+            - SH_C2A * y * load_rgb(sh_rest, b + 7)
         )
         gz = (
             gz
-            - SH_C2A * y * _rgb(sh_rest, b + 4)
-            + SH_C2E * z * _rgb(sh_rest, b + 5)
-            - SH_C2A * x * _rgb(sh_rest, b + 6)
+            - SH_C2A * y * load_rgb(sh_rest, b + 4)
+            + SH_C2E * z * load_rgb(sh_rest, b + 5)
+            - SH_C2A * x * load_rgb(sh_rest, b + 6)
         )
         if active_bases > 9:
             _store_rest(write_rest, grad_sh_rest, b + 8, y * (SH_C3A * yy - SH_C3B * xx) * grad_color)
@@ -224,27 +227,27 @@ def sh_to_color_backward(
             _store_rest(write_rest, grad_sh_rest, b + 14, x * (SH_C3B * yy - SH_C3A * xx) * grad_color)
             gx = (
                 gx
-                - SH_C3I * xy * _rgb(sh_rest, b + 8)
-                + SH_C3C * yz * _rgb(sh_rest, b + 9)
-                + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 12)
-                + SH_C3C * xz * _rgb(sh_rest, b + 13)
-                + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 14)
+                - SH_C3I * xy * load_rgb(sh_rest, b + 8)
+                + SH_C3C * yz * load_rgb(sh_rest, b + 9)
+                + (SH_C3D - SH_C3E * zz) * load_rgb(sh_rest, b + 12)
+                + SH_C3C * xz * load_rgb(sh_rest, b + 13)
+                + SH_C3B * (yy - xx) * load_rgb(sh_rest, b + 14)
             )
             gy = (
                 gy
-                + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 8)
-                + SH_C3C * xz * _rgb(sh_rest, b + 9)
-                + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 10)
-                - SH_C3C * yz * _rgb(sh_rest, b + 13)
-                + SH_C3I * xy * _rgb(sh_rest, b + 14)
+                + SH_C3B * (yy - xx) * load_rgb(sh_rest, b + 8)
+                + SH_C3C * xz * load_rgb(sh_rest, b + 9)
+                + (SH_C3D - SH_C3E * zz) * load_rgb(sh_rest, b + 10)
+                - SH_C3C * yz * load_rgb(sh_rest, b + 13)
+                + SH_C3I * xy * load_rgb(sh_rest, b + 14)
             )
             gz = (
                 gz
-                + SH_C3C * xy * _rgb(sh_rest, b + 9)
-                - SH_C3J * yz * _rgb(sh_rest, b + 10)
-                + (SH_C3K * zz - SH_C3G) * _rgb(sh_rest, b + 11)
-                - SH_C3J * xz * _rgb(sh_rest, b + 12)
-                + SH_C3H * (xx - yy) * _rgb(sh_rest, b + 13)
+                + SH_C3C * xy * load_rgb(sh_rest, b + 9)
+                - SH_C3J * yz * load_rgb(sh_rest, b + 10)
+                + (SH_C3K * zz - SH_C3G) * load_rgb(sh_rest, b + 11)
+                - SH_C3J * xz * load_rgb(sh_rest, b + 12)
+                + SH_C3H * (xx - yy) * load_rgb(sh_rest, b + 13)
             )
     # d(normalized dir)/d(dir): (I - d d^T) / |dir|
     var gdx = _dot3(gx, grad_color)

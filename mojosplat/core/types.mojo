@@ -2,6 +2,7 @@
 
 from max.gpu import WARP_SIZE
 from max.gpu.host import DeviceBuffer
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 
 comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
 comptime I32Ptr = Pointer[Int32, MutUntrackedOrigin]
@@ -15,6 +16,30 @@ comptime LANE_MASK_DTYPE = DType.uint32 if WARP_SIZE <= 32 else DType.uint64
 comptime LaneMask = Scalar[LANE_MASK_DTYPE]
 
 comptime _PLACEHOLDER_ADDR = 256
+
+
+@fieldwise_init
+struct KernelVector[dtype: DType, width: Int](DevicePassable, ImplicitlyCopyable, Movable):
+    """By-value vector kernel argument stored in a constant buffer on Metal.
+
+    Mojo 1.2 lowers bare SIMD kernel arguments to AIR vector parameters,
+    which Apple's GPU pipeline compiler rejects. A struct preserves the
+    same bytes while giving the argument a supported buffer-based ABI.
+    """
+
+    var value: SIMD[Self.dtype, Self.width]
+
+    comptime device_type = Self
+
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: Pointer[mut=True, NoneType, _]):
+        target.unsafe_bitcast[Self]()[] = self
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "KernelVector"
+
+    def __getitem__(self, i: Int) -> Scalar[Self.dtype]:
+        return self.value[i]
 
 
 @always_inline

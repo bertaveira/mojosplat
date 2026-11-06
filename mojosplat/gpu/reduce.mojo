@@ -58,9 +58,11 @@ def _block_minmax3_kernel(src: F32Ptr, partials: F32Ptr, n: Int32):
     var hi = SIMD[DType.float32, 4](-Float32.MAX)
     var i = block_idx.x * REDUCE_BLOCK + thread_idx.x
     while i < Int(n):
-        var v = SIMD[DType.float32, 4](
-            src[unsafe_offset=i * 3], src[unsafe_offset=i * 3 + 1], src[unsafe_offset=i * 3 + 2], 0.0
-        )
+        # Explicit inserts avoid Mojo 1.2's Metal lowering of a variadic SIMD
+        # constructor mixing device references and local values.
+        var v = SIMD[DType.float32, 4](0.0)
+        comptime for k in range(3):
+            v[k] = src[unsafe_offset=i * 3 + k]
         lo = min(lo, v)
         hi = max(hi, v)
         i += REDUCE_GRID * REDUCE_BLOCK

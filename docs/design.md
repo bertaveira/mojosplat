@@ -53,6 +53,40 @@ browser connected, ~2% while watching at 5 fps. lightbug_http, the main
 Mojo HTTP library, targets Mojo 0.26 and has no WebSockets; what the viewer
 needs (one page and the WebSocket upgrade) is ~150 lines.
 
+## Portability
+
+The same sources build for NVIDIA, AMD (RDNA3, RDNA4, MI300) and Apple
+M-series GPUs. Warp-level code is written for any warp size: lane masks use
+`LANE_MASK_DTYPE` (uint64 on wave64 MI300) and the default tile height is 16
+there instead of 12. Platform differences on the host side are
+`comptime if CompilationTarget.is_macos()` branches.
+
+Rules for kernels, all from Mojo 1.2 on Metal (Apple M2 Pro):
+
+- **Vector kernel arguments are `KernelVector[dtype, width]`, never a bare
+  `SIMD`.** Mojo lowers a by-value SIMD argument to an AIR vector parameter,
+  which Apple's pipeline compiler rejects at runtime. `KernelVector`
+  (`core/types.mojo`) wraps the same bytes in a struct that is passed in a
+  constant buffer; on NVIDIA the generated code is unchanged. Nothing on
+  Linux catches a violation: it compiles, cross-compiles for `apple-m4`
+  (`--emit air`) and passes every test, and fails only when run on a Mac.
+- **Build SIMD values that hold device loads lane by lane**
+  (`v = SIMD(0); v[k] = p[unsafe_offset=...]`, see `render/sh.load_rgb`).
+  A variadic SIMD constructor that mixes device loads and local values
+  lowers with mismatched address spaces and crashes Apple's `air-lld`.
+- **Raw-pointer fills and copies use kernels on macOS**
+  (`gpu/elementwise.mojo`). The Metal driver's fill and copy need its own
+  buffer handles and cannot wrap an arbitrary pointer in a non-owning
+  `DeviceBuffer`.
+- **Keep a buffer's owner alive until the GPU is done with it.** `dptr()`
+  erases the origin, so Mojo may free the buffer right after its last use on
+  the host while a kernel still reads it. Some tests got away with this on
+  CUDA; the macOS port fixed them. Keep owners in structs, or end with
+  `_ = (buf^, ...)` after a synchronize.
+
+`tests/gpu/test_kernel_args.mojo` exercises `KernelVector` arguments of
+several widths and the lane-by-lane loads.
+
 ## Rasterizer
 
 Faster-GS's pipeline, see the module docstrings in `render/`:

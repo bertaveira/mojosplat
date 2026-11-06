@@ -36,7 +36,7 @@ from std.bit import count_trailing_zeros
 from std.math import exp2
 from std.memory import stack_allocation
 
-from ..core.types import F32Ptr, I32Ptr, LANE_MASK_DTYPE, U32Ptr, placeholder
+from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, U32Ptr, placeholder
 from .preprocess import MIN_ALPHA, load_record, record_bounds, unpack_bounds
 
 comptime T_MIN: Float32 = 1e-4
@@ -52,7 +52,7 @@ def _blend_kernel[
     instance_ids: I32Ptr,  # [M] slots sorted by (tile, depth)
     records: F32Ptr,  # [slot, REC]
     colors: F32Ptr,  # [slot, CDIM] (clamped at 0 here)
-    background: SIMD[DType.float32, 4],
+    background_arg: KernelVector[DType.float32, 4],
     image: F32Ptr,  # out [H, W, CDIM]
     width: Int32,
     height: Int32,
@@ -65,6 +65,7 @@ def _blend_kernel[
     n_processed: U32Ptr,  # out [H * W] tile-local index + 1 of the last used Gaussian
     tile_max_n: U32Ptr,  # out [n_tiles] max of n_processed over the tile
 ):
+    var background = background_arg.value
     comptime BLOCK = tile_w * tile_h
     comptime WARPS = BLOCK // WARP_SIZE
     comptime SUBGRID_W = tile_w // SUBTILE_W
@@ -241,7 +242,7 @@ def blend[
         instance_ids,
         records,
         colors,
-        background,
+        KernelVector[DType.float32, 4](background),
         image,
         Int32(width),
         Int32(height),

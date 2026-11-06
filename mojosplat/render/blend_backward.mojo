@@ -26,7 +26,7 @@ from std.atomic import Atomic, Ordering
 from std.math import exp2
 from std.memory import stack_allocation
 
-from ..core.types import F32Ptr, I32Ptr, U32Ptr
+from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
 from .preprocess import MIN_ALPHA, load_record
 
 comptime ONE_MINUS_ALPHA_EPS: Float32 = 1e-6
@@ -48,7 +48,7 @@ def _blend_backward_kernel[
     instance_ids: I32Ptr,  # [M] slots
     records: F32Ptr,  # [slot, REC]
     colors: F32Ptr,  # [slot, 3] unclamped
-    background: SIMD[DType.float32, 4],
+    background_arg: KernelVector[DType.float32, 4],
     image: F32Ptr,  # [H, W, 3] forward output
     grad_image: F32Ptr,  # [H, W, 3]
     final_T: F32Ptr,  # [H * W]
@@ -63,6 +63,7 @@ def _blend_backward_kernel[
     height: Int32,
     grid_w: Int32,
 ):
+    var background = background_arg.value
     comptime BLOCK = tile_w * tile_h
     var bucket = block_idx.x
     if bucket >= Int(bucket_start[unsafe_offset=Int(n_tiles)]):
@@ -272,7 +273,7 @@ def blend_backward[
         instance_ids,
         records,
         colors,
-        background,
+        KernelVector[DType.float32, 4](background),
         image,
         grad_image,
         final_T,
