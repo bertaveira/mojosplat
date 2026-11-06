@@ -134,13 +134,27 @@ def _blend_backward_kernel[
     var gb: Float32 = 0
     var g_alpha_bg: Float32 = 0  # -T_final * dot(dL/dpixel, background)
 
-    for i in range(BLOCK + WARP_SIZE - 1):
-        if i % WARP_SIZE == 0:
+    # 32-bit loop state: 64-bit integer math and int -> float conversions are
+    # several times slower on Apple GPUs.
+    var lane32 = Int32(lane)
+    var tp32 = UInt32(tp)
+    var W32 = Int32(W)
+    var H32 = Int32(H)
+    var x0_32 = Int32(tile_x0)
+    var y0_32 = Int32(tile_y0)
+    var i = Int32(-1)
+    while True:
+        i += 1
+        if i >= Int32(BLOCK + WARP_SIZE - 1):
+            break
+        var k32 = i & Int32(WARP_SIZE - 1)
+        if k32 == 0:
             syncwarp()
-            var local = i + lane
-            if local < BLOCK:
-                var x = tile_x0 + local % tile_w
-                var y = tile_y0 + local // tile_w
+            var local32 = i + lane32
+            if local32 < Int32(BLOCK):
+                var local = Int(local32)
+                var x = Int(x0_32 + Int32(UInt32(local32) % UInt32(tile_w)))
+                var y = Int(y0_32 + Int32(UInt32(local32) // UInt32(tile_w)))
                 var s = snap.unsafe_offset(local * 4).unsafe_bitcast[SIMD[DType.float32, 4]]()[]
                 var img = SIMD[DType.float32, 4](0.0)
                 var gimg = SIMD[DType.float32, 4](0.0)
@@ -174,9 +188,9 @@ def _blend_backward_kernel[
             gb = warp.shuffle_up(gb, UInt32(1))
             g_alpha_bg = warp.shuffle_up(g_alpha_bg, UInt32(1))
 
-        var idx = i - lane  # pixel this lane handles now
-        if lane == 0 and idx < BLOCK:
-            var k = i % WARP_SIZE
+        var idx = i - lane32  # pixel this lane handles now
+        if lane32 == 0 and i < Int32(BLOCK):
+            var k = Int(k32)
             last = s_last[unsafe_offset=k]
             after_r = s_after[unsafe_offset=k * 4 + 0]
             after_g = s_after[unsafe_offset=k * 4 + 1]
@@ -187,11 +201,11 @@ def _blend_backward_kernel[
             gb = s_grad[unsafe_offset=k * 4 + 2]
             g_alpha_bg = s_grad[unsafe_offset=k * 4 + 3]
 
-        if not valid or idx < 0 or idx >= BLOCK or tp >= Int(last):
+        if not valid or idx < 0 or idx >= Int32(BLOCK) or tp32 >= last:
             continue
-        var x = tile_x0 + idx % tile_w
-        var y = tile_y0 + idx // tile_w
-        if x >= W or y >= H:
+        var x = x0_32 + Int32(UInt32(idx) % UInt32(tile_w))
+        var y = y0_32 + Int32(UInt32(idx) // UInt32(tile_w))
+        if x >= W32 or y >= H32:
             continue
 
         var dx = mx - (Float32(x) + 0.5)
