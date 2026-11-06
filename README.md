@@ -2,7 +2,7 @@
 
 **3D Gaussian Splatting, training and rendering, written entirely in [Mojo](https://www.modular.com/mojo).** No Python, no CUDA C++: one language from the COLMAP loader to the GPU kernels.
 
-https://github.com/user-attachments/assets/ae4409a3-a656-4635-bb57-f22aca2f6141
+https://github.com/user-attachments/assets/606288c3-1d81-4fa7-9edd-ad549de8cda0
 
 Gaussian Splatting codebases are usually Python orchestrating hand-written CUDA kernels, tied to NVIDIA GPUs. Mojo promises CUDA-level performance in a single, Python-like language that also targets AMD and Apple GPUs. MojoSplat is a full, fast 3DGS implementation built to test that promise.
 
