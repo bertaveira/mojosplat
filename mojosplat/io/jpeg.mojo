@@ -14,10 +14,17 @@ from .binary import read_file
 
 
 # turbojpeg.h enums (TurboJPEG 3)
+comptime _TJINIT_COMPRESS = 0
 comptime _TJINIT_DECOMPRESS = 1
+comptime _TJPARAM_NOREALLOC = 2
+comptime _TJPARAM_QUALITY = 3
+comptime _TJPARAM_SUBSAMP = 4
 comptime _TJPARAM_JPEGWIDTH = 5
 comptime _TJPARAM_JPEGHEIGHT = 6
+comptime _TJPARAM_FASTDCT = 10
 comptime _TJPF_RGB = 0
+comptime _TJSAMP_444 = 0
+comptime _TJSAMP_420 = 2
 
 
 @fieldwise_init
@@ -103,3 +110,51 @@ def read_jpeg(path: String) raises -> Image8:
     """Decode one JPEG file to 8-bit RGB (creates a temporary decoder)."""
     var dec = JpegDecoder()
     return dec.read(path)
+
+
+struct JpegEncoder(Movable):
+    """Reusable TurboJPEG compressor: 8-bit RGB -> JPEG (4:2:0, fast DCT).
+    The result stays in `data` (first `size` bytes) until the next encode."""
+
+    var lib: OwnedDLHandle
+    var handle: Int
+    var data: List[UInt8]
+    var size: Int
+
+    def __init__(out self, quality: Int = 85) raises:
+        self.lib = _load_turbojpeg()
+        self.handle = self.lib.get_function[Int]("tj3Init")(c_int(_TJINIT_COMPRESS))
+        if self.handle == 0:
+            raise Error("tj3Init failed")
+        self.data = List[UInt8]()
+        self.size = 0
+        var tj_set = self.lib.get_function[c_int]("tj3Set")
+        _ = tj_set(self.handle, c_int(_TJPARAM_QUALITY), c_int(quality))
+        _ = tj_set(self.handle, c_int(_TJPARAM_SUBSAMP), c_int(_TJSAMP_420))
+        _ = tj_set(self.handle, c_int(_TJPARAM_FASTDCT), c_int(1))
+        _ = tj_set(self.handle, c_int(_TJPARAM_NOREALLOC), c_int(1))  # we own the buffer
+
+    def __deinit__(deinit self):
+        try:
+            _ = self.lib.get_function[NoneType]("tj3Destroy")(self.handle)
+        except:
+            pass
+
+    def encode(mut self, rgb: List[UInt8], width: Int, height: Int) raises -> Int:
+        """Compress [height, width, 3] RGB; returns the JPEG size in bytes."""
+        if len(rgb) < width * height * 3:
+            raise Error("JpegEncoder.encode: buffer smaller than width * height * 3")
+        var bound = Int(self.lib.get_function[UInt]("tj3JPEGBufSize")(c_int(width), c_int(height), c_int(_TJSAMP_444)))
+        if len(self.data) < bound:
+            self.data = List[UInt8](unsafe_uninit_length=bound)
+        # tj3Compress8 takes unsigned char **jpegBuf and size_t *jpegSize.
+        var buf_addr = Int(self.data.unsafe_ptr())
+        var size = UInt(bound)
+        var rc = self.lib.get_function[c_int]("tj3Compress8")(
+            self.handle, rgb.unsafe_ptr().as_unsafe_any_origin(), c_int(width), c_int(0), c_int(height),
+            c_int(_TJPF_RGB), Pointer(to=buf_addr), Pointer(to=size),
+        )
+        if rc != 0 and self.lib.get_function[c_int]("tj3GetErrorCode")(self.handle) != 0:
+            raise Error("JPEG encoding failed")
+        self.size = Int(size)
+        return self.size

@@ -28,6 +28,8 @@ pixi run train data/mipnerf360/garden           # -> output/garden/point_cloud.p
 pixi run eval data/mipnerf360/garden output/garden/point_cloud.ply   # test-view PSNR
 ```
 
+**Watch it train** in the browser with `--viewer`, then open http://localhost:8080. Orbit around the scene while it trains, pause and resume training, and jump between the dataset cameras. The viewer stays open on the final model. A trained model can be opened on its own with `pixi run view output/garden/point_cloud.ply --scene data/mipnerf360/garden`. The viewer listens on all interfaces (like viser), so a model training on a GPU box can be watched from a laptop; use `--host 127.0.0.1` to keep it local.
+
 Every hyperparameter is a command-line option, e.g. `pixi run train data/mipnerf360/garden --iterations 7000 --sh-degree 1 --no-densify`. `pixi run train --help` lists them all. The options are generated from the config structs, so a new `TrainConfig` field is a new flag.
 
 **Render** a trained `.ply`, or any antimatter15 `.splat` file:
@@ -131,8 +133,8 @@ Details, design decisions and measurements are in [`docs/design.md`](docs/design
 
 | Path | Contents |
 |---|---|
-| `mojosplat/` | The library: `core` (types, camera), `gpu` (sort, scan), `render` (rasterizer), `model` (Gaussian storage), `io` (COLMAP, JPEG, PLY, PNG), `train` (loss, Adam, densification, trainer), `cli` (options from config structs, progress bars) |
-| `tools/` | `train`, `eval`, `render`, `bench` |
+| `mojosplat/` | The library: `core` (types, camera), `gpu` (sort, scan), `render` (rasterizer), `model` (Gaussian storage), `io` (COLMAP, JPEG, PLY, PNG), `train` (loss, Adam, densification, trainer), `cli` (options from config structs, progress bars), `viewer` (web viewer) |
+| `tools/` | `train`, `eval`, `view`, `render`, `bench` |
 | `tests/` | Mojo tests against reference data (`pixi run test`) |
 | `bindings/torch/` | PyTorch package `mojosplat_torch` with tests and examples |
 

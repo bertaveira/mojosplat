@@ -3,6 +3,7 @@
 Usage:
     pixi run train data/mipnerf360/garden [--iterations 30000] [--no-densify] ...
     pixi run train --help        # every option (all of TrainConfig)
+    pixi run train data/mipnerf360/garden --viewer   # watch it live at http://localhost:8080
 
 Loads <scene>/sparse/0 and <scene>/<images> (every 8th image held out),
 initializes Gaussians from the SfM points, trains with the 3DGS / Faster-GS
@@ -18,8 +19,10 @@ from mojosplat.cli import (
     Arg, ProgressBar, Table, bold, dim, done, fmt_count, fmt_duration, fmt_fixed, fmt_thousands,
     parse_args, seconds_since,
 )
+from mojosplat.core.camera import Camera
 from mojosplat.train.dataset import load_colmap_dataset
 from mojosplat.train.trainer import TrainConfig, Trainer
+from mojosplat.viewer import Viewer, ViewerConfig
 
 
 struct TrainArgs(Defaultable, Movable):
@@ -31,15 +34,32 @@ struct TrainArgs(Defaultable, Movable):
     var out: String
     @__annotation(Arg("Hold out every N-th image for testing (0 = train on all)"))
     var test_every: Int
+    @__annotation(Arg("Serve the live web viewer while training (stays open afterwards)"))
+    var viewer: Bool
     @__annotation(Arg("Training"))
     var train: TrainConfig
+    @__annotation(Arg("Viewer (with --viewer)"))
+    var view: ViewerConfig
 
     def __init__(out self):
         self.scene = ""
         self.images = "images_4"
         self.out = ""
         self.test_every = 8
+        self.viewer = False
         self.train = TrainConfig()
+        self.view = ViewerConfig()
+
+
+def _stats(it: Int, total: Int, loss: Float64, gaussians: Int, bar: ProgressBar) -> List[Tuple[String, String]]:
+    var items = List[Tuple[String, String]]()
+    var elapsed = bar.elapsed()
+    items.append(("Iteration", String(fmt_thousands(it), " / ", fmt_thousands(total))))
+    items.append(("Loss", fmt_fixed(loss, 4)))
+    items.append(("Gaussians", fmt_thousands(gaussians)))
+    items.append(("Speed", String(fmt_fixed(Float64(it) / max(elapsed, 1e-9), 0), " it/s")))
+    items.append(("Elapsed", fmt_duration(elapsed)))
+    return items^
 
 
 def main() raises:
@@ -62,6 +82,13 @@ def main() raises:
     var trainer = Trainer(ctx, ds^, config)
     done(String("Initialized ", fmt_thousands(trainer.splats.count), " Gaussians"))
 
+    var viewer = Optional[Viewer]()
+    if args.viewer:
+        var cams = List[Camera]()
+        for v in trainer.dataset.train:
+            cams.append(v.camera)
+        viewer = Viewer(ctx, args.view, trainer.splats, cams, name, True)
+
     var bar = ProgressBar(config.iterations, "train")
     var info = String()
     for i in range(config.iterations):
@@ -72,6 +99,18 @@ def main() raises:
                 dim(" | "), "SH ", trainer.active_sh_degree(),
             )
         bar.update(i + 1, info, log=loss >= 0.0)
+        if viewer:
+            ref v = viewer.value()
+            if loss >= 0.0:
+                v.set_stats(_stats(i + 1, config.iterations, loss, trainer.splats.count, bar), Float64(i + 1) / Float64(config.iterations))
+            v.update(trainer.splats, trainer.active_sh_degree(), scene_changed=True)
+            if v.paused:
+                var t_pause = Int(perf_counter_ns())
+                bar.message(dim("Paused from the viewer"))
+                v.set_stats(_stats(i + 1, config.iterations, loss, trainer.splats.count, bar), Float64(i + 1) / Float64(config.iterations))
+                v.wait_while_paused(trainer.splats, trainer.active_sh_degree())
+                bar.exclude(seconds_since(t_pause))
+                bar.message(dim("Resumed"))
     var removed = trainer.finish()
     ctx.synchronize()
     var train_s = bar.elapsed()
@@ -99,3 +138,17 @@ def main() raises:
         table.add("Test PSNR", String(bold(fmt_fixed(psnr, 2)), " dB"))
     table.add("Model", ply)
     table.print()
+
+    if viewer:
+        ref v = viewer.value()
+        var items = List[Tuple[String, String]]()
+        items.append(("Status", "Finished"))
+        items.append(("Training time", fmt_duration(train_s)))
+        items.append(("Gaussians", fmt_thousands(trainer.splats.count)))
+        if psnr >= 0.0:
+            items.append(("Test PSNR", String(fmt_fixed(psnr, 2), " dB")))
+        v.training = False
+        v.set_stats(items, 1.0)
+        print()
+        print(dim("Viewer still running with the final model. Ctrl+C to quit."))
+        v.serve_forever(trainer.splats, config.sh_degree)
