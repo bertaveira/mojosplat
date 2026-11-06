@@ -13,7 +13,7 @@ Gaussian Splatting codebases are usually Python orchestrating hand-written CUDA 
 
 ## Quick start
 
-All you need is [pixi](https://pixi.sh) and an NVIDIA GPU on Linux, or an Apple silicon Mac. No CUDA toolkit, compiler or Python: pixi installs Mojo into the project folder on the first run. Just clone this repository `git clone https://github.com/bertaveira/mojosplat.git` and you're ready to go.
+All you need is [pixi](https://pixi.sh) and an NVIDIA GPU, AMD GPU, or an Apple silicon Mac. No CUDA toolkit, compiler or Python needed: pixi installs Mojo into the project folder on the first run. Just clone this repository `git clone https://github.com/bertaveira/mojosplat.git` and you're ready to go.
 
 ```bash
 pixi run train path/to/scene --viewer        # watch it train at http://localhost:8080
@@ -28,7 +28,7 @@ pixi run render output/scene/point_cloud.ply -o render.png   # also renders .spl
 
 A scene is a COLMAP folder with `sparse/0/` and `images_4/`, e.g. from [Mip-NeRF360](https://jonbarron.info/mipnerf360/). Every hyperparameter is a flag: `pixi run train --help`.
 
-On a Mac, Mojo compiles kernels with Xcode's Metal toolchain: check it with `xcrun metal --version` and, if it is missing, install it with `xcodebuild -downloadComponent MetalToolchain`. The tests, a 1,000-iteration garden run and the viewer pass on an M2 Pro; full-length training and tuning on Apple GPUs are still in progress.
+On a Mac, Mojo compiles kernels with Xcode's Metal toolchain: check it with `xcrun metal --version` and, if it is missing, install it with `xcodebuild -downloadComponent MetalToolchain`.
 
 ## Performance
 
