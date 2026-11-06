@@ -385,9 +385,16 @@ struct Viewer(Movable):
         `timeout_ms` for network activity (0: never blocks)."""
         self.polls.clear()
         self.polls.add(self.listen_fd, POLLIN)
+        var wait_ms = timeout_ms
+        var start = Int(perf_counter_ns())
         for i in range(len(self.clients)):
-            self.polls.add(self.clients[i].fd, POLLIN | (POLLOUT if self.clients[i].pending() > 0 else 0))
-        if self.polls.wait(timeout_ms) > 0:
+            ref c = self.clients[i]
+            self.polls.add(c.fd, POLLIN | (POLLOUT if c.pending() > 0 else 0))
+            # Wake up when this browser's next frame is due, not at the end of the timeout.
+            if c.websocket and c.has_camera and c.camera_moved and c.pending() == 0:
+                var due_in_ns = c.last_frame + 1_000_000_000 // max(self.config.max_fps, 1) - start
+                wait_ms = min(wait_ms, max(0, (due_in_ns + 999_999) // 1_000_000))
+        if self.polls.wait(wait_ms) > 0:
             for i in range(len(self.clients)):
                 var ev = self.polls.revents(i + 1)
                 if ev & (POLLIN | POLLERR | POLLHUP):
@@ -413,7 +420,9 @@ struct Viewer(Movable):
                 if due:
                     self._render(i, splats, sh_degree)
                     self.clients[i].camera_moved = False
-                    self.clients[i].last_frame = Int(perf_counter_ns())
+                    # Schedule from the decision time, not the end of the render: otherwise
+                    # every frame also waits for the render, and the rate drops below max_fps.
+                    self.clients[i].last_frame = now
         for i in range(len(self.clients)):
             self._flush(i)
         self._drop_dead()
