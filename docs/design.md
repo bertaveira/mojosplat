@@ -18,6 +18,7 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   model/        owning storage of the Gaussians
   io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
   train/        dataset, loss (L1 + SSIM), PSNR, Adam, densification, trainer
+  cli/          command-line options from config structs, terminal output
 tools/          command-line programs: train, eval, render, bench
 tests/          mirrors the package; golden data + generators in tests/data/
 bindings/torch/ PyTorch extension (render_splats with autograd)
@@ -27,6 +28,15 @@ Dependencies point one way: `core` <- `gpu` <- `model` <- `render` <- `train`
 <- `tools`. `gpu/` knows nothing about splats; `render/` is usable for
 inference without any training code. Executables live in `tools/` (as in
 llama.cpp) and stay thin: argument parsing and output around library calls.
+
+`cli/` depends only on the standard library. `parse_args[T]()` turns the
+fields of a config struct into options by compile-time reflection (in the
+spirit of tyro): `sh_degree` becomes `--sh-degree`, Bools are switches,
+nested structs are option groups, and `@__annotation(Arg("help"))` on a
+field gives its help text. Configs such as `TrainConfig` carry these
+annotations themselves, so a new field is documented and settable from the
+command line with no tool changes. `@__annotation` is Mojo's field-metadata
+syntax; the leading underscores suggest it may still change.
 
 ## Rasterizer
 
