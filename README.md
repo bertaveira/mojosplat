@@ -13,7 +13,7 @@ Gaussian Splatting codebases are usually Python orchestrating hand-written CUDA 
 
 ## Quick start
 
-Requires an NVIDIA GPU (see [Roadmap](#roadmap) for AMD and Apple) and [pixi](https://pixi.sh).
+Requires [pixi](https://pixi.sh) and an NVIDIA GPU on Linux. macOS on Apple silicon installs too, but running on Apple GPUs is still untested (see [Roadmap](#roadmap)). The PyTorch bindings are Linux-only.
 
 ```bash
 git clone https://github.com/bertaveira/mojosplat.git && cd mojosplat
