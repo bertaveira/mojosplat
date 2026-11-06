@@ -1,8 +1,0 @@
-N=500
-M=904
-W=128
-H=96
-tile_size=16
-tiles_w=8
-tiles_h=6
-visible=363

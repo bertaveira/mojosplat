@@ -1,0 +1,6 @@
+N=400
+W=128
+H=96
+sh_degree=3
+sh_rest=15
+visible=399

@@ -1,8 +1,0 @@
-N=20000
-M=92792
-W=333
-H=250
-tile_size=16
-tiles_w=21
-tiles_h=16
-visible=14212

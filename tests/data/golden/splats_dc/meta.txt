@@ -1,0 +1,6 @@
+N=3000
+W=200
+H=120
+sh_degree=0
+sh_rest=0
+visible=2753

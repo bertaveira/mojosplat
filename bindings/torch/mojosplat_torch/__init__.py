@@ -1,20 +1,13 @@
 """PyTorch bindings for MojoSplat.
 
 The rendering kernels are written in Mojo (see the repository's `mojosplat/`
-package); this package wraps them for torch tensors and keeps reference
-`torch` and `gsplat` backends for comparison.
+package); `render_splats` exposes the rasterizer to torch tensors, with
+autograd. `render_gsplat` is a gsplat reference with the same interface.
 """
 
+from .io import load_splat
+from .rasterizer import render_splats, rgb_to_sh0
+from .reference import render_gsplat
 from .utils import Camera
-from .projection import project_gaussians
-from .binning import bin_gaussians_to_tiles
-from .rasterization import rasterize_gaussians
-from .render import render_gaussians
 
-__all__ = [
-    "Camera",
-    "project_gaussians",
-    "bin_gaussians_to_tiles",
-    "rasterize_gaussians",
-    "render_gaussians",
-]
+__all__ = ["Camera", "load_splat", "render_gsplat", "render_splats", "rgb_to_sh0"]

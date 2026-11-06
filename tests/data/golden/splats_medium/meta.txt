@@ -1,0 +1,6 @@
+N=12000
+W=333
+H=250
+sh_degree=2
+sh_rest=15
+visible=11013

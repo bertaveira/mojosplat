@@ -1,145 +1,178 @@
 # MojoSplat
 
-MojoSplat is an experimental port of Gaussian Splatting kernels to [Mojo](https://www.modular.com/mojo), exploring the potential performance and multi-vendor support of Mojo for GPU acceleration.
-
-
+**3D Gaussian Splatting, training and rendering, written entirely in [Mojo](https://www.modular.com/mojo).** No Python, no CUDA C++: one language from the COLMAP loader to the GPU kernels.
 
 https://github.com/user-attachments/assets/ae4409a3-a656-4635-bb57-f22aca2f6141
 
+Gaussian Splatting codebases are usually Python orchestrating hand-written CUDA kernels, tied to NVIDIA GPUs. Mojo promises CUDA-level performance in a single, Python-like language that also targets AMD and Apple GPUs. MojoSplat is a full, fast 3DGS implementation built to test that promise.
 
+- **Train a scene with one command.** COLMAP dataset in, `.ply` out (the standard 3DGS format).
+- **Fast.** Matches the quality of [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting), a state-of-the-art CUDA implementation, and trains slightly faster: Mip-NeRF360 garden in 3½ minutes on an RTX 5090. Rendering and a training step are about 2× faster than gsplat.
+- **Faithful.** Images and gradients match a float64 reference implementation to about 1e-6.
+- **Usable from PyTorch.** Bindings with autograd provide a fast drop-in rasterizer for existing training code.
 
-MojoSplat implements the forward pass of 3D Gaussian Splatting **entirely in Mojo**:
+## Quick start
 
-- **Projection**: EWA projection of 3D Gaussians to 2D conics (matches gsplat's `fully_fused_projection`)
-- **Binning**: tile intersection counting, a device-wide prefix scan, and a GPU radix sort of `(tile, depth)` keys
-- **Rasterization**: tile-based front-to-back alpha compositing
-
-The core library (`mojosplat/`) has **no Python dependency**: you can load a `.splat` file, render it and write a PNG from a Mojo program. PyTorch support lives separately in [`bindings/torch`](bindings/torch) (in the spirit of tiny-cuda-nn), where torch tensors are handed to the Mojo kernels by pointer, without copies.
-
-> [!WARNING]
-> 1. This is NOT production ready (forward pass only, NVIDIA GPUs only so far).
-> 2. Mojo is evolving fast. This version targets **Mojo 1.2 / MAX 26.7**.
-
-## Repository layout
-
-| Path | What |
-|------|------|
-| `mojosplat/` | Pure Mojo package: `projection`, `scan`, `sort`, `binning`, `rasterization`, `render` (`Renderer`), `camera`, `io` (`.splat` loader, PNG/PPM writer) |
-| `examples/` | Mojo programs: `render_splat.mojo`, `benchmark.mojo` |
-| `tests/` | Mojo test-suite, validated against golden data in `tests/data/golden` (generated from the previous, gsplat-matched pipeline) |
-| `bindings/torch/` | `mojosplat_torch` Python package: Mojo extension module + torch/gsplat reference backends, pytest suite, Python examples (viewer, orbit video, benchmark) |
-
-## Installation
-
-Requires an NVIDIA GPU and [pixi](https://pixi.sh) (Modular's recommended way to install Mojo).
+Requires [pixi](https://pixi.sh) and an NVIDIA GPU on Linux. macOS on Apple silicon installs too, but running on Apple GPUs is still untested (see [Roadmap](#roadmap)). The PyTorch bindings are Linux-only.
 
 ```bash
-git clone https://github.com/bertaveira/mojosplat.git
-cd mojosplat
-pixi install            # Mojo 1.2.0 + MAX 26.7.0 (GPU runtime), no torch
+git clone https://github.com/bertaveira/mojosplat.git && cd mojosplat
+pixi install                                    # Mojo + MAX + libjpeg-turbo
 ```
 
-Get a scene to play with (antimatter15 `.splat` format):
+**Train** on a COLMAP scene, e.g. from [Mip-NeRF360](https://jonbarron.info/mipnerf360/). Each scene folder holds `sparse/0/` and `images_4/`.
 
 ```bash
-curl -L -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
+ln -s /path/to/datasets data
+pixi run train data/mipnerf360/garden           # -> output/garden/point_cloud.ply
+pixi run eval data/mipnerf360/garden output/garden/point_cloud.ply   # test-view PSNR
 ```
 
-## Pure Mojo usage
+**Render** a trained `.ply`, or any antimatter15 `.splat` file:
 
 ```bash
-pixi run render                                  # examples/bicycle.splat -> render.png
-pixi run render my_scene.splat -o out.png -W 1920 -H 1080 --cam 0 0 4
-pixi run bench -n 200                            # full pipeline + per-stage timings
-pixi run test                                    # Mojo test-suite
+pixi run render output/garden/point_cloud.ply -o render.png
+curl -L --create-dirs -o examples/bicycle.splat https://huggingface.co/cakewalk/splat-data/resolve/main/bicycle.splat
+pixi run render examples/bicycle.splat -o render.png -W 1920 -H 1080
 ```
-
-From your own Mojo code:
-
-```mojo
-from max.gpu.host import DeviceContext
-from mojosplat.camera import Camera
-from mojosplat.io import download, load_splat, write_png
-from mojosplat.render import GaussianBuffers, Renderer
-
-def main() raises:
-    var ctx = DeviceContext()
-    var gaussians = GaussianBuffers.from_scene(ctx, load_splat("examples/bicycle.splat"))
-    var camera = Camera.translated(0.0, 0.0, 5.0, 1280, 720, 1152.0, 1152.0)
-    var image = ctx.enqueue_create_buffer[DType.float32](1280 * 720 * 3)
-    var renderer = Renderer(ctx)          # owns and reuses all intermediate buffers
-    renderer.render(gaussians, camera, SIMD[DType.float32, 4](0.0), image)
-    write_png("out.png", download(ctx, image, 1280 * 720 * 3), 1280, 720)
-```
-
-Run it with `pixi run mojo run -I . my_program.mojo`.
-
-## PyTorch bindings
-
-```bash
-pixi install -e torch          # adds torch, gsplat (reference), pytest
-pixi run -e torch build-ext    # builds bindings/torch/mojosplat_torch/_mojosplat.so
-pixi run -e torch test-torch   # pytest suite: mojo vs gsplat vs torch backends
-```
-
-```python
-import torch
-from mojosplat_torch import Camera, render_gaussians
-
-# All inputs: float32 CUDA tensors on cuda:0. scales in log-space, quats (w, x, y, z), opacities (N,)
-camera = Camera(R=torch.eye(3, device="cuda"), T=torch.tensor([0.0, 0.0, 5.0], device="cuda"),
-                H=720, W=1280, fx=1152.0, fy=1152.0, cx=640.0, cy=360.0)
-image = render_gaussians(means3d, scales, quats, opacities, colors, camera, backend="mojo")  # (H, W, 3)
-```
-
-The individual stages (`project_gaussians`, `bin_gaussians_to_tiles`, `rasterize_gaussians`) are also exposed, each with `torch`, `gsplat` and `mojo` backends. Python examples (interactive viser viewer, orbit video, benchmark) are in `bindings/torch/examples/`, e.g. `pixi run -e torch python bindings/torch/examples/viewer.py`.
-
-Current limitations of the mojo backend: `tile_size=16`, 3 color channels, `cuda:0`, and each call synchronizes the torch stream (no stream overlap yet).
 
 ## Performance
 
-RTX 5090 (idle), bicycle.splat (6.1M Gaussians), 1280x720, camera at (0, 0, 5) with fx = 0.9 W. Mean times:
+RTX 5090. Training on Mip-NeRF360 garden (`images_4`, 30k iterations, every 8th image held out). Faster-GS was run from its official code on the same machine and data. Both are scored with the same metric code: PSNR / SSIM / LPIPS-VGG on 8-bit test renders.
 
-| Backend | Full pipeline | Projection | Binning | Rasterization |
-| ------- | ------------- | ---------- | ------- | ------------- |
-| **mojo, pure Mojo** (`pixi run bench`) | **2.34 ms (427 FPS)** | 0.29 ms | 0.51 ms | 1.55 ms |
-| mojo via PyTorch bindings | 2.71 ms (368 FPS) | 0.56 ms | 0.56 ms | 1.60 ms |
-| gsplat via PyTorch | 2.36 ms (424 FPS) | 0.43 ms | 0.44 ms | 1.56 ms |
-| mojo, previous version (modular 26.2, torch-driven) | 2.68 ms (374 FPS) | 0.49 ms | 0.73 ms | 1.55 ms |
+| | PSNR | SSIM | LPIPS | Gaussians | Training time |
+|---|---|---|---|---|---|
+| **MojoSplat** | **27.49** | 0.865 | 0.122 | 4.2M | **3m31s** |
+| [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) (CUDA + PyTorch) | 27.44 | 0.866 | 0.121 | 4.1M | 3m48s |
+| 3DGS (published) | 27.41 | 0.868 | 0.103 | ~5.8M | — |
 
-- **Pure Mojo now matches gsplat** for the full pipeline. Binning went from 0.73 ms to 0.51 ms. The old version used `torch.cumsum`/`torch.sort`, which sort all 64 key bits. The new one uses a Mojo device scan and an 8-bit LSD radix sort that only sorts the `32 + bit_width(num_tiles)` bits that matter (6 passes at 1280x720).
-- **The PyTorch path is slower** than pure Mojo because each stage is a separate call from Python with its own stream synchronization, and log-scales are exponentiated in torch first. Projection shows this most: 0.29 ms in Mojo vs 0.56 ms through torch.
-- **How stage times were measured:**
-  - Pure-Mojo stage times put a sync after each stage, so they add up to slightly more than a full frame.
-  - Times through PyTorch include each call's Python overhead.
-  - The previous version's numbers come from an earlier run.
+Rendering bicycle.splat (6.1M Gaussians, 1280×720), and one training step (forward + backward of all parameters), compared with gsplat through PyTorch:
 
-## Contributing
+| | MojoSplat | gsplat |
+|---|---|---|
+| Render, pure Mojo | **1.21 ms** | — |
+| Render via PyTorch | **1.28 ms** | 2.59 ms |
+| Training step via PyTorch | **4.00 ms** | 8.29 ms |
 
-Contributions are very welcome! This is an experimental project exploring the intersection of Mojo and high-performance graphics.
+Reproduce with `pixi run bench` and `bindings/torch/examples/benchmark_render.py`.
 
-Areas where help is needed:
+## Using the library
 
-- **PyTorch Rasterization**: Native PyTorch rasterization reference (`torch` backend currently falls back to gsplat)
-- **Performance Optimization**: Analyse current implementation and improve existing Mojo kernels. For example, try to udnersdtand how the generated PTX compares with GSplat and how we can get closer or surpass its performance. 
-- **Backwards pass**: implement the mojo kernels for the backwards pass. This will allow the MojoSplat to be used in training the gaussian representation.
-- **Testing**: More comprehensive test coverage
-- **Unscented Projection**: Implmeent the Unscented projection from 3DGUT as an alternative to EWA
+The `mojosplat` package is plain Mojo; use it from your own programs (`pixi run mojo run -I . my_program.mojo`).
 
-To contribute:
+Render:
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Submit a pull request
+```mojo
+from max.gpu.host import DeviceContext
+from mojosplat import Camera, Rasterizer, Splats, download, read_ply, write_png
+
+def main() raises:
+    var ctx = DeviceContext()
+    var splats = Splats.from_host(ctx, read_ply("output/garden/point_cloud.ply"))
+    var camera = Camera.translated(0.0, 0.0, 5.0, 1280, 720, 1152.0, 1152.0)
+    var image = ctx.enqueue_create_buffer[DType.float32](1280 * 720 * 3)
+    var rasterizer = Rasterizer(ctx)  # owns and reuses its GPU buffers
+    rasterizer.render(splats, camera, SIMD[DType.float32, 4](0.0), image)
+    write_png("out.png", download(ctx, image, 1280 * 720 * 3), 1280, 720)
+```
+
+Train:
+
+```mojo
+from max.gpu.host import DeviceContext
+from mojosplat import TrainConfig, Trainer, load_colmap_dataset
+
+def main() raises:
+    var ctx = DeviceContext()
+    var config = TrainConfig()  # Faster-GS / 3DGS defaults; every field can be changed
+    var trainer = Trainer(ctx, load_colmap_dataset(ctx, "data/mipnerf360/garden"), config)
+    for _ in range(config.iterations):
+        _ = trainer.step()
+    _ = trainer.finish()
+    print("test PSNR:", trainer.evaluate())
+    trainer.save_ply("garden.ply")
+```
+
+The lower-level pieces can be used on their own:
+- `Rasterizer.forward` / `backward` for gradients of any image loss;
+- `PhotometricLoss`, `Adam` and `Densifier` in `mojosplat.train`;
+- the GPU radix sort and scan in `mojosplat.gpu`.
+
+## PyTorch
+
+```bash
+pixi install -e torch && pixi run -e torch build-ext
+```
+
+```python
+from mojosplat_torch import Camera, render_splats
+
+# Raw parameters as stored by 3DGS / gsplat trainers (float32 CUDA tensors):
+# means [N,3], quats [N,4] (w,x,y,z), scales [N,3] (log), opacities [N] (logits), sh0 [N,3], shN [N,K,3]
+image = render_splats(means, quats, scales, opacities, sh0, shN, camera)   # (H, W, 3)
+loss = (image - target).abs().mean()
+loss.backward()
+```
+
+`bindings/torch/examples/` has an interactive viewer (viser), an orbit-video renderer and the gsplat benchmark.
+
+## How it works
+
+MojoSplat follows the design of [Faster-GS](https://fhahlbohm.github.io/faster-gaussian-splatting) (CVPR 2026):
+- **Preprocessing:** a fused pass computes projection, spherical harmonics and *exact* Gaussian–tile intersections, then compacts the visible Gaussians.
+- **Sorting:** visible Gaussians are sorted by depth, then their tile instances by a 16-bit tile key, with our own GPU radix sort.
+- **Blending:** tiles are composited warp by warp, and each warp skips Gaussians outside its 8×4 sub-tile.
+- **Backward:** per-Gaussian rather than per-pixel. The Adam step for the spherical-harmonics coefficients recomputes their gradients on the fly instead of storing them.
+- **Training:** the 3DGS recipe (L1 + SSIM loss, Adam, clone/split/prune densification) with Faster-GS's schedule and Z-order reordering of the Gaussians.
+
+Details, design decisions and measurements are in [`docs/design.md`](docs/design.md).
+
+| Path | Contents |
+|---|---|
+| `mojosplat/` | The library: `core` (types, camera), `gpu` (sort, scan), `render` (rasterizer), `model` (Gaussian storage), `io` (COLMAP, JPEG, PLY, PNG), `train` (loss, Adam, densification, trainer) |
+| `tools/` | `train`, `eval`, `render`, `bench` |
+| `tests/` | Mojo tests against reference data (`pixi run test`) |
+| `bindings/torch/` | PyTorch package `mojosplat_torch` with tests and examples |
+
+## Roadmap
+
+- **AMD and Apple Silicon.** Every kernel, training included, already compiles for AMD (RDNA3, RDNA4, MI300) and Apple M-series GPUs. They still need validating and tuning on real hardware.
+- **Benchmarks.** All Mip-NeRF360 scenes, plus Tanks&Temples and Deep Blending, compared with Faster-GS.
+- **Faster training options.** Skip optimizer updates for Gaussians not seen in a view, and 16-bit optimizer state.
+- **More training methods.** MCMC densification and anti-aliasing (Mip-Splatting style filters).
+- **Evaluation.** LPIPS computed in Mojo.
+- **PyTorch.** Run on PyTorch's CUDA stream, and support devices other than `cuda:0`.
+
+Contributions are welcome. Please include tests: most components are checked against a reference implementation in `tests/data/`.
 
 ## License
 
-[MIT License](LICENSE). MojoSplat only depends on Mojo and MAX as installed packages; MAX is distributed by Modular under the [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE) (free, no device restrictions). Users install it themselves through pixi, so nothing from MAX is redistributed here.
+[MIT](LICENSE). Code ported from Faster-GS (Apache-2.0), NeRFICG (MIT) and fused-ssim (MIT) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MojoSplat targets Mojo 1.2 / MAX 26.7. MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE), which is free to use and not redistributed here.
 
 ## Acknowledgments
 
-- [GSplat](https://github.com/nerfstudio-project/gsplat) for the reference implementation
-- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) for the original method
-- [Modular](https://www.modular.com/) for the Mojo language
+MojoSplat's rasterizer and training recipe are a Mojo port of **[Faster-GS](https://fhahlbohm.github.io/faster-gaussian-splatting)** ([code](https://github.com/nerficg-project/faster-gaussian-splatting), Apache-2.0) by Florian Hahlbohm, Linus Franke, Martin Eisemann and Marcus Magnor. That covers:
+- the forward pipeline;
+- the per-Gaussian backward pass;
+- the densification rules and hyperparameters.
 
+Their paper and code were the blueprint for most of this repository. If you use MojoSplat, please cite their work:
+
+```bibtex
+@inproceedings{hahlbohm2026fastergs,
+  title     = {Faster-GS: Analyzing and Improving Gaussian Splatting Optimization},
+  author    = {Hahlbohm, Florian and Franke, Linus and Eisemann, Martin and Magnor, Marcus},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year      = {2026}
+}
+```
+
+Also thanks to:
+- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) (Kerbl et al.) for the original method;
+- the work Faster-GS builds on:
+  - [Taming 3DGS](https://github.com/humansensinglab/taming-3dgs) (Mallick et al.) for the per-Gaussian backward;
+  - [StopThePop](https://github.com/r4dl/StopThePop-Rasterization) (Radl et al.) for the exact tile test;
+  - [Splatshop](https://github.com/m-schuetz/Splatshop) (Schütz et al.) for the two-stage sort;
+  - [fused-ssim](https://github.com/rahul-goel/fused-ssim) (Goel et al.) for the SSIM backward;
+- [gsplat](https://github.com/nerfstudio-project/gsplat) for the reference implementation we validated against;
+- [Modular](https://www.modular.com/) for Mojo.

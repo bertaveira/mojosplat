@@ -1,7 +1,7 @@
 """Helpers to load the golden reference data in tests/data/golden/."""
 
-from mojosplat.camera import Camera
-from mojosplat.io import read_array
+from mojosplat.core.camera import Camera
+from mojosplat.io.arrays import read_array
 
 comptime GOLDEN_DIR = "tests/data/golden/"
 
@@ -13,6 +13,8 @@ struct GoldenScene(Movable):
     var width: Int
     var height: Int
     var tile_size: Int
+    var sh_degree: Int
+    var sh_rest: Int
     var camera: Camera
     var background: List[Float32]
 
@@ -25,6 +27,8 @@ struct GoldenScene(Movable):
         var w = 0
         var h = 0
         var ts = 16
+        var sh_degree = 0
+        var sh_rest = 0
         for line in meta.splitlines():
             var kv = line.split("=")
             if len(kv) != 2:
@@ -41,12 +45,18 @@ struct GoldenScene(Movable):
                 h = val
             elif key == "tile_size":
                 ts = val
+            elif key == "sh_degree":
+                sh_degree = val
+            elif key == "sh_rest":
+                sh_rest = val
         self.name = name
         self.n = n
         self.m = m
         self.width = w
         self.height = h
         self.tile_size = ts
+        self.sh_degree = sh_degree
+        self.sh_rest = sh_rest
         var c = read_array[DType.float32](String(GOLDEN_DIR, name, "/camera.f32"))
         var view = SIMD[DType.float32, 16](0.0)
         for i in range(16):
@@ -62,3 +72,24 @@ struct GoldenScene(Movable):
 
     def i32(self, file: String) raises -> List[Int32]:
         return read_array[DType.int32](self.path(file))
+
+
+def read_kv(path: String) raises -> Dict[String, String]:
+    """key=value lines (as written by the tests/data generators)."""
+    var out = Dict[String, String]()
+    var text: String
+    with open(path, "r") as f:
+        text = f.read()
+    for line in text.splitlines():
+        var i = line.find("=")
+        if i > 0:
+            out[String(line[byte=0:i])] = String(line[byte = i + 1 :])
+    return out^
+
+
+def floats(s: String) raises -> List[Float64]:
+    var out = List[Float64]()
+    for p in s.split(" "):
+        if p.byte_length() > 0:
+            out.append(Float64(String(p)))
+    return out^

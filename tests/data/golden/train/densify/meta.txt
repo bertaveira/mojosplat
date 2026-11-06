@@ -1,0 +1,7 @@
+N=200
+K=3
+extent=1.0
+cloned=48
+split=42
+pruned=87
+count=245

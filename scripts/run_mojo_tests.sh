@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Run every tests/test_*.mojo file (or the ones given as arguments).
+# Run every tests/**/test_*.mojo file (or the ones given as arguments).
 # Exits non-zero if any test file fails.
 set -u
 cd "$(dirname "$0")/.."
 files=("$@")
-[ ${#files[@]} -eq 0 ] && files=(tests/test_*.mojo)
+[ ${#files[@]} -eq 0 ] && mapfile -t files < <(find tests -name "test_*.mojo" | sort)
 status=0
 for f in "${files[@]}"; do
   echo "=== $f"

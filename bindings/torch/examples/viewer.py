@@ -1,7 +1,7 @@
 """Interactive 3DGS viewer — open a .splat file in the browser via viser.
 
 Usage:
-    uv run python examples/viewer.py [path/to/scene.splat] [options]
+    pixi run -e torch python bindings/torch/examples/viewer.py [path/to/scene.splat] [options]
 
 Then open the printed URL in a browser. Drag to orbit, scroll to zoom.
 The scene re-renders on every camera move.
@@ -18,45 +18,9 @@ import torch
 import viser
 import viser.transforms as vtf
 
-from mojosplat_torch.render import render_gaussians
-from mojosplat_torch.utils import Camera
+from mojosplat_torch import Camera, load_splat, render_gsplat, render_splats
 
-
-# ---------------------------------------------------------------------------
-# .splat loader (antimatter15 binary format, 32 bytes/Gaussian)
-# ---------------------------------------------------------------------------
-
-def load_splat(path: str):
-    """Load a .splat file and return tensors ready for render_gaussians.
-
-    Binary layout per Gaussian (32 bytes):
-      bytes  0-11  position xyz        (3 × float32)
-      bytes 12-23  scale xyz           (3 × float32, stored as exp(log_scale))
-      bytes 24-27  color RGBA          (4 × uint8)
-      bytes 28-31  rotation quaternion (4 × uint8, packed as q*128+128)
-    """
-    data = Path(path).read_bytes()
-    n = len(data) // 32
-    if n == 0:
-        raise ValueError(f"Empty or invalid .splat file: {path}")
-
-    raw = np.frombuffer(data, dtype=np.uint8).reshape(n, 32)
-
-    positions = raw[:, 0:12].view(np.float32).reshape(n, 3).copy()
-
-    scales_exp = raw[:, 12:24].view(np.float32).reshape(n, 3).copy()
-    scales = np.log(np.clip(scales_exp, 1e-10, None))  # back to log-space
-
-    rgba = raw[:, 24:28].astype(np.float32) / 255.0
-    rgb = rgba[:, :3]
-    opacity = rgba[:, 3]  # already sigmoid-applied
-
-    rot_raw = raw[:, 28:32].astype(np.float32)
-    quats = (rot_raw - 128.0) / 128.0
-    norms = np.linalg.norm(quats, axis=1, keepdims=True)
-    quats = quats / np.clip(norms, 1e-10, None)  # (w, x, y, z)
-
-    return positions, scales, rgb, opacity, quats
+RENDERERS = {"mojo": render_splats, "gsplat": render_gsplat}
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +70,7 @@ def main():
     parser.add_argument("--height",  "-H", type=int, default=720,  help="Render height (default 720)")
     parser.add_argument("--port",    "-p", type=int, default=8080, help="Viser port    (default 8080)")
     parser.add_argument(
-        "--backend", "-b", default="mojo", choices=["mojo", "gsplat", "torch"],
+        "--backend", "-b", default="mojo", choices=list(RENDERERS),
         help="Rendering backend (default: mojo)",
     )
     parser.add_argument(
@@ -122,16 +86,9 @@ def main():
 
     # ---- Load scene --------------------------------------------------------
     print(f"Loading {args.splat} …")
-    positions, scales, rgb, opacity, quats = load_splat(args.splat)
-    N = len(positions)
-    print(f"  {N:,} Gaussians")
-
-    means3d   = torch.tensor(positions, dtype=torch.float32, device=device)
-    scales_t  = torch.tensor(scales,    dtype=torch.float32, device=device)
-    quats_t   = torch.tensor(quats,     dtype=torch.float32, device=device)
-    opacity_t = torch.tensor(opacity,   dtype=torch.float32, device=device)
-    features_t = torch.tensor(rgb,      dtype=torch.float32, device=device)
-    bg = torch.tensor(args.bg,          dtype=torch.float32, device=device)
+    params = load_splat(args.splat, device)
+    print(f"  {params['means'].shape[0]:,} Gaussians")
+    bg = torch.tensor(args.bg, dtype=torch.float32, device=device)
 
     W, H = args.width, args.height
 
@@ -143,8 +100,7 @@ def main():
                          fx=float(W * 0.9), fy=float(W * 0.9),
                          cx=W / 2.0, cy=H / 2.0)
     with torch.no_grad():
-        render_gaussians(means3d, scales_t, quats_t, opacity_t, features_t,
-                         _warmup_cam, background_color=bg, backend=args.backend)
+        RENDERERS[args.backend](**params, camera=_warmup_cam, background=bg)
     print("  JIT ready.")
 
     # ---- Viser server ------------------------------------------------------
@@ -163,7 +119,7 @@ def main():
         with client.gui.add_folder("Renderer"):
             backend_dd = client.gui.add_dropdown(
                 "Backend",
-                options=["mojo", "gsplat", "torch"],
+                options=list(RENDERERS),
                 initial_value=args.backend,
             )
             bg_picker = client.gui.add_rgb(
@@ -191,12 +147,7 @@ def main():
 
             with render_lock:
                 with torch.no_grad():
-                    img = render_gaussians(
-                        means3d, scales_t, quats_t, opacity_t, features_t,
-                        camera,
-                        background_color=bg_t,
-                        backend=backend_dd.value,
-                    )
+                    img = RENDERERS[backend_dd.value](**params, camera=camera, background=bg_t)
 
             dt = time.perf_counter() - t0
             img_np = (img.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)

@@ -1,0 +1,9 @@
+N=7
+steps=5
+sh_rest=3
+lr_means=0.01
+lr_log_scales=0.02
+lr_rotations=0.003
+lr_opacity_logits=0.05
+lr_sh0=0.004
+lr_sh_rest=0.001

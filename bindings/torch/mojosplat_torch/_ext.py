@@ -17,9 +17,6 @@ except ImportError as e:  # pragma: no cover
         "Run `pixi run -e torch build-ext` from the repository root."
     ) from e
 
-TILE_SIZE: int = _native.tile_size()
-CHANNELS: int = 3
-
 _context = None
 
 
