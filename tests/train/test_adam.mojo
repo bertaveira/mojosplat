@@ -45,7 +45,7 @@ def test_matches_torch() raises:
             for i in range(w):
                 step_grad.append(grads[a][s * w + i])
             var g = upload(ctx, step_grad)
-            copy_f32(ctx, ctx.stream(), dptr(splats.grads[a]), dptr(g), w)
+            copy_f32(ctx, dptr(splats.grads[a]), dptr(g), w)
             ctx.synchronize()
         adam.step(splats)
     ctx.synchronize()

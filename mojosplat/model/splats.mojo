@@ -65,14 +65,11 @@ def attr_width(attr: Int, rest_stride: Int) -> Int:
 
 
 def _upload_padded(ctx: DeviceContext, values: List[Float32], capacity_floats: Int) raises -> DeviceBuffer[DType.float32]:
-    var n = max(capacity_floats, 1)
-    var host = ctx.enqueue_create_host_buffer[DType.float32](n)
-    for i in range(len(values)):
-        host[i] = values[i]
-    for i in range(len(values), n):
-        host[i] = 0.0
-    var dev = ctx.enqueue_create_buffer[DType.float32](n)
-    ctx.enqueue_copy(dev, host)
+    var dev = ctx.enqueue_create_buffer[DType.float32](max(capacity_floats, 1))
+    dev.enqueue_fill(0.0)
+    if len(values) > 0:
+        ctx.enqueue_copy(dev.create_sub_buffer[DType.float32](0, len(values)), Span(values))
+        ctx.synchronize()  # `values` may be freed once we return
     return dev
 
 
@@ -143,7 +140,8 @@ struct Splats(Movable):
         )
 
     def to_host(self) raises -> HostSplats:
-        var h = HostSplats(self.count, self.rest_stride)
+        var h = HostSplats(0, self.rest_stride)  # every array replaced below
+        h.count = self.count
         h.means = download(self.ctx, self.params[Attr.MEANS], self.count * 3)
         h.log_scales = download(self.ctx, self.params[Attr.LOG_SCALES], self.count * 3)
         h.rotations = download(self.ctx, self.params[Attr.ROTATIONS], self.count * 4)
@@ -177,7 +175,7 @@ struct Splats(Movable):
 
     def _zeros(self, n: Int) raises -> DeviceBuffer[DType.float32]:
         var b = self.ctx.enqueue_create_buffer[DType.float32](max(n, 1))
-        fill_f32(self.ctx, self.ctx.stream(), dptr(b), 0.0, max(n, 1))
+        fill_f32(self.ctx, dptr(b), 0.0, max(n, 1))
         return b
 
     def enable_training(mut self) raises:
@@ -193,25 +191,24 @@ struct Splats(Movable):
         self.training = True
 
     def reset_densification(mut self) raises:
-        fill_f32(self.ctx, self.ctx.stream(), dptr(self.densification), 0.0, 2 * self.count)
+        fill_f32(self.ctx, dptr(self.densification), 0.0, 2 * self.count)
 
     def reserve(mut self, capacity: Int) raises:
         """Grow every per-Gaussian array to hold `capacity` Gaussians,
         keeping the first `count` rows (new rows are zero)."""
         if capacity <= self.capacity:
             return
-        var stream = self.ctx.stream()
         for a in range(Attr.COUNT):
             var w = self.width(a)
             var grown = self._zeros(capacity * w)
-            copy_f32(self.ctx, stream, dptr(grown), dptr(self.params[a]), self.count * w)
+            copy_f32(self.ctx, dptr(grown), dptr(self.params[a]), self.count * w)
             self.params[a] = grown
             if self.training:
                 var g = self._zeros(capacity * w)
                 var m = self._zeros(capacity * w)
                 var v = self._zeros(capacity * w)
-                copy_f32(self.ctx, stream, dptr(m), dptr(self.exp_avg[a]), self.count * w)
-                copy_f32(self.ctx, stream, dptr(v), dptr(self.exp_avg_sq[a]), self.count * w)
+                copy_f32(self.ctx, dptr(m), dptr(self.exp_avg[a]), self.count * w)
+                copy_f32(self.ctx, dptr(v), dptr(self.exp_avg_sq[a]), self.count * w)
                 self.grads[a] = g
                 self.exp_avg[a] = m
                 self.exp_avg_sq[a] = v

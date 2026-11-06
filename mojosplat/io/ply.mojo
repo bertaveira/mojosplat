@@ -7,9 +7,12 @@ Values are the raw parameters (log scales, opacity logits, unnormalized
 is SH basis k + 1 of color channel c; in memory we use [N, K, 3].
 """
 
-from std.memory import bitcast
+from max.algorithm import parallelize
+from std.sys.info import Endian
 
 from .binary import ByteReader, append_text
+
+comptime _CHUNK = 4096  # Gaussians per parallel work item
 
 
 struct HostSplats(Movable):
@@ -34,6 +37,20 @@ struct HostSplats(Movable):
         self.sh0 = List[Float32](length=count * 3, fill=0.0)
         self.sh_rest = List[Float32](length=count * rest_stride * 3, fill=0.0)
 
+    @staticmethod
+    def uninitialized(count: Int, rest_stride: Int) -> HostSplats:
+        """Like `HostSplats(count, rest_stride)` without zeroing (for code
+        that overwrites every value, e.g. loaders)."""
+        var s = HostSplats(0, rest_stride)
+        s.count = count
+        s.means = List[Float32](unsafe_uninit_length=count * 3)
+        s.log_scales = List[Float32](unsafe_uninit_length=count * 3)
+        s.rotations = List[Float32](unsafe_uninit_length=count * 4)
+        s.opacity_logits = List[Float32](unsafe_uninit_length=count)
+        s.sh0 = List[Float32](unsafe_uninit_length=count * 3)
+        s.sh_rest = List[Float32](unsafe_uninit_length=count * rest_stride * 3)
+        return s^
+
 
 def _ply_property_names(rest_stride: Int) -> List[String]:
     var names: List[String] = ["x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2"]
@@ -49,6 +66,7 @@ def _ply_property_names(rest_stride: Int) -> List[String]:
 
 def write_ply(path: String, s: HostSplats) raises:
     """Write Gaussians as a binary little-endian 3DGS PLY."""
+    comptime assert Endian.native() == Endian.little, "PLY rows are written as host floats"
     var names = _ply_property_names(s.rest_stride)
     var header = String("ply\nformat binary_little_endian 1.0\nelement vertex ", s.count, "\n")
     for name in names:
@@ -56,24 +74,36 @@ def write_ply(path: String, s: HostSplats) raises:
     header += "end_header\n"
     var P = len(names)
     var K = s.rest_stride
-    var row = List[Float32](length=s.count * P, fill=0.0)
-    for g in range(s.count):
-        var o = g * P
-        for k in range(3):
-            row[o + k] = s.means[g * 3 + k]
-            row[o + 6 + k] = s.sh0[g * 3 + k]
-            row[o + 9 + 3 * K + 1 + k] = s.log_scales[g * 3 + k]
-        for c in range(3):
-            for k in range(K):
-                row[o + 9 + c * K + k] = s.sh_rest[(g * K + k) * 3 + c]
-        row[o + 9 + 3 * K] = s.opacity_logits[g]
-        for k in range(4):
-            row[o + 9 + 3 * K + 4 + k] = s.rotations[g * 4 + k]
-    var out = List[UInt8](capacity=header.byte_length() + len(row) * 4)
+    var n = s.count
+    var out = List[UInt8](capacity=header.byte_length() + n * P * 4)
     append_text(out, header)
-    var src = row.unsafe_ptr().unsafe_bitcast[UInt8]()
-    for i in range(len(row) * 4):
-        out.append(src[unsafe_offset=i])
+    var h = len(out)
+    out.resize(h + n * P * 4, 0)
+    # The rows start right after the text header, so they are not 4-byte
+    # aligned: unaligned stores.
+    var dst = out.unsafe_ptr().unsafe_offset(h).unsafe_bitcast[Float32]()
+    var means = s.means.unsafe_ptr()
+    var sh0 = s.sh0.unsafe_ptr()
+    var log_scales = s.log_scales.unsafe_ptr()
+    var sh_rest = s.sh_rest.unsafe_ptr()
+    var opacity = s.opacity_logits.unsafe_ptr()
+    var rotations = s.rotations.unsafe_ptr()
+
+    def rows(chunk: Int) {var dst, var means, var sh0, var log_scales, var sh_rest, var opacity, var rotations, var P, var K, var n}:
+        for g in range(chunk * _CHUNK, min((chunk + 1) * _CHUNK, n)):
+            var o = dst.unsafe_offset(g * P)
+            for k in range(3):
+                o.unsafe_offset(k).unsafe_store[alignment=1](means[unsafe_offset=g * 3 + k])
+                o.unsafe_offset(6 + k).unsafe_store[alignment=1](sh0[unsafe_offset=g * 3 + k])
+                o.unsafe_offset(9 + 3 * K + 1 + k).unsafe_store[alignment=1](log_scales[unsafe_offset=g * 3 + k])
+            for c in range(3):
+                for k in range(K):
+                    o.unsafe_offset(9 + c * K + k).unsafe_store[alignment=1](sh_rest[unsafe_offset=(g * K + k) * 3 + c])
+            o.unsafe_offset(9 + 3 * K).unsafe_store[alignment=1](opacity[unsafe_offset=g])
+            for k in range(4):
+                o.unsafe_offset(9 + 3 * K + 4 + k).unsafe_store[alignment=1](rotations[unsafe_offset=g * 4 + k])
+
+    parallelize(rows, (n + _CHUNK - 1) // _CHUNK)
     with open(path, "w") as f:
         f.write_bytes(out)
 
@@ -86,15 +116,9 @@ def _col(names: List[String], name: String) -> Int:
     return -1
 
 
-@always_inline
-def _le_f32(data: List[UInt8], row: Int, c: Int) -> Float32:
-    var p = row + 4 * c
-    var v = UInt32(data[p]) | (UInt32(data[p + 1]) << 8) | (UInt32(data[p + 2]) << 16) | (UInt32(data[p + 3]) << 24)
-    return bitcast[DType.float32](v)
-
-
 def read_ply(path: String) raises -> HostSplats:
     """Read a binary little-endian 3DGS PLY (float vertex properties only)."""
+    comptime assert Endian.native() == Endian.little, "PLY rows are read as host floats"
     var r = ByteReader.open(path)
     if r.line() != "ply":
         raise Error(String(path, ": not a PLY file"))
@@ -158,18 +182,34 @@ def read_ply(path: String) raises -> HostSplats:
     if r.remaining() < count * P * 4:
         raise Error(String(path, ": file shorter than its header says"))
 
-    var s = HostSplats(count, K)
-    var base = r.pos
-    ref data = r.data
-    for g in range(count):
-        for k in range(3):
-            s.means[g * 3 + k] = _le_f32(data, base + 4 * g * P, Int(c_xyz[k]))
-            s.sh0[g * 3 + k] = _le_f32(data, base + 4 * g * P, Int(c_dc[k]))
-            s.log_scales[g * 3 + k] = _le_f32(data, base + 4 * g * P, Int(c_sc[k]))
-        for k in range(4):
-            s.rotations[g * 4 + k] = _le_f32(data, base + 4 * g * P, Int(c_rot[k]))
-        s.opacity_logits[g] = _le_f32(data, base + 4 * g * P, c_op)
-        for c in range(3):
-            for k in range(K):
-                s.sh_rest[(g * K + k) * 3 + c] = _le_f32(data, base + 4 * g * P, c_rest[c * K + k])
+    var s = HostSplats.uninitialized(count, K)
+    # Rows follow the text header (not 4-byte aligned): unaligned loads.
+    var src = r.data.unsafe_ptr().unsafe_offset(r.pos).unsafe_bitcast[Float32]()
+    var rest_cols = c_rest.unsafe_ptr()
+    var means = s.means.unsafe_ptr()
+    var sh0 = s.sh0.unsafe_ptr()
+    var log_scales = s.log_scales.unsafe_ptr()
+    var sh_rest = s.sh_rest.unsafe_ptr()
+    var opacity = s.opacity_logits.unsafe_ptr()
+    var rotations = s.rotations.unsafe_ptr()
+
+    def rows(chunk: Int) {var src, var rest_cols, var means, var sh0, var log_scales, var sh_rest, var opacity, var rotations, var c_xyz, var c_dc, var c_sc, var c_rot, var c_op, var P, var K, var count}:
+        for g in range(chunk * _CHUNK, min((chunk + 1) * _CHUNK, count)):
+            var row = src.unsafe_offset(g * P)
+            for k in range(3):
+                means[unsafe_offset=g * 3 + k] = row.unsafe_offset(Int(c_xyz[k])).unsafe_load[alignment=1]()
+                sh0[unsafe_offset=g * 3 + k] = row.unsafe_offset(Int(c_dc[k])).unsafe_load[alignment=1]()
+                log_scales[unsafe_offset=g * 3 + k] = row.unsafe_offset(Int(c_sc[k])).unsafe_load[alignment=1]()
+            for k in range(4):
+                rotations[unsafe_offset=g * 4 + k] = row.unsafe_offset(Int(c_rot[k])).unsafe_load[alignment=1]()
+            opacity[unsafe_offset=g] = row.unsafe_offset(c_op).unsafe_load[alignment=1]()
+            for c in range(3):
+                for k in range(K):
+                    sh_rest[unsafe_offset=(g * K + k) * 3 + c] = row.unsafe_offset(
+                        rest_cols[unsafe_offset=c * K + k]
+                    ).unsafe_load[alignment=1]()
+
+    parallelize(rows, (count + _CHUNK - 1) // _CHUNK)
+    _ = r^  # the file bytes must outlive the parallel loop
+    _ = c_rest^
     return s^

@@ -193,7 +193,7 @@ def tile_offsets[
 ) raises:
     """Per-tile instance ranges from tile-sorted keys ([n_tiles + 1])."""
     if m == 0:
-        fill_u32(ctx, stream, offsets, 0, n_tiles + 1)
+        fill_u32(ctx, offsets, 0, n_tiles + 1)
         return
     stream.enqueue_function(
         ctx.compile_function[_tile_offsets_kernel[key_dtype]](),

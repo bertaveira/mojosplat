@@ -1,7 +1,19 @@
 """Little-endian binary reading/writing helpers for file formats."""
 
 from std.memory import bitcast
-from std.pathlib import Path
+from std.os import SEEK_END, SEEK_SET
+
+
+def read_file(path: String) raises -> List[UInt8]:
+    """The whole file in one read. (`read_bytes()` without a size grows its
+    buffer by doubling, which copies a 1 GB PLY ~20 times.)"""
+    with open(path, "r") as f:
+        var size = Int(f.seek(0, SEEK_END))
+        _ = f.seek(0, SEEK_SET)
+        var data = f.read_bytes(size)
+        if len(data) != size:
+            raise Error(String("short read: ", path))
+        return data^
 
 
 struct ByteReader(Movable):
@@ -18,7 +30,7 @@ struct ByteReader(Movable):
 
     @staticmethod
     def open(path: String) raises -> ByteReader:
-        return ByteReader(Path(path).read_bytes(), path)
+        return ByteReader(read_file(path), path)
 
     def remaining(self) -> Int:
         return len(self.data) - self.pos

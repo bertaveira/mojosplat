@@ -1,52 +1,27 @@
-"""Elementwise device helpers (fill, ...)."""
+"""Fill and copy device memory given raw pointers.
 
-from max.gpu import block_idx, thread_idx
-from max.gpu.host import DeviceContext, DeviceStream
+Thin wrappers over the driver's memset / memcpy (enqueued on the context's
+stream), for code that holds `F32Ptr`s rather than `DeviceBuffer`s.
+"""
 
-from ..core.types import BLOCK_SIZE, F32Ptr, U32Ptr, num_blocks
+from max.gpu.host import DeviceBuffer, DeviceContext
 
-
-def _fill_f32_kernel(p: F32Ptr, value: Float32, n: Int32):
-    var i = block_idx.x * BLOCK_SIZE + thread_idx.x
-    if i < Int(n):
-        p[unsafe_offset=i] = value
+from ..core.types import F32Ptr, U32Ptr
 
 
-def fill_f32(ctx: DeviceContext, stream: DeviceStream, p: F32Ptr, value: Float32, n: Int) raises:
-    if n == 0:
-        return
-    stream.enqueue_function(
-        ctx.compile_function[_fill_f32_kernel](), p, value, Int32(n),
-        grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
-    )
+def fill_f32(ctx: DeviceContext, p: F32Ptr, value: Float32, n: Int) raises:
+    """p[0:n] = value."""
+    if n > 0:
+        DeviceBuffer[DType.float32](ctx, p, n, owning=False).enqueue_fill(value)
 
 
-def _fill_u32_kernel(p: U32Ptr, value: UInt32, n: Int32):
-    var i = block_idx.x * BLOCK_SIZE + thread_idx.x
-    if i < Int(n):
-        p[unsafe_offset=i] = value
+def fill_u32(ctx: DeviceContext, p: U32Ptr, value: UInt32, n: Int) raises:
+    """p[0:n] = value."""
+    if n > 0:
+        DeviceBuffer[DType.uint32](ctx, p, n, owning=False).enqueue_fill(value)
 
 
-def fill_u32(ctx: DeviceContext, stream: DeviceStream, p: U32Ptr, value: UInt32, n: Int) raises:
-    if n == 0:
-        return
-    stream.enqueue_function(
-        ctx.compile_function[_fill_u32_kernel](), p, value, Int32(n),
-        grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
-    )
-
-
-def _copy_f32_kernel(dst: F32Ptr, src: F32Ptr, n: Int32):
-    var i = block_idx.x * BLOCK_SIZE + thread_idx.x
-    if i < Int(n):
-        dst[unsafe_offset=i] = src[unsafe_offset=i]
-
-
-def copy_f32(ctx: DeviceContext, stream: DeviceStream, dst: F32Ptr, src: F32Ptr, n: Int) raises:
+def copy_f32(ctx: DeviceContext, dst: F32Ptr, src: F32Ptr, n: Int) raises:
     """dst[0:n] = src[0:n] (device to device, non-overlapping)."""
-    if n == 0:
-        return
-    stream.enqueue_function(
-        ctx.compile_function[_copy_f32_kernel](), dst, src, Int32(n),
-        grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
-    )
+    if n > 0:
+        ctx.enqueue_copy(dst, src, n)

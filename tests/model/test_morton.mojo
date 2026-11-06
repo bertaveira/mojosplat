@@ -36,7 +36,7 @@ def test_morton_permutation() raises:
     var splats = Splats(ctx, means, z3, q, z1, tag, List[Float32](), 0)
     splats.enable_training()
     var t = upload(ctx, tag)
-    copy_f32(ctx, ctx.stream(), dptr(splats.exp_avg[Attr.SH0]), dptr(t), n * 3)
+    copy_f32(ctx, dptr(splats.exp_avg[Attr.SH0]), dptr(t), n * 3)
     morton_order(splats)
     var m = download(ctx, splats.params[Attr.MEANS], n * 3)
     var sh0 = download(ctx, splats.params[Attr.SH0], n * 3)

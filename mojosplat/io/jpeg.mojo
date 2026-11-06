@@ -9,7 +9,8 @@ from Mojo.
 
 from std.ffi import OwnedDLHandle, c_int
 from std.os import getenv
-from std.pathlib import Path
+
+from .binary import read_file
 
 
 # turbojpeg.h enums (TurboJPEG 3)
@@ -95,7 +96,7 @@ struct JpegDecoder(Movable):
         return Image8(w, h, pixels^)
 
     def read(mut self, path: String) raises -> Image8:
-        return self.decode(Path(path).read_bytes(), path)
+        return self.decode(read_file(path), path)
 
 
 def read_jpeg(path: String) raises -> Image8:

@@ -35,7 +35,7 @@ def test_reserve_keeps_rows() raises:
     with assert_raises():
         _ = s.grad_view()
     s.enable_training()
-    fill_f32(ctx, ctx.stream(), dptr(s.exp_avg[Attr.SH_REST]), 3.0, 5 * 9)
+    fill_f32(ctx, dptr(s.exp_avg[Attr.SH_REST]), 3.0, 5 * 9)
     s.reserve(12)
     assert_equal(s.capacity, 12)
     assert_equal(s.count, 5)

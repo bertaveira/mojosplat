@@ -2,6 +2,8 @@
 
 from std.sys import size_of
 
+from .binary import read_file
+
 
 # ---------------------------------------------------------------------------
 # .splat scenes
@@ -36,9 +38,7 @@ def load_splat(path: String) raises -> SplatScene:
     Layout: position xyz (3 x f32), scale xyz (3 x f32, linear), RGBA (4 x u8,
     alpha = activated opacity), rotation (4 x u8, (q * 128 + 128), order w x y z).
     """
-    var data: List[UInt8]
-    with open(path, "r") as f:
-        data = f.read_bytes()
+    var data = read_file(path)
     if len(data) % 32 != 0 or len(data) == 0:
         raise Error(String("invalid .splat file: ", path))
     var n = len(data) // 32

@@ -389,7 +389,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         var g_conic = g_mean2d.unsafe_offset(nv * 2)
         var g_opacity = g_mean2d.unsafe_offset(nv * 5)
         var g_color = g_mean2d.unsafe_offset(nv * 6)
-        fill_f32(ctx, stream, g_mean2d, 0.0, nv * 9)
+        fill_f32(ctx, g_mean2d, 0.0, nv * 9)
         if st.n_instances > 0:
             blend_backward[Self.tile_w, Self.tile_h](
                 ctx, stream, st.n_bucket_blocks, st.tile_offsets, st.bucket_start,

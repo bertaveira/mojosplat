@@ -15,14 +15,16 @@ its screen-space mean gradient in NDC):
    after the first opacity reset, Gaussians larger than 10% of the extent.
 
 All row bookkeeping goes through `Splats.gather` (new rows get zeroed Adam
-moments, pruned rows drop theirs). The random normals for the split are
-drawn on the host, so a step is reproducible bit-for-bit.
+moments, pruned rows drop theirs). The random normals for the split come
+from a counter-based RNG (Philox, one stream per child) seeded from the host
+RNG, so a step is reproducible bit-for-bit for a given `random.seed`.
 """
 
 from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.math import exp, log, sqrt
-from std.random import randn_float64
+from std.random import random_ui64
+from std.random.philox import NormalRandom
 
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, U32Ptr, dptr, num_blocks
 from ..gpu.elementwise import fill_f32, fill_u32
@@ -68,17 +70,27 @@ def _build_index_kernel(
 
 
 def _split_children_kernel(
-    means: F32Ptr, log_scales: F32Ptr, rotations: F32Ptr, randn: F32Ptr,
-    first: Int32, count: Int32, log_shrink: Float32,
+    means: F32Ptr, log_scales: F32Ptr, rotations: F32Ptr, randn: F32Ptr, use_randn: Int32,
+    seed: UInt64, first: Int32, count: Int32, log_shrink: Float32,
 ):
-    """Move child rows [first, first + count) by R diag(s) z, shrink scales."""
+    """Move child rows [first, first + count) by R diag(s) z, shrink scales.
+    z ~ N(0, I) from Philox (stream `j` of `seed`), or read from `randn`
+    when `use_randn` != 0 (tests)."""
     var j = block_idx.x * BLOCK_SIZE + thread_idx.x
     if j >= Int(count):
         return
     var r = Int(first) + j
-    var s0 = exp(log_scales[unsafe_offset=r * 3 + 0]) * randn[unsafe_offset=j * 3 + 0]
-    var s1 = exp(log_scales[unsafe_offset=r * 3 + 1]) * randn[unsafe_offset=j * 3 + 1]
-    var s2 = exp(log_scales[unsafe_offset=r * 3 + 2]) * randn[unsafe_offset=j * 3 + 2]
+    var zn: SIMD[DType.float32, 8]
+    if use_randn != 0:
+        zn = SIMD[DType.float32, 8](0.0)
+        comptime for k in range(3):
+            zn[k] = randn[unsafe_offset=j * 3 + k]
+    else:
+        var rng = NormalRandom(seed=seed, subsequence=UInt64(j))
+        zn = rng.step_normal()
+    var s0 = exp(log_scales[unsafe_offset=r * 3 + 0]) * zn[0]
+    var s1 = exp(log_scales[unsafe_offset=r * 3 + 1]) * zn[1]
+    var s2 = exp(log_scales[unsafe_offset=r * 3 + 2]) * zn[2]
     var w = rotations[unsafe_offset=r * 4 + 0]
     var x = rotations[unsafe_offset=r * 4 + 1]
     var y = rotations[unsafe_offset=r * 4 + 2]
@@ -176,8 +188,10 @@ struct Densifier(Movable):
         randn_override: List[Float32] = List[Float32](),
     ) raises -> DensifyStats:
         """One clone / split / prune step. Uses (and does not reset) the
-        densification statistics in `splats`. `randn_override` (3 normals
-        per split child) replaces the host RNG, for testing."""
+        densification statistics in `splats`. Split offsets are drawn on the
+        GPU (Philox, seeded from `std.random`, so `random.seed` makes runs
+        repeatable); `randn_override` (3 normals per split child) replaces
+        them, for testing."""
         var ctx = self.ctx
         var stream = ctx.stream()
         var n = splats.count
@@ -208,17 +222,15 @@ struct Densifier(Movable):
         splats.gather(dptr(index), n_out, n)
         var n_children = 2 * st.split
         if n_children > 0:
-            var z = randn_override.copy()
-            if len(z) == 0:
-                z = List[Float32](capacity=n_children * 3)
-                for _ in range(n_children * 3):
-                    z.append(Float32(randn_float64()))
-            var dz = upload(ctx, z)
+            var use_override = len(randn_override) > 0
+            if use_override and len(randn_override) < 3 * n_children:
+                raise Error("randn_override needs 3 values per split child")
+            var dz = upload(ctx, randn_override)  # 1 element when unused
             stream.enqueue_function(
                 ctx.compile_function[_split_children_kernel](),
                 dptr(splats.params[Attr.MEANS]), dptr(splats.params[Attr.LOG_SCALES]),
-                dptr(splats.params[Attr.ROTATIONS]), dptr(dz), Int32(n + st.cloned),
-                Int32(n_children), Float32(log(0.625)),
+                dptr(splats.params[Attr.ROTATIONS]), dptr(dz), Int32(1 if use_override else 0),
+                random_ui64(0, UInt64.MAX), Int32(n + st.cloned), Int32(n_children), Float32(log(0.625)),
                 grid_dim=num_blocks(n_children), block_dim=BLOCK_SIZE,
             )
             ctx.synchronize()
@@ -258,15 +270,15 @@ struct Densifier(Movable):
             dptr(splats.params[Attr.OPACITY_LOGITS]), Int32(n), _logit(max_opacity),
             grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
         )
-        fill_f32(ctx, ctx.stream(), dptr(splats.exp_avg[Attr.OPACITY_LOGITS]), 0.0, n)
-        fill_f32(ctx, ctx.stream(), dptr(splats.exp_avg_sq[Attr.OPACITY_LOGITS]), 0.0, n)
+        fill_f32(ctx, dptr(splats.exp_avg[Attr.OPACITY_LOGITS]), 0.0, n)
+        fill_f32(ctx, dptr(splats.exp_avg_sq[Attr.OPACITY_LOGITS]), 0.0, n)
 
     def prune_final(mut self, mut splats: Splats, min_opacity: Float64 = 1.0 / 255.0) raises -> Int:
         """After training: drop nearly transparent / degenerate Gaussians."""
         var n = splats.count
         var ctx = self.ctx
         var split = ctx.enqueue_create_buffer[DType.uint32](max(n, 1))
-        fill_u32(ctx, ctx.stream(), dptr(split), 0, n)
+        fill_u32(ctx, dptr(split), 0, n)
         var keep = ctx.enqueue_create_buffer[DType.uint32](max(n, 1))
         var keep_off = ctx.enqueue_create_buffer[DType.uint32](max(n, 1))
         ctx.stream().enqueue_function(
