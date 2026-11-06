@@ -26,9 +26,7 @@ from ..io.ply import HostSplats
 from ..io.splat import SplatScene
 
 
-def _gather_rows_kernel(
-    dst: F32Ptr, src: F32Ptr, index: I32Ptr, n_rows: Int32, width: Int32, zero_from: Int32
-):
+def _gather_rows_kernel(dst: F32Ptr, src: F32Ptr, index: I32Ptr, n_rows: Int32, width: Int32, zero_from: Int32):
     """dst[i, :] = src[index[i], :] for rows i < zero_from, 0 for the rest."""
     var e = block_idx.x * BLOCK_SIZE + thread_idx.x
     var w = Int(width)
@@ -64,7 +62,9 @@ def attr_width(attr: Int, rest_stride: Int) -> Int:
     return rest_stride * 3
 
 
-def _upload_padded(ctx: DeviceContext, values: List[Float32], capacity_floats: Int) raises -> DeviceBuffer[DType.float32]:
+def _upload_padded(
+    ctx: DeviceContext, values: List[Float32], capacity_floats: Int
+) raises -> DeviceBuffer[DType.float32]:
     var dev = ctx.enqueue_create_buffer[DType.float32](max(capacity_floats, 1))
     dev.enqueue_fill(0.0)
     if len(values) > 0:
@@ -135,8 +135,15 @@ struct Splats(Movable):
     @staticmethod
     def from_host(ctx: DeviceContext, h: HostSplats, capacity: Int = 0) raises -> Splats:
         return Splats(
-            ctx, h.means, h.log_scales, h.rotations, h.opacity_logits, h.sh0,
-            h.sh_rest, h.rest_stride, capacity,
+            ctx,
+            h.means,
+            h.log_scales,
+            h.rotations,
+            h.opacity_logits,
+            h.sh0,
+            h.sh_rest,
+            h.rest_stride,
+            capacity,
         )
 
     def to_host(self) raises -> HostSplats:
@@ -156,8 +163,14 @@ struct Splats(Movable):
 
     def _view(self, bufs: List[DeviceBuffer[DType.float32]]) -> SplatView:
         return SplatView(
-            dptr(bufs[0]), dptr(bufs[1]), dptr(bufs[2]), dptr(bufs[3]),
-            dptr(bufs[4]), dptr(bufs[5]), self.count, self.rest_stride,
+            dptr(bufs[0]),
+            dptr(bufs[1]),
+            dptr(bufs[2]),
+            dptr(bufs[3]),
+            dptr(bufs[4]),
+            dptr(bufs[5]),
+            self.count,
+            self.rest_stride,
         )
 
     def view(self) -> SplatView:
@@ -224,8 +237,14 @@ struct Splats(Movable):
         if n_out * width > 0:
             self.ctx.stream().enqueue_function(
                 self.ctx.compile_function[_gather_rows_kernel](),
-                dptr(dst), dptr(src), index, Int32(n_out), Int32(width), Int32(zero_from),
-                grid_dim=num_blocks(n_out * width), block_dim=BLOCK_SIZE,
+                dptr(dst),
+                dptr(src),
+                index,
+                Int32(n_out),
+                Int32(width),
+                Int32(zero_from),
+                grid_dim=num_blocks(n_out * width),
+                block_dim=BLOCK_SIZE,
             )
         return dst
 

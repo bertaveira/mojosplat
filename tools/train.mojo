@@ -16,8 +16,18 @@ from std.os.path import exists
 from std.time import perf_counter_ns
 
 from mojosplat.cli import (
-    Arg, ProgressBar, Table, bold, dim, done, fmt_count, fmt_duration, fmt_fixed, fmt_thousands,
-    parse_args, seconds_since,
+    Arg,
+    ProgressBar,
+    Table,
+    bold,
+    dim,
+    done,
+    fmt_count,
+    fmt_duration,
+    fmt_fixed,
+    fmt_thousands,
+    parse_args,
+    seconds_since,
 )
 from mojosplat.core.camera import Camera
 from mojosplat.train.dataset import load_colmap_dataset
@@ -28,16 +38,22 @@ from mojosplat.viewer import Viewer, ViewerConfig
 struct TrainArgs(Defaultable, Movable):
     @__annotation(Arg("COLMAP scene directory (with sparse/0 and the image folder)", positional=True))
     var scene: String
+
     @__annotation(Arg("Image folder inside the scene"))
     var images: String
+
     @__annotation(Arg("Output directory (default: output/<scene name>)", short="o"))
     var out: String
+
     @__annotation(Arg("Hold out every N-th image for testing (0 = train on all)"))
     var test_every: Int
+
     @__annotation(Arg("Serve the live web viewer while training (stays open afterwards)"))
     var viewer: Bool
+
     @__annotation(Arg("Training"))
     var train: TrainConfig
+
     @__annotation(Arg("Viewer (with --viewer)"))
     var view: ViewerConfig
 
@@ -63,9 +79,7 @@ def _stats(it: Int, total: Int, loss: Float64, gaussians: Int, bar: ProgressBar)
 
 
 def main() raises:
-    var args = parse_args[TrainArgs](
-        "pixi run train", "Train a 3D Gaussian Splatting model on a COLMAP scene."
-    )
+    var args = parse_args[TrainArgs]("pixi run train", "Train a 3D Gaussian Splatting model on a COLMAP scene.")
     var parts = args.scene.rstrip("/").split("/")
     var name = String(parts[len(parts) - 1])
     var out = args.out if args.out.byte_length() > 0 else String("output/", name)
@@ -75,10 +89,20 @@ def main() raises:
     print(bold("MojoSplat"), dim("·"), "train", dim("·"), ctx.name())
     var t0 = Int(perf_counter_ns())
     var ds = load_colmap_dataset(ctx, args.scene, args.images, args.test_every)
-    done(String(
-        "Loaded ", bold(name), ": ", len(ds.train), " train / ", len(ds.test), " test views, ",
-        fmt_thousands(ds.points.count()), " SfM points ", dim(String("(", fmt_duration(seconds_since(t0)), ")")),
-    ))
+    done(
+        String(
+            "Loaded ",
+            bold(name),
+            ": ",
+            len(ds.train),
+            " train / ",
+            len(ds.test),
+            " test views, ",
+            fmt_thousands(ds.points.count()),
+            " SfM points ",
+            dim(String("(", fmt_duration(seconds_since(t0)), ")")),
+        )
+    )
     var trainer = Trainer(ctx, ds^, config)
     done(String("Initialized ", fmt_thousands(trainer.splats.count), " Gaussians"))
 
@@ -95,19 +119,31 @@ def main() raises:
         var loss = trainer.step()
         if loss >= 0.0:
             info = String(
-                "loss ", fmt_fixed(loss, 4), dim(" | "), fmt_count(trainer.splats.count), " Gaussians",
-                dim(" | "), "SH ", trainer.active_sh_degree(),
+                "loss ",
+                fmt_fixed(loss, 4),
+                dim(" | "),
+                fmt_count(trainer.splats.count),
+                " Gaussians",
+                dim(" | "),
+                "SH ",
+                trainer.active_sh_degree(),
             )
         bar.update(i + 1, info, log=loss >= 0.0)
         if viewer:
             ref v = viewer.value()
             if loss >= 0.0:
-                v.set_stats(_stats(i + 1, config.iterations, loss, trainer.splats.count, bar), Float64(i + 1) / Float64(config.iterations))
+                v.set_stats(
+                    _stats(i + 1, config.iterations, loss, trainer.splats.count, bar),
+                    Float64(i + 1) / Float64(config.iterations),
+                )
             v.update(trainer.splats, trainer.active_sh_degree(), scene_changed=True)
             if v.paused:
                 var t_pause = Int(perf_counter_ns())
                 bar.message(dim("Paused from the viewer"))
-                v.set_stats(_stats(i + 1, config.iterations, loss, trainer.splats.count, bar), Float64(i + 1) / Float64(config.iterations))
+                v.set_stats(
+                    _stats(i + 1, config.iterations, loss, trainer.splats.count, bar),
+                    Float64(i + 1) / Float64(config.iterations),
+                )
                 v.wait_while_paused(trainer.splats, trainer.active_sh_degree())
                 bar.exclude(seconds_since(t_pause))
                 bar.message(dim("Resumed"))
@@ -115,10 +151,16 @@ def main() raises:
     ctx.synchronize()
     var train_s = bar.elapsed()
     bar.finish(info)
-    done(String(
-        "Trained ", fmt_thousands(config.iterations), " iterations in ", fmt_duration(train_s),
-        " ", dim(String("(", fmt_fixed(Float64(config.iterations) / train_s, 0), " it/s)")),
-    ))
+    done(
+        String(
+            "Trained ",
+            fmt_thousands(config.iterations),
+            " iterations in ",
+            fmt_duration(train_s),
+            " ",
+            dim(String("(", fmt_fixed(Float64(config.iterations) / train_s, 0), " it/s)")),
+        )
+    )
     if removed > 0:
         done(String("Pruned ", fmt_thousands(removed), " transparent Gaussians"))
 

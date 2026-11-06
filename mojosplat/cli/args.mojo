@@ -308,7 +308,9 @@ def parse_args[T: Defaultable & Movable & Deinitable](prog: String, description:
     return T()  # unreachable
 
 
-def parse_args_from[T: Defaultable & Movable & Deinitable](args: List[String], prog: String, description: String = "") raises -> T:
+def parse_args_from[
+    T: Defaultable & Movable & Deinitable
+](args: List[String], prog: String, description: String = "") raises -> T:
     """Like `parse_args` for an explicit argument list (no program name);
     raises on usage errors instead of exiting (prints help and exits on
     `--help`)."""

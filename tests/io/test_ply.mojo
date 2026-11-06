@@ -51,7 +51,12 @@ def test_roundtrip_and_byte_identical() raises:
         assert_equal(t.rotations[i], s.rotations[i])
     var header_len = 0
     for i in range(len(a) - 10):
-        if a[i] == UInt8(ord("e")) and a[i + 1] == UInt8(ord("n")) and a[i + 2] == UInt8(ord("d")) and a[i + 3] == UInt8(ord("_")):
+        if (
+            a[i] == UInt8(ord("e"))
+            and a[i + 1] == UInt8(ord("n"))
+            and a[i + 2] == UInt8(ord("d"))
+            and a[i + 3] == UInt8(ord("_"))
+        ):
             header_len = i + 11
             break
     for i in range(header_len):

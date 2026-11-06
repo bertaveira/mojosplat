@@ -39,9 +39,7 @@ def _append_u32_be(mut out: List[UInt8], v: UInt32):
     out.append(UInt8(v & 0xFF))
 
 
-def _append_chunk(
-    mut out: List[UInt8], kind: StringSlice, data: List[UInt8], table: List[UInt32]
-):
+def _append_chunk(mut out: List[UInt8], kind: StringSlice, data: List[UInt8], table: List[UInt32]):
     _append_u32_be(out, UInt32(len(data)))
     var crc = UInt32(0xFFFFFFFF)
     for b in kind.as_bytes():

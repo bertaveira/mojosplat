@@ -37,8 +37,11 @@ struct Summer(Movable):
             return 0.0
         self.ctx.stream().enqueue_function(
             self.ctx.compile_function[_block_sums_kernel](),
-            src, dptr(self.partials), Int32(n),
-            grid_dim=REDUCE_GRID, block_dim=REDUCE_BLOCK,
+            src,
+            dptr(self.partials),
+            Int32(n),
+            grid_dim=REDUCE_GRID,
+            block_dim=REDUCE_BLOCK,
         )
         var host = self.ctx.enqueue_create_host_buffer[DType.float32](REDUCE_GRID)
         self.ctx.enqueue_copy(host, self.partials)
@@ -73,8 +76,12 @@ def bounds3(ctx: DeviceContext, src: F32Ptr, n: Int) raises -> Tuple[SIMD[DType.
     """(min, max) of the rows of src [n, 3] (syncs)."""
     var partials = ctx.enqueue_create_buffer[DType.float32](REDUCE_GRID * 6)
     ctx.stream().enqueue_function(
-        ctx.compile_function[_block_minmax3_kernel](), src, dptr(partials), Int32(n),
-        grid_dim=REDUCE_GRID, block_dim=REDUCE_BLOCK,
+        ctx.compile_function[_block_minmax3_kernel](),
+        src,
+        dptr(partials),
+        Int32(n),
+        grid_dim=REDUCE_GRID,
+        block_dim=REDUCE_BLOCK,
     )
     var host = ctx.enqueue_create_host_buffer[DType.float32](REDUCE_GRID * 6)
     ctx.enqueue_copy(host, partials)

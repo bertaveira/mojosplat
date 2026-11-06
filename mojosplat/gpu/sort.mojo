@@ -68,9 +68,7 @@ def _upsweep_kernel[
     shift: UInt32,
 ):
     comptime assert SORT_BLOCK == RADIX, "one thread per digit in the epilogue"
-    var s_hist = stack_allocation[
-        RADIX, UInt32, address_space=AddressSpace.SHARED
-    ]()
+    var s_hist = stack_allocation[RADIX, UInt32, address_space=AddressSpace.SHARED]()
     var t = thread_idx.x
     s_hist[unsafe_offset=t] = 0
     barrier()
@@ -104,9 +102,7 @@ def _downsweep_kernel[
     num_parts: Int32,
     shift: UInt32,
 ):
-    var s_warp_hist = stack_allocation[
-        SORT_WARPS * RADIX, UInt32, address_space=AddressSpace.SHARED
-    ]()
+    var s_warp_hist = stack_allocation[SORT_WARPS * RADIX, UInt32, address_space=AddressSpace.SHARED]()
     var t = thread_idx.x
     var w = t // WARP_SIZE
     var lane = lane_id()
@@ -184,9 +180,7 @@ def radix_sort_pairs[
     `total` >= 1. Returns True if the sorted result ended up in the `b`
     buffers, False if in `a`.
     """
-    comptime assert key_dtype in (
-        DType.uint16, DType.uint32, DType.uint64
-    ), "keys must be UInt16, UInt32 or UInt64"
+    comptime assert key_dtype in (DType.uint16, DType.uint32, DType.uint64), "keys must be UInt16, UInt32 or UInt64"
     if n <= 1:
         return False
     var num_parts = sort_num_parts(n)
@@ -200,15 +194,27 @@ def radix_sort_pairs[
         var dst_k = keys_b if p % 2 == 0 else keys_a
         var dst_v = vals_b if p % 2 == 0 else vals_a
         stream.enqueue_function(
-            up, src_k, hist, Int32(n), Int32(num_parts), shift,
-            grid_dim=num_parts, block_dim=SORT_BLOCK,
+            up,
+            src_k,
+            hist,
+            Int32(n),
+            Int32(num_parts),
+            shift,
+            grid_dim=num_parts,
+            block_dim=SORT_BLOCK,
         )
-        exclusive_scan[DType.uint32](
-            ctx, stream, hist, hist, total, partials, RADIX * num_parts
-        )
+        exclusive_scan[DType.uint32](ctx, stream, hist, hist, total, partials, RADIX * num_parts)
         stream.enqueue_function(
-            down, src_k, src_v, dst_k, dst_v, hist,
-            Int32(n), Int32(num_parts), shift,
-            grid_dim=num_parts, block_dim=SORT_BLOCK,
+            down,
+            src_k,
+            src_v,
+            dst_k,
+            dst_v,
+            hist,
+            Int32(n),
+            Int32(num_parts),
+            shift,
+            grid_dim=num_parts,
+            block_dim=SORT_BLOCK,
         )
     return passes % 2 == 1

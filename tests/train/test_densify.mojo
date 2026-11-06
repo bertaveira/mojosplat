@@ -30,8 +30,14 @@ def test_matches_faster_gs() raises:
     var names: List[String] = ["means", "log_scales", "rotations", "opacity_logits", "sh0", "sh_rest"]
     var ctx = DeviceContext()
     var splats = Splats(
-        ctx, load("in_means"), load("in_log_scales"), load("in_rotations"),
-        load("in_opacity_logits"), load("in_sh0"), load("in_sh_rest"), Int(meta["K"]),
+        ctx,
+        load("in_means"),
+        load("in_log_scales"),
+        load("in_rotations"),
+        load("in_opacity_logits"),
+        load("in_sh0"),
+        load("in_sh_rest"),
+        Int(meta["K"]),
     )
     splats.enable_training()
     for a in range(Attr.COUNT):

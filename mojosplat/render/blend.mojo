@@ -70,7 +70,9 @@ def _blend_kernel[
     comptime SUBGRID_W = tile_w // SUBTILE_W
     comptime STRIDE = 12  # floats per Gaussian in the slab
     comptime assert CDIM <= 3, "slab holds 3 color channels"
-    comptime assert tile_w % SUBTILE_W == 0 and tile_h % SUBTILE_H == 0, "tile must split into 8 x (WARP_SIZE/8) sub-tiles"
+    comptime assert (
+        tile_w % SUBTILE_W == 0 and tile_h % SUBTILE_H == 0
+    ), "tile must split into 8 x (WARP_SIZE/8) sub-tiles"
 
     var slab_all = stack_allocation[WARPS * WARP_SIZE * STRIDE, Float32, address_space=AddressSpace.SHARED]()
     var rank = thread_idx.x
@@ -123,10 +125,7 @@ def _blend_kernel[
             var g = Int(instance_ids[unsafe_offset=fetch])
             var rec = load_record(records, g)
             var b = unpack_bounds(record_bounds(rec))
-            overlaps = (
-                Int(b[0]) < sub_x1 and sub_x0 < Int(b[1])
-                and Int(b[2]) < sub_y1 and sub_y0 < Int(b[3])
-            )
+            overlaps = Int(b[0]) < sub_x1 and sub_x0 < Int(b[1]) and Int(b[2]) < sub_y1 and sub_y0 < Int(b[3])
             if overlaps:
                 var c = SIMD[DType.float32, 4](0.0)
                 comptime for k in range(CDIM):
@@ -190,23 +189,22 @@ def _blend_kernel[
             tile_max_n[unsafe_offset=tile_id] = mm
 
 
-def _bucket_count_kernel(
-    tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int32
-):
+def _bucket_count_kernel(tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int32):
     var t = block_idx.x * 256 + thread_idx.x
     if t < Int(n_tiles):
         var n = tile_offsets[unsafe_offset=t + 1] - tile_offsets[unsafe_offset=t]
         counts[unsafe_offset=t] = (n + UInt32(WARP_SIZE - 1)) // UInt32(WARP_SIZE)
 
 
-def bucket_counts(
-    ctx: DeviceContext, stream: DeviceStream, tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int
-) raises:
+def bucket_counts(ctx: DeviceContext, stream: DeviceStream, tile_offsets: U32Ptr, counts: U32Ptr, n_tiles: Int) raises:
     """Buckets (32 instances each) per tile; scan these to get bucket_start."""
     stream.enqueue_function(
         ctx.compile_function[_bucket_count_kernel](),
-        tile_offsets, counts, Int32(n_tiles),
-        grid_dim=max(1, (n_tiles + 255) // 256), block_dim=256,
+        tile_offsets,
+        counts,
+        Int32(n_tiles),
+        grid_dim=max(1, (n_tiles + 255) // 256),
+        block_dim=256,
     )
 
 
@@ -239,8 +237,21 @@ def blend[
     var grid_h = (height + tile_h - 1) // tile_h
     stream.enqueue_function(
         ctx.compile_function[_blend_kernel[tile_w, tile_h, CDIM, train]](),
-        tile_offsets, instance_ids, records, colors, background, image,
-        Int32(width), Int32(height), Int32(grid_w), bucket_start, bucket_tile,
-        snapshots, final_T, n_processed, tile_max_n,
-        grid_dim=(grid_w, grid_h), block_dim=tile_w * tile_h,
+        tile_offsets,
+        instance_ids,
+        records,
+        colors,
+        background,
+        image,
+        Int32(width),
+        Int32(height),
+        Int32(grid_w),
+        bucket_start,
+        bucket_tile,
+        snapshots,
+        final_T,
+        n_processed,
+        tile_max_n,
+        grid_dim=(grid_w, grid_h),
+        block_dim=tile_w * tile_h,
     )

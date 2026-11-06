@@ -55,9 +55,7 @@ struct Camera(ImplicitlyCopyable, Movable):
         v[3] = tx
         v[7] = ty
         v[11] = tz
-        return Camera(
-            v, fx, fy, Float32(width) / 2.0, Float32(height) / 2.0, width, height, near, far
-        )
+        return Camera(v, fx, fy, Float32(width) / 2.0, Float32(height) / 2.0, width, height, near, far)
 
     def tiles_x(self, tile_size: Int) -> Int:
         return (self.width + tile_size - 1) // tile_size

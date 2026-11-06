@@ -10,7 +10,7 @@ def _hex(b: List[UInt8]) -> String:
     comptime digits = "0123456789abcdef"
     var s = String()
     for x in b:
-        s += String(digits[byte = Int(x >> 4)]) + String(digits[byte = Int(x & 15)])
+        s += String(digits[byte=Int(x >> 4)]) + String(digits[byte=Int(x & 15)])
     return s
 
 

@@ -70,8 +70,16 @@ def _moments_h_kernel(
 
 
 def _ssim_v_kernel(
-    h5: F32Ptr, image: F32Ptr, target: U8Ptr, d3: F32Ptr, loss_px: F32Ptr,
-    width: Int32, height: Int32, gw: SIMD[DType.float32, 16], lam: Float32, inv_n: Float32,
+    h5: F32Ptr,
+    image: F32Ptr,
+    target: U8Ptr,
+    d3: F32Ptr,
+    loss_px: F32Ptr,
+    width: Int32,
+    height: Int32,
+    gw: SIMD[DType.float32, 16],
+    lam: Float32,
+    inv_n: Float32,
 ):
     """Vertical pass -> SSIM and its partials; d3 [3, N] = dL/d(mu1, E11, E12),
     loss_px [N] = per-element loss contribution (before averaging)."""
@@ -87,8 +95,14 @@ def _ssim_v_kernel(
         if yy >= 0 and yy < Int(height):
             var j = idx + (k - HALF) * stride
             acc += gw[k] * SIMD[DType.float32, 8](
-                h5[unsafe_offset=j], h5[unsafe_offset=n + j], h5[unsafe_offset=2 * n + j],
-                h5[unsafe_offset=3 * n + j], h5[unsafe_offset=4 * n + j], 0, 0, 0,
+                h5[unsafe_offset=j],
+                h5[unsafe_offset=n + j],
+                h5[unsafe_offset=2 * n + j],
+                h5[unsafe_offset=3 * n + j],
+                h5[unsafe_offset=4 * n + j],
+                0,
+                0,
+                0,
             )
     var mu1 = acc[0]
     var mu2 = acc[1]
@@ -130,8 +144,15 @@ def _grad_h_kernel(d3: F32Ptr, hd3: F32Ptr, width: Int32, height: Int32, gw: SIM
 
 
 def _grad_v_kernel(
-    hd3: F32Ptr, image: F32Ptr, target: U8Ptr, grad: F32Ptr, width: Int32, height: Int32,
-    gw: SIMD[DType.float32, 16], lam: Float32, inv_n: Float32,
+    hd3: F32Ptr,
+    image: F32Ptr,
+    target: U8Ptr,
+    grad: F32Ptr,
+    width: Int32,
+    height: Int32,
+    gw: SIMD[DType.float32, 16],
+    lam: Float32,
+    inv_n: Float32,
 ):
     var n = Int(width) * Int(height) * 3
     var idx = block_idx.x * BLOCK_SIZE + thread_idx.x
@@ -195,7 +216,12 @@ struct PhotometricLoss(Movable):
         self.cap = n
 
     def backward(
-        mut self, image: F32Ptr, target: U8Ptr, grad: F32Ptr, width: Int, height: Int,
+        mut self,
+        image: F32Ptr,
+        target: U8Ptr,
+        grad: F32Ptr,
+        width: Int,
+        height: Int,
         compute_loss: Bool = False,
     ) raises -> Float64:
         """Write dL/d(image) into `grad` ([H, W, 3]). Returns the loss value if
@@ -207,22 +233,54 @@ struct PhotometricLoss(Movable):
         var inv_n = Float32(1.0 / Float64(n))
         var g = num_blocks(n)
         stream.enqueue_function(
-            ctx.compile_function[_moments_h_kernel](), image, target, dptr(self.h5),
-            Int32(width), Int32(height), self.gw, grid_dim=g, block_dim=BLOCK_SIZE,
+            ctx.compile_function[_moments_h_kernel](),
+            image,
+            target,
+            dptr(self.h5),
+            Int32(width),
+            Int32(height),
+            self.gw,
+            grid_dim=g,
+            block_dim=BLOCK_SIZE,
         )
         stream.enqueue_function(
-            ctx.compile_function[_ssim_v_kernel](), dptr(self.h5), image, target,
-            dptr(self.d3), dptr(self.px), Int32(width), Int32(height), self.gw,
-            self.lam, inv_n, grid_dim=g, block_dim=BLOCK_SIZE,
+            ctx.compile_function[_ssim_v_kernel](),
+            dptr(self.h5),
+            image,
+            target,
+            dptr(self.d3),
+            dptr(self.px),
+            Int32(width),
+            Int32(height),
+            self.gw,
+            self.lam,
+            inv_n,
+            grid_dim=g,
+            block_dim=BLOCK_SIZE,
         )
         stream.enqueue_function(
-            ctx.compile_function[_grad_h_kernel](), dptr(self.d3), dptr(self.hd3),
-            Int32(width), Int32(height), self.gw, grid_dim=g, block_dim=BLOCK_SIZE,
+            ctx.compile_function[_grad_h_kernel](),
+            dptr(self.d3),
+            dptr(self.hd3),
+            Int32(width),
+            Int32(height),
+            self.gw,
+            grid_dim=g,
+            block_dim=BLOCK_SIZE,
         )
         stream.enqueue_function(
-            ctx.compile_function[_grad_v_kernel](), dptr(self.hd3), image, target, grad,
-            Int32(width), Int32(height), self.gw, self.lam, inv_n,
-            grid_dim=g, block_dim=BLOCK_SIZE,
+            ctx.compile_function[_grad_v_kernel](),
+            dptr(self.hd3),
+            image,
+            target,
+            grad,
+            Int32(width),
+            Int32(height),
+            self.gw,
+            self.lam,
+            inv_n,
+            grid_dim=g,
+            block_dim=BLOCK_SIZE,
         )
         if not compute_loss:
             return 0.0
@@ -233,8 +291,13 @@ struct PhotometricLoss(Movable):
         var n = width * height * 3
         self._reserve(n)
         self.ctx.stream().enqueue_function(
-            self.ctx.compile_function[_sq_err_kernel](), image, target, dptr(self.px),
-            Int32(n), grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+            self.ctx.compile_function[_sq_err_kernel](),
+            image,
+            target,
+            dptr(self.px),
+            Int32(n),
+            grid_dim=num_blocks(n),
+            block_dim=BLOCK_SIZE,
         )
         var mse = self.summer.sum(dptr(self.px), n) / Float64(n)
         return -10.0 * log10(max(mse, 1e-20))

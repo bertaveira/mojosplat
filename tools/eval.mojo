@@ -25,12 +25,16 @@ from mojosplat.train.dataset import load_colmap_dataset
 struct EvalArgs(Defaultable, Movable):
     @__annotation(Arg("COLMAP scene directory", positional=True))
     var scene: String
+
     @__annotation(Arg("Trained model (.ply)", positional=True))
     var model: String
+
     @__annotation(Arg("Image folder inside the scene"))
     var images: String
+
     @__annotation(Arg("Test views are every N-th image (as in training)"))
     var test_every: Int
+
     @__annotation(Arg("Write <dir>/renders/*.png and <dir>/gt/*.png"))
     var save: String
 
@@ -105,5 +109,10 @@ def main() raises:
     var t = Table("Test views")
     t.add("PSNR (8-bit)", String(bold(fmt_fixed(psnr_8 / n, 2)), " dB"))
     t.add("PSNR (float)", String(fmt_fixed(psnr_f / n, 2), " dB"))
-    t.add("Render time", String(fmt_fixed(ms / n, 2), " ms ", dim(String("(", ds.test[0].camera.width, "x", ds.test[0].camera.height, ")"))))
+    t.add(
+        "Render time",
+        String(
+            fmt_fixed(ms / n, 2), " ms ", dim(String("(", ds.test[0].camera.width, "x", ds.test[0].camera.height, ")"))
+        ),
+    )
     t.print()

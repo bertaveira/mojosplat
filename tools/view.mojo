@@ -20,10 +20,13 @@ from mojosplat.viewer import Viewer, ViewerConfig
 struct ViewArgs(Defaultable, Movable):
     @__annotation(Arg("Model to view (.ply or .splat)", positional=True))
     var model: String
+
     @__annotation(Arg("COLMAP scene: use its cameras for the initial view and 'View' buttons"))
     var scene: String
+
     @__annotation(Arg("Image folder inside the scene"))
     var images: String
+
     @__annotation(Arg("Viewer"))
     var viewer: ViewerConfig
 

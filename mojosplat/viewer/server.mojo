@@ -26,22 +26,36 @@ from ..render.rasterizer import Rasterizer
 from .net import POLLERR, POLLHUP, POLLIN, POLLOUT, PollSet, accept_client, close_fd, listen_tcp, recv_some, send_some
 from .page import PAGE
 from .websocket import (
-    OP_BINARY, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT, append_frame, append_text, header_value, http_response,
-    take_frame, upgrade_response,
+    OP_BINARY,
+    OP_CLOSE,
+    OP_PING,
+    OP_PONG,
+    OP_TEXT,
+    append_frame,
+    append_text,
+    header_value,
+    http_response,
+    take_frame,
+    upgrade_response,
 )
 
 
 struct ViewerConfig(Copyable, Defaultable, Movable):
     @__annotation(Arg("Viewer port"))
     var port: Int
+
     @__annotation(Arg("Address to listen on (0.0.0.0: reachable from other machines)"))
     var host: String
+
     @__annotation(Arg("Maximum frames per second per browser"))
     var max_fps: Int
+
     @__annotation(Arg("Frames per second while only the scene changes (training)"))
     var refresh_fps: Int
+
     @__annotation(Arg("JPEG quality of the frames (1-100)"))
     var jpeg_quality: Int
+
     @__annotation(Arg("Longest image side rendered for a browser (pixels)"))
     var max_size: Int
 
@@ -125,8 +139,15 @@ def _view_json(cam: Camera, dist: Float32) -> String:
             rot[i * 3 + j] = v[j * 4 + i]  # transpose
     var pos = cam.position()
     return String(
-        '{"rot":', _json_floats(rot, 9), ',"pos":', _json_floats(pos, 3), ',"fy":',
-        cam.fy / Float32(cam.height), ',"dist":', dist, "}",
+        '{"rot":',
+        _json_floats(rot, 9),
+        ',"pos":',
+        _json_floats(pos, 3),
+        ',"fy":',
+        cam.fy / Float32(cam.height),
+        ',"dist":',
+        dist,
+        "}",
     )
 
 
@@ -149,8 +170,7 @@ def _focus_point(views: List[Camera], fallback: SIMD[DType.float32, 4]) -> SIMD[
     var n = Float64(len(views))
     mean_p /= n
     var det = (
-        A[0] * (A[5] * A[10] - A[6] * A[9]) - A[1] * (A[4] * A[10] - A[6] * A[8])
-        + A[2] * (A[4] * A[9] - A[5] * A[8])
+        A[0] * (A[5] * A[10] - A[6] * A[9]) - A[1] * (A[4] * A[10] - A[6] * A[8]) + A[2] * (A[4] * A[9] - A[5] * A[8])
     )
     if abs(det) < 1e-3 * n * n * n:
         return fallback
@@ -160,7 +180,8 @@ def _focus_point(views: List[Camera], fallback: SIMD[DType.float32, 4]) -> SIMD[
         for i in range(3):
             M[i * 4 + k] = b[i]
         x[k] = (
-            M[0] * (M[5] * M[10] - M[6] * M[9]) - M[1] * (M[4] * M[10] - M[6] * M[8])
+            M[0] * (M[5] * M[10] - M[6] * M[9])
+            - M[1] * (M[4] * M[10] - M[6] * M[8])
             + M[2] * (M[4] * M[9] - M[5] * M[8])
         ) / det
     var spread: Float64 = 0
@@ -198,7 +219,12 @@ struct Viewer(Movable):
     var frames_sent: Int
 
     def __init__(
-        out self, ctx: DeviceContext, config: ViewerConfig, splats: Splats, views: List[Camera], title: String,
+        out self,
+        ctx: DeviceContext,
+        config: ViewerConfig,
+        splats: Splats,
+        views: List[Camera],
+        title: String,
         training: Bool,
     ) raises:
         self.ctx = ctx
@@ -221,10 +247,20 @@ struct Viewer(Movable):
         self.background = SIMD[DType.float32, 4](0.0)
         self.frames_sent = 0
         self._make_init(splats, title)
-        var where = config.host if config.host != "0.0.0.0" else String("localhost")
-        done(String("Viewer at ", cyan(String("http://", where, ":", config.port)), dim(String(
-            " (listening on ", config.host, ")" if config.host != "0.0.0.0" else ", reachable from other machines)",
-        ))))
+        var shown_host = config.host if config.host != "0.0.0.0" else String("localhost")
+        done(
+            String(
+                "Viewer at ",
+                cyan(String("http://", shown_host, ":", config.port)),
+                dim(
+                    String(
+                        " (listening on ",
+                        config.host,
+                        ")" if config.host != "0.0.0.0" else ", reachable from other machines)",
+                    )
+                ),
+            )
+        )
 
     def __deinit__(deinit self):
         for i in range(len(self.clients)):
@@ -308,9 +344,19 @@ struct Viewer(Movable):
             v[15] = 1.0
             view = Camera(v, 900.0, 900.0, 640.0, 360.0, 1280, 720, 0.1, 100.0)
         self.init_json = String(
-            '{"type":"init","title":', json_string(title), ',"training":', "true" if self.training else "false",
-            ',"views":', len(self.views), ',"max_size":', self.config.max_size, ',"up":', _json_floats(up, 3),
-            ',"view":', _view_json(view, dist), "}",
+            '{"type":"init","title":',
+            json_string(title),
+            ',"training":',
+            "true" if self.training else "false",
+            ',"views":',
+            len(self.views),
+            ',"max_size":',
+            self.config.max_size,
+            ',"up":',
+            _json_floats(up, 3),
+            ',"view":',
+            _view_json(view, dist),
+            "}",
         )
 
     # ------------------------------------------------------------------
@@ -334,9 +380,7 @@ struct Viewer(Movable):
             n += 1 if self.clients[i].websocket else 0
         return n
 
-    def update(
-        mut self, splats: Splats, sh_degree: Int = 3, scene_changed: Bool = False, timeout_ms: Int = 0
-    ) raises:
+    def update(mut self, splats: Splats, sh_degree: Int = 3, scene_changed: Bool = False, timeout_ms: Int = 0) raises:
         """Handle network events and send due frames. Waits at most
         `timeout_ms` for network activity (0: never blocks)."""
         self.polls.clear()
@@ -436,9 +480,10 @@ struct Viewer(Movable):
             c.sent = 0
             c.websocket = True
             # Training may have finished since _make_init built this message.
-            append_text(c.out, self.init_json.replace(
-                '"training":true', '"training":true' if self.training else '"training":false'
-            ))
+            append_text(
+                c.out,
+                self.init_json.replace('"training":true', '"training":true' if self.training else '"training":false'),
+            )
             append_text(c.out, self.stats_json)
         elif path == "/" or path == "/index.html":
             c.out = http_response("200 OK", "text/html; charset=utf-8", String(PAGE))

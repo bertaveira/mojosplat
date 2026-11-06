@@ -11,7 +11,26 @@ bases in use (e.g. a degree-3 buffer rendered at degree 1).
 
 from std.math import rsqrt
 
-from ..core.math import SH_C0, SH_C1, SH_C2A, SH_C2B, SH_C2C, SH_C2D, SH_C3A, SH_C3B, SH_C3C, SH_C3D, SH_C3E, SH_C3F, SH_C3G, SH_C3H, SH_C2E, SH_C3I, SH_C3J, SH_C3K
+from ..core.math import (
+    SH_C0,
+    SH_C1,
+    SH_C2A,
+    SH_C2B,
+    SH_C2C,
+    SH_C2D,
+    SH_C3A,
+    SH_C3B,
+    SH_C3C,
+    SH_C3D,
+    SH_C3E,
+    SH_C3F,
+    SH_C3G,
+    SH_C3H,
+    SH_C2E,
+    SH_C3I,
+    SH_C3J,
+    SH_C3K,
+)
 from ..core.types import F32Ptr
 
 
@@ -177,9 +196,24 @@ def sh_to_color_backward(
         _store_rest(write_rest, grad_sh_rest, b + 5, (SH_C2B * zz - SH_C2C) * grad_color)
         _store_rest(write_rest, grad_sh_rest, b + 6, -SH_C2A * xz * grad_color)
         _store_rest(write_rest, grad_sh_rest, b + 7, SH_C2D * (xx - yy) * grad_color)
-        gx = gx + SH_C2A * y * _rgb(sh_rest, b + 3) - SH_C2A * z * _rgb(sh_rest, b + 6) + SH_C2A * x * _rgb(sh_rest, b + 7)
-        gy = gy + SH_C2A * x * _rgb(sh_rest, b + 3) - SH_C2A * z * _rgb(sh_rest, b + 4) - SH_C2A * y * _rgb(sh_rest, b + 7)
-        gz = gz - SH_C2A * y * _rgb(sh_rest, b + 4) + SH_C2E * z * _rgb(sh_rest, b + 5) - SH_C2A * x * _rgb(sh_rest, b + 6)
+        gx = (
+            gx
+            + SH_C2A * y * _rgb(sh_rest, b + 3)
+            - SH_C2A * z * _rgb(sh_rest, b + 6)
+            + SH_C2A * x * _rgb(sh_rest, b + 7)
+        )
+        gy = (
+            gy
+            + SH_C2A * x * _rgb(sh_rest, b + 3)
+            - SH_C2A * z * _rgb(sh_rest, b + 4)
+            - SH_C2A * y * _rgb(sh_rest, b + 7)
+        )
+        gz = (
+            gz
+            - SH_C2A * y * _rgb(sh_rest, b + 4)
+            + SH_C2E * z * _rgb(sh_rest, b + 5)
+            - SH_C2A * x * _rgb(sh_rest, b + 6)
+        )
         if active_bases > 9:
             _store_rest(write_rest, grad_sh_rest, b + 8, y * (SH_C3A * yy - SH_C3B * xx) * grad_color)
             _store_rest(write_rest, grad_sh_rest, b + 9, SH_C3C * xy * z * grad_color)
@@ -189,19 +223,25 @@ def sh_to_color_backward(
             _store_rest(write_rest, grad_sh_rest, b + 13, SH_C3H * z * (xx - yy) * grad_color)
             _store_rest(write_rest, grad_sh_rest, b + 14, x * (SH_C3B * yy - SH_C3A * xx) * grad_color)
             gx = (
-                gx - SH_C3I * xy * _rgb(sh_rest, b + 8) + SH_C3C * yz * _rgb(sh_rest, b + 9)
+                gx
+                - SH_C3I * xy * _rgb(sh_rest, b + 8)
+                + SH_C3C * yz * _rgb(sh_rest, b + 9)
                 + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 12)
                 + SH_C3C * xz * _rgb(sh_rest, b + 13)
                 + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 14)
             )
             gy = (
-                gy + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 8) + SH_C3C * xz * _rgb(sh_rest, b + 9)
+                gy
+                + SH_C3B * (yy - xx) * _rgb(sh_rest, b + 8)
+                + SH_C3C * xz * _rgb(sh_rest, b + 9)
                 + (SH_C3D - SH_C3E * zz) * _rgb(sh_rest, b + 10)
                 - SH_C3C * yz * _rgb(sh_rest, b + 13)
                 + SH_C3I * xy * _rgb(sh_rest, b + 14)
             )
             gz = (
-                gz + SH_C3C * xy * _rgb(sh_rest, b + 9) - SH_C3J * yz * _rgb(sh_rest, b + 10)
+                gz
+                + SH_C3C * xy * _rgb(sh_rest, b + 9)
+                - SH_C3J * yz * _rgb(sh_rest, b + 10)
                 + (SH_C3K * zz - SH_C3G) * _rgb(sh_rest, b + 11)
                 - SH_C3J * xz * _rgb(sh_rest, b + 12)
                 + SH_C3H * (xx - yy) * _rgb(sh_rest, b + 13)

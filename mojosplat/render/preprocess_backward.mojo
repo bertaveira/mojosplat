@@ -80,12 +80,21 @@ def _preprocess_backward_kernel(
 
     # SH -> color backward (also yields a mean gradient through the view dir).
     var gcol = SIMD[DType.float32, 4](
-        grad_color[unsafe_offset=s * 3 + 0], grad_color[unsafe_offset=s * 3 + 1],
-        grad_color[unsafe_offset=s * 3 + 2], 0.0,
+        grad_color[unsafe_offset=s * 3 + 0],
+        grad_color[unsafe_offset=s * 3 + 1],
+        grad_color[unsafe_offset=s * 3 + 2],
+        0.0,
     )
     var dir = SIMD[DType.float32, 4](m0 - cam[CAM_POS_X], m1 - cam[CAM_POS_Y], m2 - cam[CAM_POS_Z], 0.0)
     var dmean_color = sh_to_color_backward(
-        sh_rest, out_sh0, out_sh_rest, g, dir, gcol, Int(active_bases), Int(rest_stride),
+        sh_rest,
+        out_sh0,
+        out_sh_rest,
+        g,
+        dir,
+        gcol,
+        Int(active_bases),
+        Int(rest_stride),
         write_sh_rest != 0,
     )
     out_opacity[unsafe_offset=g] = grad_opacity_slot[unsafe_offset=s]
@@ -229,9 +238,24 @@ def _preprocess_backward_kernel(
     out_means[unsafe_offset=g * 3 + 2] = cam[2] * dc0 + cam[6] * dc1 + cam[10] * dc2 + dmean_color[2]
 
     # Scale gradient (variance = exp(2 s)).
-    var dv0 = R00 * R00 * d00 + R10 * R10 * d11 + R20 * R20 * d22 + 2.0 * (R00 * R10 * d01 + R00 * R20 * d02 + R10 * R20 * d12)
-    var dv1 = R01 * R01 * d00 + R11 * R11 * d11 + R21 * R21 * d22 + 2.0 * (R01 * R11 * d01 + R01 * R21 * d02 + R11 * R21 * d12)
-    var dv2 = R02 * R02 * d00 + R12 * R12 * d11 + R22 * R22 * d22 + 2.0 * (R02 * R12 * d01 + R02 * R22 * d02 + R12 * R22 * d12)
+    var dv0 = (
+        R00 * R00 * d00
+        + R10 * R10 * d11
+        + R20 * R20 * d22
+        + 2.0 * (R00 * R10 * d01 + R00 * R20 * d02 + R10 * R20 * d12)
+    )
+    var dv1 = (
+        R01 * R01 * d00
+        + R11 * R11 * d11
+        + R21 * R21 * d22
+        + 2.0 * (R01 * R11 * d01 + R01 * R21 * d02 + R11 * R21 * d12)
+    )
+    var dv2 = (
+        R02 * R02 * d00
+        + R12 * R12 * d11
+        + R22 * R22 * d22
+        + 2.0 * (R02 * R12 * d01 + R02 * R22 * d02 + R12 * R22 * d12)
+    )
     out_log_scales[unsafe_offset=g * 3 + 0] = 2.0 * v0 * dv0
     out_log_scales[unsafe_offset=g * 3 + 1] = 2.0 * v1 * dv1
     out_log_scales[unsafe_offset=g * 3 + 2] = 2.0 * v2 * dv2
@@ -259,8 +283,7 @@ def _preprocess_backward_kernel(
     var d_yz = dR21 + dR12
     var two = 2.0 / norm_sq
     var helper = two * (
-        xy * d_xy + xz * d_xz + yz * d_yz + rx * d_rx + ry * d_ry + rz * d_rz
-        - xx * d_xx - yy * d_yy - zz * d_zz
+        xy * d_xy + xz * d_xz + yz * d_yz + rx * d_rx + ry * d_ry + rz * d_rz - xx * d_xx - yy * d_yy - zz * d_zz
     )
     out_rotations[unsafe_offset=g * 4 + 0] = two * (qx * d_rx + qy * d_ry + qz * d_rz - qr * helper)
     out_rotations[unsafe_offset=g * 4 + 1] = two * (qr * d_rx - 2.0 * qx * d_xx + qy * d_xy + qz * d_xz - qx * helper)
@@ -298,10 +321,28 @@ def preprocess_backward(
         return
     stream.enqueue_function(
         ctx.compile_function[_preprocess_backward_kernel](),
-        means, log_scales, rotations, sh_rest, cam, slot_of, grad_mean2d,
-        grad_conic, grad_opacity_slot, grad_color, out_means, out_log_scales,
-        out_rotations, out_opacity, out_sh0, out_sh_rest, densification,
-        Int32(1 if has_densification else 0), Int32(1 if write_sh_rest else 0), Int32(n), Int32(active_bases),
+        means,
+        log_scales,
+        rotations,
+        sh_rest,
+        cam,
+        slot_of,
+        grad_mean2d,
+        grad_conic,
+        grad_opacity_slot,
+        grad_color,
+        out_means,
+        out_log_scales,
+        out_rotations,
+        out_opacity,
+        out_sh0,
+        out_sh_rest,
+        densification,
+        Int32(1 if has_densification else 0),
+        Int32(1 if write_sh_rest else 0),
+        Int32(n),
+        Int32(active_bases),
         Int32(rest_stride),
-        grid_dim=num_blocks(n), block_dim=BLOCK_SIZE,
+        grid_dim=num_blocks(n),
+        block_dim=BLOCK_SIZE,
     )

@@ -14,7 +14,7 @@ trait StateAllocator:
         ...
 
 
-struct DeviceArena(StateAllocator, Movable):
+struct DeviceArena(Movable, StateAllocator):
     """Reusable `StateAllocator` for pure-Mojo training loops.
 
     After `reset()`, the i-th `alloc` returns the i-th buffer (grown when

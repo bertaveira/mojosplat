@@ -35,8 +35,6 @@ def num_blocks(n: Int, block: Int = BLOCK_SIZE) -> Int:
 
 
 @always_inline
-def dptr[
-    dtype: DType
-](buf: DeviceBuffer[dtype]) -> Pointer[Scalar[dtype], MutUntrackedOrigin]:
+def dptr[dtype: DType](buf: DeviceBuffer[dtype]) -> Pointer[Scalar[dtype], MutUntrackedOrigin]:
     """Raw device pointer of a DeviceBuffer, usable as a kernel argument."""
     return buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
