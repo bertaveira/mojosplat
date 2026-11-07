@@ -17,7 +17,7 @@ dL/d(color). Conic off-diagonal gradients are per entry of the symmetric
 matrix (half of the gradient w.r.t. the single value), as in Faster-GS.
 """
 
-from max.gpu import WARP_SIZE, block_idx, lane_id
+from max.gpu import WARP_SIZE, block_idx, lane_id, thread_idx
 from max.gpu.host import DeviceContext, DeviceStream
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
@@ -36,6 +36,9 @@ comptime LOG2E: Float32 = 1.4426950408889634
 @always_inline
 def _atomic_add(p: F32Ptr, i: Int, v: Float32):
     _ = Atomic[Float32].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
+
+
+comptime BUCKETS_PER_BLOCK = 4  # one warp per bucket
 
 
 def _blend_backward_kernel[
@@ -65,7 +68,8 @@ def _blend_backward_kernel[
 ):
     var background = background_arg.value
     comptime BLOCK = tile_w * tile_h
-    var bucket = block_idx.x
+    var warp_in_block = thread_idx.x // WARP_SIZE
+    var bucket = block_idx.x * BUCKETS_PER_BLOCK + warp_in_block
     if bucket >= Int(bucket_start[unsafe_offset=Int(n_tiles)]):
         return
     var tile = Int(bucket_tile[unsafe_offset=bucket])
@@ -109,9 +113,15 @@ def _blend_backward_kernel[
     var W = Int(width)
     var H = Int(height)
 
-    var s_last = stack_allocation[WARP_SIZE, UInt32, address_space=AddressSpace.SHARED]()
-    var s_after = stack_allocation[WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED]()
-    var s_grad = stack_allocation[WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED]()
+    var s_last = stack_allocation[
+        BUCKETS_PER_BLOCK * WARP_SIZE, UInt32, address_space=AddressSpace.SHARED
+    ]().unsafe_offset(warp_in_block * WARP_SIZE)
+    var s_after = stack_allocation[
+        BUCKETS_PER_BLOCK * WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED
+    ]().unsafe_offset(warp_in_block * WARP_SIZE * 4)
+    var s_grad = stack_allocation[
+        BUCKETS_PER_BLOCK * WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED
+    ]().unsafe_offset(warp_in_block * WARP_SIZE * 4)
     var snap = snapshots.unsafe_offset(bucket * BLOCK * 4)
 
     # Gradient accumulators for this lane's Gaussian.
@@ -301,6 +311,6 @@ def blend_backward[
         Int32(width),
         Int32(height),
         Int32(grid_w),
-        grid_dim=max(n_bucket_blocks, 1),
-        block_dim=WARP_SIZE,
+        grid_dim=max((n_bucket_blocks + BUCKETS_PER_BLOCK - 1) // BUCKETS_PER_BLOCK, 1),
+        block_dim=BUCKETS_PER_BLOCK * WARP_SIZE,
     )
