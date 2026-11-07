@@ -161,7 +161,7 @@ struct Trainer(Movable):
         self.ctx = ctx
         self.config = config.copy()
         self.splats = splats_from_points(ctx, dataset.points.xyz, dataset.points.rgb, config.sh_degree)
-        self.splats.enable_training()
+        self.splats.enable_training(sh_rest_grad=False)  # Adam recomputes it (write_sh_rest=False)
         var lr = SIMD[DType.float32, 8](0.0)
         lr[Attr.MEANS] = config.lr_means_init * dataset.scene_extent
         lr[Attr.LOG_SCALES] = config.lr_log_scales

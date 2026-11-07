@@ -4,7 +4,8 @@ Holds the six raw parameter arrays (see `SplatView` for their layout) with
 room for `capacity` Gaussians, of which the first `count` are live. Training
 state is allocated only by `enable_training()`: per attribute a gradient
 buffer and the Adam moments (exp_avg, exp_avg_sq), plus the densification
-statistics. Every per-Gaussian array is indexed by `Attr`, so operations
+statistics. The sh_rest gradient, the largest buffer, is optional: a fused
+optimizer can recompute it (`Adam.step(splats, sh_rest)`). Every per-Gaussian array is indexed by `Attr`, so operations
 that must touch all of them are one loop: `reserve` grows the capacity, and
 `gather` (rows by index, optionally zeroing the moments of new rows) is the
 single row operation behind clone / split, pruning and Morton reordering.
@@ -81,6 +82,7 @@ struct Splats(Movable):
     var params: List[DeviceBuffer[DType.float32]]  # [Attr.COUNT], capacity * width each
     # Training state (empty until enable_training)
     var training: Bool
+    var has_sh_rest_grad: Bool  # False: grads[SH_REST] is a 1-float placeholder
     var grads: List[DeviceBuffer[DType.float32]]
     var exp_avg: List[DeviceBuffer[DType.float32]]
     var exp_avg_sq: List[DeviceBuffer[DType.float32]]
@@ -111,6 +113,7 @@ struct Splats(Movable):
         self.params.append(_upload_padded(ctx, sh0, self.capacity * 3))
         self.params.append(_upload_padded(ctx, sh_rest, self.capacity * rest_stride * 3))
         self.training = False
+        self.has_sh_rest_grad = False
         self.grads = List[DeviceBuffer[DType.float32]]()
         self.exp_avg = List[DeviceBuffer[DType.float32]]()
         self.exp_avg_sq = List[DeviceBuffer[DType.float32]]()
@@ -178,7 +181,9 @@ struct Splats(Movable):
         return self._view(self.params)
 
     def grad_view(self) raises -> SplatView:
-        """Raw pointers to the gradient buffers (laid out like the parameters)."""
+        """Raw pointers to the gradient buffers (laid out like the parameters).
+        Without an sh_rest gradient buffer, the backward must run with
+        `write_sh_rest=False`."""
         if not self.training:
             raise Error("Splats.grad_view: call enable_training() first")
         return self._view(self.grads)
@@ -191,13 +196,21 @@ struct Splats(Movable):
         fill_f32(self.ctx, dptr(b), 0.0, max(n, 1))
         return b
 
-    def enable_training(mut self) raises:
-        """Allocate gradients, Adam moments (zeroed) and densification stats."""
+    def _grad_floats(self, attr: Int, rows: Int) -> Int:
+        if attr == Attr.SH_REST and not self.has_sh_rest_grad:
+            return 1
+        return max(rows * self.width(attr), 1)
+
+    def enable_training(mut self, sh_rest_grad: Bool = True) raises:
+        """Allocate gradients, Adam moments (zeroed) and densification stats.
+        With `sh_rest_grad=False` there is no sh_rest gradient buffer (for an
+        optimizer that recomputes it, see `Adam.step(splats, sh_rest)`)."""
         if self.training:
             return
+        self.has_sh_rest_grad = sh_rest_grad
         for a in range(Attr.COUNT):
             var n = self.capacity * self.width(a)
-            self.grads.append(self._zeros(n))
+            self.grads.append(self._zeros(self._grad_floats(a, self.capacity)))
             self.exp_avg.append(self._zeros(n))
             self.exp_avg_sq.append(self._zeros(n))
         self.densification = self._zeros(2 * self.capacity)
@@ -217,7 +230,7 @@ struct Splats(Movable):
             copy_f32(self.ctx, dptr(grown), dptr(self.params[a]), self.count * w)
             self.params[a] = grown
             if self.training:
-                var g = self._zeros(capacity * w)
+                var g = self._zeros(self._grad_floats(a, capacity))
                 var m = self._zeros(capacity * w)
                 var v = self._zeros(capacity * w)
                 copy_f32(self.ctx, dptr(m), dptr(self.exp_avg[a]), self.count * w)
@@ -258,13 +271,21 @@ struct Splats(Movable):
         gradients and densification statistics are reallocated (the next
         backward / densification interval refills them).
         """
+        # Synchronize after each array: freed memory returns to the pool only
+        # once the GPU is done with it, and without the syncs the old and new
+        # arrays are all alive at once (out of memory on 10 GB GPUs).
         for a in range(Attr.COUNT):
             var w = self.width(a)
             self.params[a] = self._gathered(self.params[a], index, n_out, w, n_out)
+            self.ctx.synchronize()
             if self.training:
                 self.exp_avg[a] = self._gathered(self.exp_avg[a], index, n_out, w, zero_moments_from)
+                self.ctx.synchronize()
                 self.exp_avg_sq[a] = self._gathered(self.exp_avg_sq[a], index, n_out, w, zero_moments_from)
-                self.grads[a] = self.ctx.enqueue_create_buffer[DType.float32](max(n_out * w, 1))
+                self.ctx.synchronize()
+                self.grads[a] = self.ctx.enqueue_create_buffer[DType.float32](1)  # free the old one first
+                self.ctx.synchronize()
+                self.grads[a] = self.ctx.enqueue_create_buffer[DType.float32](self._grad_floats(a, n_out))
         if self.training:
             self.densification = self._zeros(2 * max(n_out, 1))
         self.count = n_out

@@ -101,7 +101,6 @@ def _state_to_py(st: ForwardState) raises -> PythonObject:
     ]:
         t.append(v)
     for a in [
-        Int(st.primitive_ids),
         Int(st.slot_of),
         Int(st.records),
         Int(st.colors),
@@ -132,20 +131,19 @@ def _state_from_py(t: PythonObject, cam: Camera, bg: SIMD[DType.float32, 4]) rai
     st.grid_w = Int(py=t[7])
     st.grid_h = Int(py=t[8])
     st.active_bases = Int(py=t[9])
-    st.primitive_ids = I32Ptr(unsafe_from_address=Int(py=t[10]))
-    st.slot_of = I32Ptr(unsafe_from_address=Int(py=t[11]))
-    st.records = _f32(t[12])
-    st.colors = _f32(t[13])
-    st.instance_slots = I32Ptr(unsafe_from_address=Int(py=t[14]))
-    st.inst_a = I32Ptr(unsafe_from_address=Int(py=t[15]))
-    st.inst_b = I32Ptr(unsafe_from_address=Int(py=t[16]))
-    st.tile_offsets = _u32(t[17])
-    st.bucket_start = _u32(t[18])
-    st.bucket_tile = _u32(t[19])
-    st.snapshots = _f32(t[20])
-    st.final_T = _f32(t[21])
-    st.n_processed = _u32(t[22])
-    st.tile_max_n = _u32(t[23])
+    st.slot_of = I32Ptr(unsafe_from_address=Int(py=t[10]))
+    st.records = _f32(t[11])
+    st.colors = _f32(t[12])
+    st.instance_slots = I32Ptr(unsafe_from_address=Int(py=t[13]))
+    st.inst_a = I32Ptr(unsafe_from_address=Int(py=t[14]))
+    st.inst_b = I32Ptr(unsafe_from_address=Int(py=t[15]))
+    st.tile_offsets = _u32(t[16])
+    st.bucket_start = _u32(t[17])
+    st.bucket_tile = _u32(t[18])
+    st.snapshots = _f32(t[19])
+    st.final_T = _f32(t[20])
+    st.n_processed = _u32(t[21])
+    st.tile_max_n = _u32(t[22])
     st.cam = cam.packed()
     st.background = bg
     return st

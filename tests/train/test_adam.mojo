@@ -80,7 +80,7 @@ def _step_once(fused: Bool) raises -> List[List[Float32]]:
         s.f32("shN.f32"),
         s.sh_rest,
     )
-    splats.enable_training()
+    splats.enable_training(sh_rest_grad=not fused)  # the fused step needs no sh_rest gradient buffer
     var npix = s.width * s.height * 3
     var image = ctx.enqueue_create_buffer[DType.float32](npix)
     var grad_image = upload(ctx, s.f32("grad_image.f32"))

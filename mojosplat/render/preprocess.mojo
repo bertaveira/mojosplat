@@ -20,7 +20,7 @@ In one pass it:
 Outputs are *compacted*: the k-th visible Gaussian (in arbitrary order)
 writes slot k of every output array, so writes are contiguous and the arrays
 read by the later stages are small (they fit in L2 for multi-million splat
-scenes). `primitive_ids[slot]` maps a slot back to its Gaussian. Mean,
+scenes). In training, `slot_of[g]` maps a Gaussian to its slot. Mean,
 conic, opacity and pixel rectangle are packed into one 32-byte record per
 slot (one memory sector per random gather).
 """
@@ -180,7 +180,6 @@ def _preprocess_kernel[
     cam: KernelVector[DType.float32, 32],
     depth_keys: U32Ptr,  # out [slot] depth bits (sort keys)
     slots: I32Ptr,  # out [slot] = slot (sort values)
-    primitive_ids: I32Ptr,  # out [slot] Gaussian index
     n_touched: U32Ptr,  # out [slot] exact tile count
     records: F32Ptr,  # out [slot, REC]
     colors: F32Ptr,  # out [slot, 3] SH color, not clamped
@@ -370,7 +369,6 @@ def _preprocess_kernel[
     var slot = Int(base) + Int(pop_count(vis_mask & lt))
     depth_keys[unsafe_offset=slot] = UInt32(depth.to_bits())
     slots[unsafe_offset=slot] = Int32(slot)
-    primitive_ids[unsafe_offset=slot] = Int32(g)
     comptime if train:
         slot_of[unsafe_offset=g] = Int32(slot)
     n_touched[unsafe_offset=slot] = UInt32(touched)
@@ -397,7 +395,6 @@ def preprocess[
     cam: SIMD[DType.float32, 32],
     depth_keys: U32Ptr,
     slots: I32Ptr,
-    primitive_ids: I32Ptr,
     n_touched: U32Ptr,
     records: F32Ptr,
     colors: F32Ptr,
@@ -422,7 +419,6 @@ def preprocess[
         KernelVector[DType.float32, 32](cam),
         depth_keys,
         slots,
-        primitive_ids,
         n_touched,
         records,
         colors,

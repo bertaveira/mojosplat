@@ -144,6 +144,8 @@ struct Adam(Movable):
     def step(mut self, mut splats: Splats) raises:
         """One step on the first `count` rows, reading every gradient from
         `splats.grads`."""
+        if not splats.has_sh_rest_grad:
+            raise Error("Adam.step: no sh_rest gradient buffer (pass the ShRestGrad)")
         self._step(splats, Optional[ShRestGrad]())
 
     def step(mut self, mut splats: Splats, sh_rest: ShRestGrad) raises:
