@@ -56,8 +56,9 @@ def _create_instances_kernel[
     var r = tile_rect[tile_w, tile_h](record_bounds(rec))
     var tx0 = Int(r[0])
     var ty0 = Int(r[2])
-    var tw = Int(r[1]) - tx0
-    var tile_count = tw * (Int(r[3]) - ty0)
+    # 32-bit: ptxas (CUDA 12.9, sm_86) miscompiles the 64-bit form of this product when ty0 == 0.
+    var tw = Int(r[1] - r[0])
+    var tile_count = Int((r[1] - r[0]) * (r[3] - r[2]))
     var mx = rec[0] - 0.5
     var my = rec[1] - 0.5
     var ca = rec[2]

@@ -304,12 +304,15 @@ def _preprocess_kernel[
     var x1 = Int(min(pad_w, max(Float32(0.0), ceil(mx + ext_x))))
     var y0 = Int(min(pad_h, max(Float32(0.0), floor(my - ext_y))))
     var y1 = Int(min(pad_h, max(Float32(0.0), ceil(my + ext_y))))
-    var tx0 = x0 // tile_w
-    var tx1 = (x1 + tile_w - 1) // tile_w
-    var ty0 = y0 // tile_h
-    var ty1 = (y1 + tile_h - 1) // tile_h
-    var tw = tx1 - tx0
-    var tile_count = tw * (ty1 - ty0)
+    # 32-bit: ptxas (CUDA 12.9, sm_86) miscompiles the 64-bit tile count when ty0 == 0.
+    var tx0_32 = Int32(x0) // Int32(tile_w)
+    var tx1_32 = (Int32(x1) + Int32(tile_w - 1)) // Int32(tile_w)
+    var ty0_32 = Int32(y0) // Int32(tile_h)
+    var ty1_32 = (Int32(y1) + Int32(tile_h - 1)) // Int32(tile_h)
+    var tx0 = Int(tx0_32)
+    var ty0 = Int(ty0_32)
+    var tw = Int(tx1_32 - tx0_32)
+    var tile_count = Int((tx1_32 - tx0_32) * (ty1_32 - ty0_32))
     if tile_count == 0:
         active = False
     if warp.vote[LANE_MASK_DTYPE](active) == 0:
