@@ -25,6 +25,7 @@ from max.gpu.sync import syncwarp
 from std.atomic import Atomic, Ordering
 from std.math import exp2, recip
 from std.memory import stack_allocation
+from std.sys.info import is_amd_gpu
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
 from .preprocess import MIN_ALPHA, load_record
@@ -35,7 +36,12 @@ comptime LOG2E: Float32 = 1.4426950408889634
 
 @always_inline
 def _atomic_add(p: F32Ptr, i: Int, v: Float32):
-    _ = Atomic[Float32].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
+    comptime if is_amd_gpu():
+        # The default (system) scope is a compare-and-swap loop on AMD; device
+        # ("agent") scope is a native float atomic add.
+        _ = Atomic[Float32, scope="agent"].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
+    else:
+        _ = Atomic[Float32].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
 
 
 comptime BUCKETS_PER_BLOCK = 4  # one warp per bucket
