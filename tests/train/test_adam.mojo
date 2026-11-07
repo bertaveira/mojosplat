@@ -66,8 +66,9 @@ def test_matches_torch() raises:
             assert_true(max_rel < 1e-4, String(checks[c], names[a], " max rel err ", max_rel))
 
 
-def _step_once(fused: Bool) raises -> List[List[Float32]]:
-    """One forward/backward/Adam step on the SH-degree-3 golden scene."""
+def _step_once(fused: Bool, sh_degree: Int = 3) raises -> List[List[Float32]]:
+    """One forward/backward/Adam step on the SH-degree-3 golden scene, rendered
+    at `sh_degree` (higher bands inactive)."""
     var s = GoldenScene("splats_small")
     var ctx = DeviceContext()
     var splats = Splats(
@@ -88,7 +89,7 @@ def _step_once(fused: Bool) raises -> List[List[Float32]]:
     var r = Rasterizer(ctx)
     var lr = SIMD[DType.float32, 8](0.01, 0.02, 0.003, 0.05, 0.004, 0.001, 0, 0)
     var adam = Adam(lr)
-    var st = r.forward(splats.view(), s.camera, bg, dptr(image), s.sh_degree)
+    var st = r.forward(splats.view(), s.camera, bg, dptr(image), sh_degree)
     r.backward(splats.view(), st, dptr(image), dptr(grad_image), splats.grad_view(), write_sh_rest=not fused)
     if fused:
         adam.step(splats, r.sh_rest_grad(st))
@@ -106,9 +107,9 @@ def _step_once(fused: Bool) raises -> List[List[Float32]]:
     return out^
 
 
-def test_fused_sh_rest_matches_unfused() raises:
-    var a = _step_once(False)
-    var b = _step_once(True)
+def _check_fused_matches_unfused(sh_degree: Int) raises:
+    var a = _step_once(False, sh_degree)
+    var b = _step_once(True, sh_degree)
     for i in range(len(a)):
         var max_d: Float64 = 0
         var scale: Float64 = 1e-12
@@ -116,6 +117,14 @@ def test_fused_sh_rest_matches_unfused() raises:
             max_d = max(max_d, abs(Float64(a[i][j]) - Float64(b[i][j])))
             scale = max(scale, abs(Float64(a[i][j])))
         assert_true(max_d <= 1e-5 * scale, String("array ", i, " differs: ", max_d, " (scale ", scale, ")"))
+
+
+def test_fused_sh_rest_matches_unfused() raises:
+    _check_fused_matches_unfused(3)
+
+
+def test_fused_sh_rest_matches_unfused_inactive_bands() raises:
+    _check_fused_matches_unfused(1)  # bands 2 and 3 are skipped by the fused step
 
 
 def main() raises:
