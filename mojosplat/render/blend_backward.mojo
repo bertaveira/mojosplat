@@ -171,7 +171,7 @@ def _blend_backward_kernel[
                 var local = Int(local32)
                 var x = Int(x0_32 + Int32(UInt32(local32) % UInt32(tile_w)))
                 var y = Int(y0_32 + Int32(UInt32(local32) // UInt32(tile_w)))
-                var s = snap.unsafe_offset(local * 4).unsafe_bitcast[SIMD[DType.float32, 4]]()[]
+                var s = snap.unsafe_offset(local * 4).unsafe_load[width=4, alignment=16]()
                 var img = SIMD[DType.float32, 4](0.0)
                 var gimg = SIMD[DType.float32, 4](0.0)
                 var fT: Float32 = 0

@@ -117,9 +117,9 @@ def _blend_kernel[
         comptime if train:
             if not done:
                 var bucket = first_bucket + (i - start) // WARP_SIZE
-                snapshots.unsafe_offset((bucket * BLOCK + local_idx) * 4).unsafe_bitcast[
-                    SIMD[DType.float32, 4]
-                ]()[] = SIMD[DType.float32, 4](pix[0], pix[1], pix[2], T)
+                snapshots.unsafe_offset((bucket * BLOCK + local_idx) * 4).unsafe_store[alignment=16](
+                    SIMD[DType.float32, 4](pix[0], pix[1], pix[2], T)
+                )
         var fetch = i + lane
         var overlaps = False
         if fetch < end:

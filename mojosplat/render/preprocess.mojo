@@ -97,12 +97,13 @@ def store_record(
         bitcast[DType.float32](UInt32(bounds & 0xFFFFFFFF)),
         bitcast[DType.float32](UInt32(bounds >> 32)),
     )
-    rec.unsafe_offset(slot * REC).unsafe_bitcast[SIMD[DType.float32, REC]]()[] = v
+    # Records are 32-byte aligned (allocations are 256-byte aligned): one vector store.
+    rec.unsafe_offset(slot * REC).unsafe_store[alignment=REC * 4](v)
 
 
 @always_inline
 def load_record(rec: F32Ptr, slot: Int) -> SIMD[DType.float32, REC]:
-    return rec.unsafe_offset(slot * REC).unsafe_bitcast[SIMD[DType.float32, REC]]()[]
+    return rec.unsafe_offset(slot * REC).unsafe_load[width=REC, alignment=REC * 4]()
 
 
 @always_inline
