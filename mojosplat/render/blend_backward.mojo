@@ -23,7 +23,7 @@ from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.sync import syncwarp
 from std.atomic import Atomic, Ordering
-from std.math import exp2
+from std.math import exp2, recip
 from std.memory import stack_allocation
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
@@ -233,7 +233,7 @@ def _blend_backward_kernel[
         after_g -= w * col[1]
         after_b -= w * col[2]
         var one_minus = 1.0 - alpha
-        var rcp = 1.0 / max(one_minus, ONE_MINUS_ALPHA_EPS)
+        var rcp = recip(max(one_minus, ONE_MINUS_ALPHA_EPS))  # approximate, like Faster-GS's fast math
         var dL_dalpha = (
             (T * col[0] - after_r * rcp) * gr
             + (T * col[1] - after_g * rcp) * gg
@@ -242,9 +242,9 @@ def _blend_backward_kernel[
         )
         d_op += gaussian * dL_dalpha
         var helper = -alpha * dL_dalpha
-        d_ca += 0.5 * helper * dx * dx
-        d_cb += 0.5 * helper * dx * dy
-        d_cc += 0.5 * helper * dy * dy
+        d_ca += helper * dx * dx  # times 0.5 after the loop
+        d_cb += helper * dx * dy
+        d_cc += helper * dy * dy
         d_mx += helper * (ca * dx + cb * dy)
         d_my += helper * (cb * dx + cc * dy)
         T *= one_minus
@@ -252,9 +252,9 @@ def _blend_backward_kernel[
     if valid:
         _atomic_add(grad_mean2d, g * 2 + 0, d_mx)
         _atomic_add(grad_mean2d, g * 2 + 1, d_my)
-        _atomic_add(grad_conic, g * 3 + 0, d_ca)
-        _atomic_add(grad_conic, g * 3 + 1, d_cb)
-        _atomic_add(grad_conic, g * 3 + 2, d_cc)
+        _atomic_add(grad_conic, g * 3 + 0, 0.5 * d_ca)
+        _atomic_add(grad_conic, g * 3 + 1, 0.5 * d_cb)
+        _atomic_add(grad_conic, g * 3 + 2, 0.5 * d_cc)
         _atomic_add(grad_opacity, g, opacity * (1.0 - opacity) * d_op)
         comptime for k in range(3):
             _atomic_add(grad_color, g * 3 + k, d_col[k] * col_factor[k])
