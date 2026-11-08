@@ -108,12 +108,14 @@ def _ssim_v_kernel(
     var a2 = 2.0 * s12 + C2
     var b1 = mu1 * mu1 + mu2 * mu2 + C1
     var b2 = s11 + s22 + C2
-    var ssim = (a1 * a2) / (b1 * b2)
+    var inv_b = 1.0 / (b1 * b2)
+    var ssim = a1 * a2 * inv_b
     # dL/dssim = -lambda / N
     var gs = -lam * inv_n
-    d3[unsafe_offset=idx] = gs * ssim * (2.0 * mu2 / a1 - 2.0 * mu2 / a2 - 2.0 * mu1 / b1 + 2.0 * mu1 / b2)
+    # No division by a1 or a2: ssim is 0 when a2 is 0, and ssim / a2 would be NaN.
+    d3[unsafe_offset=idx] = gs * (2.0 * mu2 * (a2 - a1) * inv_b + ssim * (2.0 * mu1 / b2 - 2.0 * mu1 / b1))
     d3[unsafe_offset=n + idx] = gs * (-ssim / b2)
-    d3[unsafe_offset=2 * n + idx] = gs * (2.0 * ssim / a2)
+    d3[unsafe_offset=2 * n + idx] = gs * (2.0 * a1 * inv_b)
     var diff = image[unsafe_offset=idx] - _target(target, idx)
     loss_px[unsafe_offset=idx] = (1.0 - lam) * abs(diff) + lam * (1.0 - ssim)
 
