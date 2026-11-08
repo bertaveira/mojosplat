@@ -17,14 +17,15 @@ dL/d(color). Conic off-diagonal gradients are per entry of the symmetric
 matrix (half of the gradient w.r.t. the single value), as in Faster-GS.
 """
 
-from max.gpu import WARP_SIZE, block_idx, lane_id
+from max.gpu import WARP_SIZE, block_idx, lane_id, thread_idx
 from max.gpu.host import DeviceContext, DeviceStream
 from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.sync import syncwarp
 from std.atomic import Atomic, Ordering
-from std.math import exp2
+from std.math import exp2, recip
 from std.memory import stack_allocation
+from std.sys.info import is_amd_gpu
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
 from .preprocess import MIN_ALPHA, load_record
@@ -35,7 +36,15 @@ comptime LOG2E: Float32 = 1.4426950408889634
 
 @always_inline
 def _atomic_add(p: F32Ptr, i: Int, v: Float32):
-    _ = Atomic[Float32].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
+    comptime if is_amd_gpu():
+        # The default (system) scope is a compare-and-swap loop on AMD; device
+        # ("agent") scope is a native float atomic add.
+        _ = Atomic[Float32, scope="agent"].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
+    else:
+        _ = Atomic[Float32].fetch_add[ordering=Ordering.RELAXED](p.unsafe_offset(i), v)
+
+
+comptime BUCKETS_PER_BLOCK = 4  # one warp per bucket
 
 
 def _blend_backward_kernel[
@@ -65,7 +74,8 @@ def _blend_backward_kernel[
 ):
     var background = background_arg.value
     comptime BLOCK = tile_w * tile_h
-    var bucket = block_idx.x
+    var warp_in_block = thread_idx.x // WARP_SIZE
+    var bucket = block_idx.x * BUCKETS_PER_BLOCK + warp_in_block
     if bucket >= Int(bucket_start[unsafe_offset=Int(n_tiles)]):
         return
     var tile = Int(bucket_tile[unsafe_offset=bucket])
@@ -109,9 +119,15 @@ def _blend_backward_kernel[
     var W = Int(width)
     var H = Int(height)
 
-    var s_last = stack_allocation[WARP_SIZE, UInt32, address_space=AddressSpace.SHARED]()
-    var s_after = stack_allocation[WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED]()
-    var s_grad = stack_allocation[WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED]()
+    var s_last = stack_allocation[
+        BUCKETS_PER_BLOCK * WARP_SIZE, UInt32, address_space=AddressSpace.SHARED
+    ]().unsafe_offset(warp_in_block * WARP_SIZE)
+    var s_after = stack_allocation[
+        BUCKETS_PER_BLOCK * WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED
+    ]().unsafe_offset(warp_in_block * WARP_SIZE * 4)
+    var s_grad = stack_allocation[
+        BUCKETS_PER_BLOCK * WARP_SIZE * 4, Float32, address_space=AddressSpace.SHARED
+    ]().unsafe_offset(warp_in_block * WARP_SIZE * 4)
     var snap = snapshots.unsafe_offset(bucket * BLOCK * 4)
 
     # Gradient accumulators for this lane's Gaussian.
@@ -155,7 +171,7 @@ def _blend_backward_kernel[
                 var local = Int(local32)
                 var x = Int(x0_32 + Int32(UInt32(local32) % UInt32(tile_w)))
                 var y = Int(y0_32 + Int32(UInt32(local32) // UInt32(tile_w)))
-                var s = snap.unsafe_offset(local * 4).unsafe_bitcast[SIMD[DType.float32, 4]]()[]
+                var s = snap.unsafe_offset(local * 4).unsafe_load[width=4, alignment=16]()
                 var img = SIMD[DType.float32, 4](0.0)
                 var gimg = SIMD[DType.float32, 4](0.0)
                 var fT: Float32 = 0
@@ -223,7 +239,7 @@ def _blend_backward_kernel[
         after_g -= w * col[1]
         after_b -= w * col[2]
         var one_minus = 1.0 - alpha
-        var rcp = 1.0 / max(one_minus, ONE_MINUS_ALPHA_EPS)
+        var rcp = recip(max(one_minus, ONE_MINUS_ALPHA_EPS))  # approximate, like Faster-GS's fast math
         var dL_dalpha = (
             (T * col[0] - after_r * rcp) * gr
             + (T * col[1] - after_g * rcp) * gg
@@ -232,9 +248,9 @@ def _blend_backward_kernel[
         )
         d_op += gaussian * dL_dalpha
         var helper = -alpha * dL_dalpha
-        d_ca += 0.5 * helper * dx * dx
-        d_cb += 0.5 * helper * dx * dy
-        d_cc += 0.5 * helper * dy * dy
+        d_ca += helper * dx * dx  # times 0.5 after the loop
+        d_cb += helper * dx * dy
+        d_cc += helper * dy * dy
         d_mx += helper * (ca * dx + cb * dy)
         d_my += helper * (cb * dx + cc * dy)
         T *= one_minus
@@ -242,9 +258,9 @@ def _blend_backward_kernel[
     if valid:
         _atomic_add(grad_mean2d, g * 2 + 0, d_mx)
         _atomic_add(grad_mean2d, g * 2 + 1, d_my)
-        _atomic_add(grad_conic, g * 3 + 0, d_ca)
-        _atomic_add(grad_conic, g * 3 + 1, d_cb)
-        _atomic_add(grad_conic, g * 3 + 2, d_cc)
+        _atomic_add(grad_conic, g * 3 + 0, 0.5 * d_ca)
+        _atomic_add(grad_conic, g * 3 + 1, 0.5 * d_cb)
+        _atomic_add(grad_conic, g * 3 + 2, 0.5 * d_cc)
         _atomic_add(grad_opacity, g, opacity * (1.0 - opacity) * d_op)
         comptime for k in range(3):
             _atomic_add(grad_color, g * 3 + k, d_col[k] * col_factor[k])
@@ -301,6 +317,6 @@ def blend_backward[
         Int32(width),
         Int32(height),
         Int32(grid_w),
-        grid_dim=max(n_bucket_blocks, 1),
-        block_dim=WARP_SIZE,
+        grid_dim=max((n_bucket_blocks + BUCKETS_PER_BLOCK - 1) // BUCKETS_PER_BLOCK, 1),
+        block_dim=BUCKETS_PER_BLOCK * WARP_SIZE,
     )

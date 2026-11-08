@@ -20,7 +20,7 @@ In one pass it:
 Outputs are *compacted*: the k-th visible Gaussian (in arbitrary order)
 writes slot k of every output array, so writes are contiguous and the arrays
 read by the later stages are small (they fit in L2 for multi-million splat
-scenes). `primitive_ids[slot]` maps a slot back to its Gaussian. Mean,
+scenes). In training, `slot_of[g]` maps a Gaussian to its slot. Mean,
 conic, opacity and pixel rectangle are packed into one 32-byte record per
 slot (one memory sector per random gather).
 """
@@ -97,12 +97,13 @@ def store_record(
         bitcast[DType.float32](UInt32(bounds & 0xFFFFFFFF)),
         bitcast[DType.float32](UInt32(bounds >> 32)),
     )
-    rec.unsafe_offset(slot * REC).unsafe_bitcast[SIMD[DType.float32, REC]]()[] = v
+    # Records are 32-byte aligned (allocations are 256-byte aligned): one vector store.
+    rec.unsafe_offset(slot * REC).unsafe_store[alignment=REC * 4](v)
 
 
 @always_inline
 def load_record(rec: F32Ptr, slot: Int) -> SIMD[DType.float32, REC]:
-    return rec.unsafe_offset(slot * REC).unsafe_bitcast[SIMD[DType.float32, REC]]()[]
+    return rec.unsafe_offset(slot * REC).unsafe_load[width=REC, alignment=REC * 4]()
 
 
 @always_inline
@@ -180,7 +181,6 @@ def _preprocess_kernel[
     cam: KernelVector[DType.float32, 32],
     depth_keys: U32Ptr,  # out [slot] depth bits (sort keys)
     slots: I32Ptr,  # out [slot] = slot (sort values)
-    primitive_ids: I32Ptr,  # out [slot] Gaussian index
     n_touched: U32Ptr,  # out [slot] exact tile count
     records: F32Ptr,  # out [slot, REC]
     colors: F32Ptr,  # out [slot, 3] SH color, not clamped
@@ -304,12 +304,15 @@ def _preprocess_kernel[
     var x1 = Int(min(pad_w, max(Float32(0.0), ceil(mx + ext_x))))
     var y0 = Int(min(pad_h, max(Float32(0.0), floor(my - ext_y))))
     var y1 = Int(min(pad_h, max(Float32(0.0), ceil(my + ext_y))))
-    var tx0 = x0 // tile_w
-    var tx1 = (x1 + tile_w - 1) // tile_w
-    var ty0 = y0 // tile_h
-    var ty1 = (y1 + tile_h - 1) // tile_h
-    var tw = tx1 - tx0
-    var tile_count = tw * (ty1 - ty0)
+    # 32-bit: ptxas (CUDA 12.9, sm_86) miscompiles the 64-bit tile count when ty0 == 0.
+    var tx0_32 = Int32(x0) // Int32(tile_w)
+    var tx1_32 = (Int32(x1) + Int32(tile_w - 1)) // Int32(tile_w)
+    var ty0_32 = Int32(y0) // Int32(tile_h)
+    var ty1_32 = (Int32(y1) + Int32(tile_h - 1)) // Int32(tile_h)
+    var tx0 = Int(tx0_32)
+    var ty0 = Int(ty0_32)
+    var tw = Int(tx1_32 - tx0_32)
+    var tile_count = Int((tx1_32 - tx0_32) * (ty1_32 - ty0_32))
     if tile_count == 0:
         active = False
     if warp.vote[LANE_MASK_DTYPE](active) == 0:
@@ -367,7 +370,6 @@ def _preprocess_kernel[
     var slot = Int(base) + Int(pop_count(vis_mask & lt))
     depth_keys[unsafe_offset=slot] = UInt32(depth.to_bits())
     slots[unsafe_offset=slot] = Int32(slot)
-    primitive_ids[unsafe_offset=slot] = Int32(g)
     comptime if train:
         slot_of[unsafe_offset=g] = Int32(slot)
     n_touched[unsafe_offset=slot] = UInt32(touched)
@@ -394,7 +396,6 @@ def preprocess[
     cam: SIMD[DType.float32, 32],
     depth_keys: U32Ptr,
     slots: I32Ptr,
-    primitive_ids: I32Ptr,
     n_touched: U32Ptr,
     records: F32Ptr,
     colors: F32Ptr,
@@ -419,7 +420,6 @@ def preprocess[
         KernelVector[DType.float32, 32](cam),
         depth_keys,
         slots,
-        primitive_ids,
         n_touched,
         records,
         colors,

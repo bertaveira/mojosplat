@@ -83,7 +83,9 @@ def _adam_sh_rest_kernel(
     eps: Float32,
 ):
     """Adam on sh_rest [N, K, 3] with the gradient recomputed per element
-    (basis(dir) * dL/dcolor) instead of read from a gradient buffer."""
+    (basis(dir) * dL/dcolor) instead of read from a gradient buffer. Bands
+    at or above `active_bases` are skipped: callers must never lower the
+    active degree once it has been raised."""
     var e = block_idx.x * BLOCK_SIZE + thread_idx.x
     var per = Int(rest_stride) * 3
     if e >= Int(n) * per:
@@ -93,9 +95,13 @@ def _adam_sh_rest_kernel(
     var rem = UInt32(e) - UInt32(g) * UInt32(per)
     var k = Int(rem // 3)
     var c = Int(rem % 3)
+    # Bands above the active SH degree have never had a gradient (the degree
+    # only grows), so their moments are 0 and Adam would leave them unchanged.
+    if k >= Int(active_bases) - 1:
+        return
     var grad: Float32 = 0.0
     var slot = Int(slot_of[unsafe_offset=g])
-    if slot >= 0 and k < Int(active_bases) - 1:
+    if slot >= 0:
         var dx = means[unsafe_offset=g * 3 + 0] - cam_pos[0]
         var dy = means[unsafe_offset=g * 3 + 1] - cam_pos[1]
         var dz = means[unsafe_offset=g * 3 + 2] - cam_pos[2]
@@ -144,6 +150,8 @@ struct Adam(Movable):
     def step(mut self, mut splats: Splats) raises:
         """One step on the first `count` rows, reading every gradient from
         `splats.grads`."""
+        if not splats.has_sh_rest_grad:
+            raise Error("Adam.step: no sh_rest gradient buffer (pass the ShRestGrad)")
         self._step(splats, Optional[ShRestGrad]())
 
     def step(mut self, mut splats: Splats, sh_rest: ShRestGrad) raises:
