@@ -29,7 +29,7 @@ from std.sys.info import is_amd_gpu
 from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
 from .blocks.contracts import Pipeline
 from .pipelines import Standard3DGS
-from .record import MIN_ALPHA, load_record
+from .record import load_record
 
 comptime ONE_MINUS_ALPHA_EPS: Float32 = 1e-6
 
@@ -211,7 +211,7 @@ def _blend_backward_kernel[
 
         var hit = resp.eval(Float32(x) + 0.5, Float32(y) + 0.5)
         var alpha = hit[0]
-        if alpha < MIN_ALPHA:
+        if R.skip_fragment(alpha):
             continue
         var w = T * alpha
         d_col[0] += w * gr

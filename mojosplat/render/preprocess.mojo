@@ -39,7 +39,7 @@ from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, LaneMask
 from .blocks.contracts import Pipeline
 from .blocks.shape import QuatScale
 from .pipelines import Standard3DGS
-from .record import MIN_ALPHA, N_SEQUENTIAL, pack_bounds, store_record
+from .record import N_SEQUENTIAL, pack_bounds, store_record
 
 comptime PREPROCESS_BLOCK = 128
 
@@ -90,7 +90,7 @@ def _preprocess_kernel[
         return
 
     var opacity = 1.0 / (1.0 + exp(-opacity_logits[unsafe_offset=g]))
-    if opacity < MIN_ALPHA:
+    if opacity < R.MIN_OPACITY:
         active = False
 
     var shape = QuatScale[dt](V3[dt].load(log_scales, g), V4[dt].load(rotations, g))

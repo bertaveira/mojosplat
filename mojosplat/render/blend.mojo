@@ -38,7 +38,7 @@ from std.memory import stack_allocation
 from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, U32Ptr, placeholder
 from .blocks.contracts import Pipeline
 from .pipelines import Standard3DGS
-from .record import MIN_ALPHA, load_record, record_bounds, unpack_bounds
+from .record import load_record, record_bounds, unpack_bounds
 
 comptime T_MIN: Float32 = 1e-4
 comptime SUBTILE_W = 8
@@ -144,8 +144,12 @@ def _blend_kernel[
             pending &= pending - 1
             var src = slab.unsafe_offset(j * STRIDE)
             var alpha = R.Loaded(src).eval(px, py)[0]
-            if alpha < MIN_ALPHA:
+            if R.skip_fragment(alpha):
                 continue
+            comptime if R.STOP_BEFORE_LAST:
+                if T * (1.0 - alpha) <= T_MIN:
+                    done = True
+                    continue
             var weight = T * alpha
             comptime for k in range(CDIM):
                 pix[k] += weight * R.channel(src, k)

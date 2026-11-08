@@ -16,8 +16,8 @@ from std.math import exp2, log, sqrt
 from ....core.linalg import Sym2, V2
 from ....core.splats import ExtraColumns
 from ....core.types import SlabPtr
-from ...record import MIN_ALPHA_RCP, REC
-from ..contracts import Hit, LoadedResponse, Response, ScreenGrad
+from ...record import MIN_ALPHA, MIN_ALPHA_RCP, REC
+from ..contracts import ColumnSpec, Hit, LoadedResponse, Response, ScreenGrad
 from ..screen import ConicFromCov, DILATION
 
 comptime MIN_COV2D_DET: Float32 = 1e-6
@@ -174,6 +174,17 @@ struct Gaussian2D(ImplicitlyCopyable, Movable, Response):
     comptime GRAD = 6
     comptime EXTRA = 0
     comptime NUM_COLUMNS = 0
+    comptime MIN_OPACITY = MIN_ALPHA
+    comptime STOP_BEFORE_LAST = False
+
+    @always_inline
+    @staticmethod
+    def skip_fragment(alpha: Float32) -> Bool:
+        return alpha < MIN_ALPHA
+
+    @staticmethod
+    def columns() -> List[ColumnSpec]:
+        return List[ColumnSpec]()
 
     var mean: V2[DType.float32]
     var inverse: ConicFromCov[DType.float32]
@@ -245,6 +256,11 @@ struct Gaussian2D(ImplicitlyCopyable, Movable, Response):
             V2[DType.float32](grad[0], grad[1]),
             self.inverse.backward(Sym2[DType.float32](grad[2], grad[3], grad[4])),
         )
+
+    @always_inline
+    @staticmethod
+    def opacity_gradient(slot_grad: SIMD[DType.float32, 8]) -> Float32:
+        return slot_grad[5]
 
     @always_inline
     @staticmethod

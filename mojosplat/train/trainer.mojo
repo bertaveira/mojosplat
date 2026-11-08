@@ -24,6 +24,8 @@ from ..io.ply import write_ply
 from ..model.init import splats_from_points
 from ..model.morton import morton_order
 from ..model.splats import Attr, Splats
+from ..render.blocks.contracts import Pipeline
+from ..render.pipelines import Standard3DGS
 from ..render.rasterizer import Rasterizer
 from .adam import Adam
 from .dataset import Dataset
@@ -141,7 +143,7 @@ def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> 
     return Float32(exp(log(Float64(init)) * (1.0 - t) + log(Float64(final)) * t))
 
 
-struct Trainer(Movable):
+struct Trainer[Pipe: Pipeline = Standard3DGS](Movable):
     var ctx: DeviceContext
     var config: TrainConfig
     var dataset: Dataset
@@ -161,6 +163,14 @@ struct Trainer(Movable):
         self.ctx = ctx
         self.config = config.copy()
         self.splats = splats_from_points(ctx, dataset.points.xyz, dataset.points.rgb, config.sh_degree)
+        var specs = Self.Pipe.Resp.columns()
+        for s in specs:
+            self.splats.add_column(
+                s.name,
+                s.width,
+                trainable=s.trainable,
+                values=List[Float32](length=self.splats.count * s.width, fill=s.init_value),
+            )
         self.splats.enable_training(sh_rest_grad=False)  # Adam recomputes it (write_all=False)
         var lr = SIMD[DType.float32, 8](0.0)
         lr[Attr.MEANS] = config.lr_means_init * dataset.scene_extent
@@ -169,6 +179,8 @@ struct Trainer(Movable):
         lr[Attr.OPACITY_LOGITS] = config.lr_opacity
         lr[Attr.SH0] = config.lr_sh0
         lr[Attr.SH_REST] = config.lr_sh_rest
+        for i in range(len(specs)):
+            lr[Attr.COUNT + i] = specs[i].lr
         self.adam = Adam(lr)
         self.rasterizer = Rasterizer(ctx)
         self.loss = PhotometricLoss(ctx, config.lambda_dssim)
@@ -237,13 +249,13 @@ struct Trainer(Movable):
         var cam = view.camera
         var image = dptr(self.image)
         var grad = dptr(self.grad_image)
-        var st = self.rasterizer.forward(
+        var st = self.rasterizer.forward[Self.Pipe](
             self.splats.view(), cam, self.config.background, image, self.active_sh_degree()
         )
         var log_now = self.config.log_interval > 0 and (it + 1) % self.config.log_interval == 0
         var value = self.loss.backward(image, dptr(view.image), grad, cam.width, cam.height, compute_loss=log_now)
         var stats = self.config.densify and it < self.config.densify_until
-        self.rasterizer.backward(
+        self.rasterizer.backward[Self.Pipe](
             self.splats.view(),
             st,
             image,
@@ -259,7 +271,7 @@ struct Trainer(Movable):
             it + 1,
             self.config.lr_means_steps,
         )
-        self.adam.step(self.splats, self.rasterizer.sh_rest_grad(st))
+        self.adam.step(self.splats, self.rasterizer.sh_rest_grad[Self.Pipe](st))
         self.iteration += 1
         return value if log_now else -1.0
 
@@ -280,7 +292,7 @@ struct Trainer(Movable):
         for i in range(n):
             var cam = self.dataset.test[i].camera if test else self.dataset.train[i].camera
             var target = dptr(self.dataset.test[i].image) if test else dptr(self.dataset.train[i].image)
-            self.rasterizer.render(
+            self.rasterizer.render[Self.Pipe](
                 self.splats.view(), cam, self.config.background, dptr(self.image), self.config.sh_degree
             )
             total += self.loss.psnr(dptr(self.image), target, cam.width, cam.height)

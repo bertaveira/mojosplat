@@ -6,6 +6,7 @@ slot, into blend, and its gradient back to the column.
 """
 
 from max.gpu.host import DeviceContext
+from std.os.path import exists
 from std.testing import assert_raises, assert_true, TestSuite
 
 from mojosplat.core.camera import Camera
@@ -16,14 +17,17 @@ from mojosplat.gpu.elementwise import fill_f32
 from mojosplat.io.arrays import download
 from mojosplat.model.splats import Splats
 from mojosplat.render.blocks.appearance.sh import SphericalHarmonics
-from mojosplat.render.blocks.contracts import Hit, LoadedResponse, Pipeline, Response, ScreenGrad
+from mojosplat.render.blocks.contracts import ColumnSpec, Hit, LoadedResponse, Pipeline, Response, ScreenGrad
 from mojosplat.render.blocks.placement.pinhole_ewa import PinholeEWA
 from mojosplat.render.blocks.response.gaussian2d import Gaussian2D, LoadedGaussian2D
 from mojosplat.render.pipelines import Standard3DGS
 from mojosplat.render.rasterizer import Rasterizer
 from mojosplat.render.record import REC
+from mojosplat.train.dataset import load_colmap_dataset
+from mojosplat.train.trainer import TrainConfig, Trainer
 
 comptime _F8 = SIMD[DType.float32, 8]
+comptime GARDEN = "data/mipnerf360/garden"
 
 
 struct LoadedScaled(ImplicitlyCopyable, LoadedResponse, Movable):
@@ -75,6 +79,17 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
     comptime GRAD = 7
     comptime EXTRA = 1
     comptime NUM_COLUMNS = 1
+    comptime MIN_OPACITY = Gaussian2D.MIN_OPACITY
+    comptime STOP_BEFORE_LAST = Gaussian2D.STOP_BEFORE_LAST
+
+    @always_inline
+    @staticmethod
+    def skip_fragment(alpha: Float32) -> Bool:
+        return Gaussian2D.skip_fragment(alpha)
+
+    @staticmethod
+    def columns() -> List[ColumnSpec]:
+        return [ColumnSpec("scale_of_alpha", 1, True, 0.9, 0.005)]
 
     var inner: Gaussian2D
 
@@ -98,7 +113,7 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
     @staticmethod
     def extra(cols: ExtraColumns, g: Int) -> _F8:
         var v = _F8(0.0)
-        v[0] = cols.c0[unsafe_offset=g]
+        v[0] = min(max(cols.c0[unsafe_offset=g], Float32(0.01)), Float32(1.0))  # alpha must stay below 1
         return v
 
     @always_inline
@@ -125,6 +140,11 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
     @always_inline
     def backward(self, grad: _F8) -> ScreenGrad:
         return self.inner.backward(grad)
+
+    @always_inline
+    @staticmethod
+    def opacity_gradient(slot_grad: _F8) -> Float32:
+        return Gaussian2D.opacity_gradient(slot_grad)
 
     @always_inline
     @staticmethod
@@ -222,6 +242,54 @@ def test_backward_rejects_another_pipelines_state() raises:
         rast.backward[Standard3DGS](view, st, dptr(image), dptr(grad_image), splats.grad_view())
     ctx.synchronize()
     _ = (image^, grad_image^, splats^)
+
+
+def test_trainer_with_another_pipeline() raises:
+    """A full training path through a second pipeline: its column gets a learning
+    rate, survives densification, and moves."""
+    if not exists(GARDEN):
+        print("  SKIP: needs", GARDEN)
+        return
+    var ctx = DeviceContext()
+    var config = TrainConfig()
+    config.log_interval = 50
+    var trainer = Trainer[ScaledPipeline](ctx, load_colmap_dataset(ctx, GARDEN), config)
+    var psnr0 = trainer.evaluate(test=True)
+    var first: Float64 = -1.0
+    var last: Float64 = -1.0
+    var n0 = trainer.splats.count
+    for _ in range(800):
+        var l = trainer.step()
+        if l >= 0.0:
+            if first < 0.0:
+                first = l
+            last = l
+    var psnr1 = trainer.evaluate(test=True)
+    var column = download(ctx, trainer.splats.params[6], trainer.splats.count)
+    var moved = 0
+    for v in column:
+        if abs(v - 0.9) > 1e-3:
+            moved += 1
+    print(
+        "  loss",
+        first,
+        "->",
+        last,
+        "| PSNR",
+        psnr0,
+        "->",
+        psnr1,
+        "| Gaussians",
+        n0,
+        "->",
+        trainer.splats.count,
+        "| column moved",
+        moved,
+    )
+    assert_true(last < first, "loss did not decrease")
+    assert_true(psnr1 > psnr0 + 3.0, "test PSNR too low")
+    assert_true(trainer.splats.count > n0, "densification did not add Gaussians")
+    assert_true(moved > trainer.splats.count // 2, "the pipeline's column did not train")
 
 
 def main() raises:

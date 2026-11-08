@@ -37,6 +37,17 @@ struct GaussianGrad[dt: DType](ImplicitlyCopyable, Movable):
 
 
 @fieldwise_init
+struct ColumnSpec(Copyable, Movable):
+    """A `Splats` column a response needs for training."""
+
+    var name: String
+    var width: Int
+    var trainable: Bool
+    var init_value: Float32
+    var lr: Float32
+
+
+@fieldwise_init
 struct ScreenGrad(ImplicitlyCopyable, Movable):
     """dL/d(image-space position and covariance) of one Gaussian."""
 
@@ -114,6 +125,18 @@ trait Response(Deinitable):
     comptime GRAD: Int  # per-slot gradient values, see `grad_index`
     comptime EXTRA: Int  # per-slot floats saved besides the record (<= 8)
     comptime NUM_COLUMNS: Int  # `Splats` columns owned by the response
+    comptime MIN_OPACITY: Float32  # Gaussians below this are culled
+    comptime STOP_BEFORE_LAST: Bool  # True: a fragment that would saturate the pixel is not applied
+
+    @staticmethod
+    def skip_fragment(alpha: Float32) -> Bool:
+        """True if a fragment with this alpha contributes nothing."""
+        ...
+
+    @staticmethod
+    def columns() -> List[ColumnSpec]:
+        """The columns `Trainer` adds for this response, after the standard ones."""
+        ...
 
     # --- Preprocess ---
 
@@ -163,6 +186,11 @@ trait Response(Deinitable):
 
     def backward(self, grad: SIMD[DType.float32, 8]) -> ScreenGrad:
         """Slot gradients (`GRAD` lanes of `Loaded.gradient`) -> screen gradients."""
+        ...
+
+    @staticmethod
+    def opacity_gradient(slot_grad: SIMD[DType.float32, 8]) -> Float32:
+        """dL/d(opacity logit) from the slot gradients."""
         ...
 
     @staticmethod

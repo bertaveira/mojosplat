@@ -95,7 +95,7 @@ def _preprocess_backward_kernel[
     var slot_grad = SIMD[DType.float32, 8](0.0)
     comptime for k in range(R.GRAD):
         slot_grad[k] = grad_resp[unsafe_offset=R.grad_index(k, Int(n_slots), s)]
-    out_opacity[unsafe_offset=g] = slot_grad[5]
+    out_opacity[unsafe_offset=g] = R.opacity_gradient(slot_grad)
     R.write_gradients(cols.skip(Pipe.Appear.NUM_COLUMNS), out_cols.skip(Pipe.Appear.NUM_COLUMNS), g, slot_grad)
 
     # Forward, top to bottom.
