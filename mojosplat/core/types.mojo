@@ -2,6 +2,7 @@
 
 from max.gpu import WARP_SIZE
 from max.gpu.host import DeviceBuffer
+from max.gpu.memory import AddressSpace
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 
 comptime F32Ptr = Pointer[Float32, MutUntrackedOrigin]
@@ -63,3 +64,7 @@ def num_blocks(n: Int, block: Int = BLOCK_SIZE) -> Int:
 def dptr[dtype: DType](buf: DeviceBuffer[dtype]) -> Pointer[Scalar[dtype], MutUntrackedOrigin]:
     """Raw device pointer of a DeviceBuffer, usable as a kernel argument."""
     return buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+
+
+# A pointer into warp-local shared memory (a blend slab), passed to blocks.
+comptime SlabPtr = Pointer[Float32, MutUntrackedOrigin, address_space=AddressSpace.SHARED]

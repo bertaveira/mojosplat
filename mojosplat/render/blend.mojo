@@ -8,8 +8,8 @@ the tile's list on its own:
 
   * each lane fetches one instance of a 32-wide chunk (one 32-byte record),
   * the warp votes on the ones whose screen rectangle overlaps its sub-tile,
-  * those are shared through a warp-private shared-memory slab
-    (3 x float4 per Gaussian) and composited by every lane.
+  * those are shared through a warp-private shared-memory slab and
+    composited by every lane.
 
 There are no block barriers (previously the main stall: warps with little
 work waited for the busiest one), duplicate fetches across a block's warps
@@ -21,9 +21,9 @@ needs (Faster-GS / Taming-3DGS): every pixel's (color, T) before each
 bucket of 32 instances, its final T and the index of its last contributing
 Gaussian, the per-tile maximum of that index, and each bucket's tile.
 
-The Gaussian is evaluated with a single `exp2` by folding -0.5 * log2(e)
-into the conic. Semantics (as Faster-GS / 3DGS): fragments with
-alpha < 1/255 are skipped; a pixel stops after the fragment that brings its
+What a fragment contributes comes from the pipeline's `Response`
+(blocks/contracts.mojo), which also lays out the slab. Semantics (as
+Faster-GS / 3DGS): fragments with alpha < 1/255 are skipped; a pixel stops after the fragment that brings its
 transmittance below 1e-4; colors are not clamped.
 """
 
@@ -33,20 +33,20 @@ from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.sync import barrier, syncwarp
 from std.bit import count_trailing_zeros
-from std.math import exp2
 from std.memory import stack_allocation
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, U32Ptr, placeholder
-from .preprocess import MIN_ALPHA, load_record, record_bounds, unpack_bounds
+from .blocks.contracts import Pipeline
+from .pipelines import Standard3DGS
+from .record import MIN_ALPHA, load_record, record_bounds, unpack_bounds
 
 comptime T_MIN: Float32 = 1e-4
-comptime LOG2E: Float32 = 1.4426950408889634
 comptime SUBTILE_W = 8
 comptime SUBTILE_H = WARP_SIZE // SUBTILE_W
 
 
 def _blend_kernel[
-    tile_w: Int, tile_h: Int, CDIM: Int, train: Bool
+    tile_w: Int, tile_h: Int, CDIM: Int, train: Bool, Pipe: Pipeline
 ](
     tile_offsets: U32Ptr,  # [n_tiles + 1]
     instance_ids: I32Ptr,  # [M] slots sorted by (tile, depth)
@@ -69,7 +69,8 @@ def _blend_kernel[
     comptime BLOCK = tile_w * tile_h
     comptime WARPS = BLOCK // WARP_SIZE
     comptime SUBGRID_W = tile_w // SUBTILE_W
-    comptime STRIDE = 12  # floats per Gaussian in the slab
+    comptime R = Pipe.Resp
+    comptime STRIDE = R.SLAB  # floats per Gaussian in the slab
     comptime assert CDIM <= 3, "slab holds 3 color channels"
     comptime assert (
         tile_w % SUBTILE_W == 0 and tile_h % SUBTILE_H == 0
@@ -131,36 +132,19 @@ def _blend_kernel[
                 var c = SIMD[DType.float32, 4](0.0)
                 comptime for k in range(CDIM):
                     c[k] = max(colors[unsafe_offset=g * CDIM + k], 0.0)
-                var dst = slab.unsafe_offset(lane * STRIDE)
-                dst.unsafe_bitcast[SIMD[DType.float32, 4]]()[] = SIMD[DType.float32, 4](
-                    rec[0], rec[1], -0.5 * LOG2E * rec[2], -LOG2E * rec[3]
-                )
-                dst.unsafe_offset(4).unsafe_bitcast[SIMD[DType.float32, 4]]()[] = SIMD[DType.float32, 4](
-                    -0.5 * LOG2E * rec[4], rec[5], c[0], c[1]
-                )
-                dst.unsafe_offset(8).unsafe_bitcast[SIMD[DType.float32, 4]]()[] = SIMD[DType.float32, 4](
-                    c[2], 0.0, 0.0, 0.0
-                )
+                R.store_slab(slab.unsafe_offset(lane * STRIDE), rec, c)
         var pending = warp.vote[LANE_MASK_DTYPE](overlaps)
         syncwarp()
         while not done and pending != 0:
             var j = Int(count_trailing_zeros(pending))
             pending &= pending - 1
             var src = slab.unsafe_offset(j * STRIDE)
-            var v0 = src.unsafe_bitcast[SIMD[DType.float32, 4]]()[]
-            var v1 = src.unsafe_offset(4).unsafe_bitcast[SIMD[DType.float32, 4]]()[]
-            var dx = v0[0] - px
-            var dy = v0[1] - py
-            var power = dx * (v0[2] * dx + v0[3] * dy) + v1[0] * dy * dy
-            var alpha = v1[1] * exp2(min(power, 0.0))
+            var alpha = R.alpha_at(src, px, py)
             if alpha < MIN_ALPHA:
                 continue
             var weight = T * alpha
-            pix[0] += weight * v1[2]
-            comptime if CDIM > 1:
-                pix[1] += weight * v1[3]
-            comptime if CDIM > 2:
-                pix[2] += weight * src[unsafe_offset=8]
+            comptime for k in range(CDIM):
+                pix[k] += weight * R.channel(src, k)
             T *= 1.0 - alpha
             comptime if train:
                 last = i - start + j + 1
@@ -215,7 +199,7 @@ def bucket_bound(n_instances: Int, n_tiles: Int) -> Int:
 
 
 def blend[
-    tile_w: Int, tile_h: Int, CDIM: Int, train: Bool = False
+    tile_w: Int, tile_h: Int, CDIM: Int, train: Bool = False, Pipe: Pipeline = Standard3DGS
 ](
     ctx: DeviceContext,
     stream: DeviceStream,
@@ -237,7 +221,7 @@ def blend[
     var grid_w = (width + tile_w - 1) // tile_w
     var grid_h = (height + tile_h - 1) // tile_h
     stream.enqueue_function(
-        ctx.compile_function[_blend_kernel[tile_w, tile_h, CDIM, train]](),
+        ctx.compile_function[_blend_kernel[tile_w, tile_h, CDIM, train, Pipe]](),
         tile_offsets,
         instance_ids,
         records,

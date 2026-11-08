@@ -12,7 +12,7 @@ from std.math import rsqrt, sqrt
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, KernelVector, dptr, num_blocks
 from ..model.splats import Attr, Splats
 from ..render.preprocess_backward import ShRestGrad
-from ..render.sh import sh_rest_basis
+from ..render.blocks.appearance.sh import sh_rest_basis
 
 
 @always_inline

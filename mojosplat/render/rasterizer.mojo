@@ -37,7 +37,9 @@ from .blend import blend, bucket_bound, bucket_counts
 from ..core.camera import CAM_POS_X, CAM_POS_Y, CAM_POS_Z, Camera
 from ..core.types import F32Ptr, I32Ptr, U16Ptr, U32Ptr, dptr, placeholder
 from .instances import create_instances, depth_ordering, tile_key_bits, tile_offsets
-from .preprocess import REC, preprocess
+from .pipelines import Standard3DGS
+from .preprocess import preprocess
+from .record import REC
 from ..gpu.scan import exclusive_scan, scan_workspace_size
 from ..core.math import sh_num_bases
 from ..gpu.sort import radix_sort_pairs, sort_hist_size, sort_partials_size
@@ -108,6 +110,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
     """Forward renderer and its backward; owns and reuses scratch buffers."""
 
     comptime CDIM = 3
+    comptime SLOT_GRADS = Standard3DGS.Resp.GRAD  # floats per slot before the color gradient
     comptime BLOCK = Self.tile_w * Self.tile_h
     var ctx: DeviceContext
     # Per-Gaussian scratch (slot arrays, records and colors come from `arena`)
@@ -362,14 +365,13 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         var stream = ctx.stream()
         var n = splats.count
         var nv = max(st.n_visible, 1)
-        if nv * 9 > self.grad_cap:
-            self.grad_cap = Self._grow(self.grad_cap, nv * 9)
+        var grad_floats = nv * (Self.SLOT_GRADS + Self.CDIM)
+        if grad_floats > self.grad_cap:
+            self.grad_cap = Self._grow(self.grad_cap, grad_floats)
             self.grad_scratch = ctx.enqueue_create_buffer[DType.float32](self.grad_cap)
-        var g_mean2d = dptr(self.grad_scratch)
-        var g_conic = g_mean2d.unsafe_offset(nv * 2)
-        var g_opacity = g_mean2d.unsafe_offset(nv * 5)
-        var g_color = g_mean2d.unsafe_offset(nv * 6)
-        fill_f32(ctx, g_mean2d, 0.0, nv * 9)
+        var g_resp = dptr(self.grad_scratch)
+        var g_color = g_resp.unsafe_offset(nv * Self.SLOT_GRADS)
+        fill_f32(ctx, g_resp, 0.0, grad_floats)
         if st.n_instances > 0:
             blend_backward[Self.tile_w, Self.tile_h](
                 ctx,
@@ -388,9 +390,8 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
                 st.final_T,
                 st.n_processed,
                 st.snapshots,
-                g_mean2d,
-                g_conic,
-                g_opacity,
+                g_resp,
+                nv,
                 g_color,
                 st.n_tiles,
                 st.width,
@@ -405,9 +406,8 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
             splats.sh_rest,
             st.cam,
             st.slot_of,
-            g_mean2d,
-            g_conic,
-            g_opacity,
+            g_resp,
+            nv,
             g_color,
             grads.means,
             grads.log_scales,
@@ -429,7 +429,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         var nv = max(st.n_visible, 1)
         return ShRestGrad(
             st.slot_of,
-            dptr(self.grad_scratch).unsafe_offset(nv * 6),
+            dptr(self.grad_scratch).unsafe_offset(nv * Self.SLOT_GRADS),
             SIMD[DType.float32, 4](st.cam[CAM_POS_X], st.cam[CAM_POS_Y], st.cam[CAM_POS_Z], 0.0),
             st.active_bases,
         )

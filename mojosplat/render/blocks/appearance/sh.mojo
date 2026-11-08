@@ -11,7 +11,7 @@ bases in use (e.g. a degree-3 buffer rendered at degree 1).
 
 from std.math import rsqrt
 
-from ..core.math import (
+from ....core.math import (
     SH_C0,
     SH_C1,
     SH_C2A,
@@ -31,7 +31,8 @@ from ..core.math import (
     SH_C3J,
     SH_C3K,
 )
-from ..core.types import F32Ptr
+from ....core.types import F32Ptr
+from ..contracts import Appearance
 
 
 @always_inline
@@ -266,3 +267,29 @@ def sh_to_color_backward(
         (-xr * zr * gdx - yr * zr * gdy + (xx_r + yy_r) * gdz) * s,
         0.0,
     )
+
+
+struct SphericalHarmonics(Appearance):
+    @always_inline
+    @staticmethod
+    def color(
+        sh0: F32Ptr, sh_rest: F32Ptr, g: Int, dir: SIMD[DType.float32, 4], active_bases: Int, rest_stride: Int
+    ) -> SIMD[DType.float32, 4]:
+        return sh_to_color(sh0, sh_rest, g, dir, active_bases, rest_stride)
+
+    @always_inline
+    @staticmethod
+    def backward(
+        sh_rest: F32Ptr,
+        grad_sh0: F32Ptr,
+        grad_sh_rest: F32Ptr,
+        g: Int,
+        dir: SIMD[DType.float32, 4],
+        grad_color: SIMD[DType.float32, 4],
+        active_bases: Int,
+        rest_stride: Int,
+        write_rest: Bool,
+    ) -> SIMD[DType.float32, 4]:
+        return sh_to_color_backward(
+            sh_rest, grad_sh0, grad_sh_rest, g, dir, grad_color, active_bases, rest_stride, write_rest
+        )

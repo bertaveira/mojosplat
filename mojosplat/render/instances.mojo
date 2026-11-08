@@ -14,11 +14,12 @@ from max.gpu import WARP_SIZE, block_idx, lane_id, thread_idx
 from max.gpu.host import DeviceContext, DeviceStream
 from max.gpu.primitives import warp
 from std.bit import count_trailing_zeros, pop_count
-from std.math import log
 
 from ..gpu.elementwise import fill_u32
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
-from .preprocess import MIN_ALPHA_RCP, N_SEQUENTIAL, load_record, record_bounds, tile_rect, will_contribute
+from .blocks.contracts import Pipeline
+from .pipelines import Standard3DGS
+from .record import N_SEQUENTIAL, load_record, record_bounds, tile_rect
 
 
 def _depth_ordering_kernel(
@@ -33,7 +34,7 @@ def _depth_ordering_kernel(
 
 
 def _create_instances_kernel[
-    key_dtype: DType, tile_w: Int, tile_h: Int
+    key_dtype: DType, tile_w: Int, tile_h: Int, Pipe: Pipeline
 ](
     sorted_ids: I32Ptr,  # [n_visible] slots in depth order
     offsets: U32Ptr,  # [n_visible] exclusive scan of n_touched in depth order
@@ -59,12 +60,8 @@ def _create_instances_kernel[
     # 32-bit: ptxas (CUDA 12.9, sm_86) miscompiles the 64-bit form of this product when ty0 == 0.
     var tw = Int(r[1] - r[0])
     var tile_count = Int((r[1] - r[0]) * (r[3] - r[2]))
-    var mx = rec[0] - 0.5
-    var my = rec[1] - 0.5
-    var ca = rec[2]
-    var cb = rec[3]
-    var cc = rec[4]
-    var pt = log(rec[5] * MIN_ALPHA_RCP)
+    comptime R = Pipe.Resp
+    var args = R.tile_args(rec)
     var start = Int(offsets[unsafe_offset=ii])
     # Never write past this Gaussian's slots, even if the recomputed test
     # disagreed with the count from preprocessing (different FP contraction).
@@ -75,7 +72,7 @@ def _create_instances_kernel[
         for t in range(min(tile_count, N_SEQUENTIAL)):
             var tx = tx0 + t % tw
             var ty = ty0 + t // tw
-            if w < end and will_contribute[tile_w, tile_h](mx, my, ca, cb, cc, tx, ty, pt):
+            if w < end and R.touches_tile[tile_w, tile_h](args, tx, ty):
                 keys[unsafe_offset=w] = Scalar[key_dtype](ty * Int(grid_w) + tx)
                 instance_ids[unsafe_offset=w] = Int32(g)
                 w += 1
@@ -92,17 +89,14 @@ def _create_instances_kernel[
         var s_count = Int(warp.shuffle_idx(Int32(tile_count), src))
         var s_w = Int(warp.shuffle_idx(Int32(w), src))
         var s_end = Int(warp.shuffle_idx(Int32(end), src))
-        var s_mx = warp.shuffle_idx(mx, src)
-        var s_my = warp.shuffle_idx(my, src)
-        var s_ca = warp.shuffle_idx(ca, src)
-        var s_cb = warp.shuffle_idx(cb, src)
-        var s_cc = warp.shuffle_idx(cc, src)
-        var s_pt = warp.shuffle_idx(pt, src)
+        var s_args = SIMD[DType.float32, 8](0.0)
+        comptime for k in range(R.TILE_ARGS):
+            s_args[k] = warp.shuffle_idx(args[k], src)
         var t = N_SEQUENTIAL + lane
         while t - lane < s_count:
             var tx = s_tx0 + t % s_tw
             var ty = s_ty0 + t // s_tw
-            var hit = t < s_count and will_contribute[tile_w, tile_h](s_mx, s_my, s_ca, s_cb, s_cc, tx, ty, s_pt)
+            var hit = t < s_count and R.touches_tile[tile_w, tile_h](s_args, tx, ty)
             var hits = warp.vote[LANE_MASK_DTYPE](hit)
             if hit:
                 var dst = s_w + Int(pop_count(hits & lt))
@@ -163,7 +157,7 @@ def depth_ordering(
 
 
 def create_instances[
-    key_dtype: DType, tile_w: Int, tile_h: Int
+    key_dtype: DType, tile_w: Int, tile_h: Int, Pipe: Pipeline = Standard3DGS
 ](
     ctx: DeviceContext,
     stream: DeviceStream,
@@ -178,7 +172,7 @@ def create_instances[
     n_visible: Int,
 ) raises:
     stream.enqueue_function(
-        ctx.compile_function[_create_instances_kernel[key_dtype, tile_w, tile_h]](),
+        ctx.compile_function[_create_instances_kernel[key_dtype, tile_w, tile_h, Pipe]](),
         sorted_ids,
         offsets,
         n_touched,
