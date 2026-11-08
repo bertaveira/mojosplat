@@ -34,6 +34,7 @@ from std.math import ceil, exp, floor
 
 from ..core.camera import CAM_FAR, CAM_NEAR, CAM_POS_X, CAM_POS_Y, CAM_POS_Z
 from ..core.linalg import V3, V4
+from ..core.splats import AppearanceSettings, ExtraColumns
 from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
 from .blocks.contracts import Pipeline
 from .blocks.shape import QuatScale
@@ -50,21 +51,23 @@ def _preprocess_kernel[
     log_scales: F32Ptr,  # [N, 3]
     rotations: F32Ptr,  # [N, 4] (w, x, y, z), unnormalized
     opacity_logits: F32Ptr,  # [N]
-    sh0: F32Ptr,  # [N, 3]
-    sh_rest: F32Ptr,  # [N, rest_stride, 3]
+    col0: F32Ptr,  # columns after the core ones (see ExtraColumns)
+    col1: F32Ptr,
+    col2: F32Ptr,
+    col3: F32Ptr,
     cam: KernelVector[DType.float32, 32],
     depth_keys: U32Ptr,  # out [slot] depth bits (sort keys)
     slots: I32Ptr,  # out [slot] = slot (sort values)
     n_touched: U32Ptr,  # out [slot] exact tile count
     records: F32Ptr,  # out [slot, REC]
-    colors: F32Ptr,  # out [slot, 3] SH color, not clamped
+    colors: F32Ptr,  # out [slot, 3] color, not clamped
+    response_extra: F32Ptr,  # out [slot, Response.EXTRA]
     counters: U32Ptr,  # [2] (n_visible, n_instances), zeroed by the caller
     slot_of: I32Ptr,  # out [N] (train only): slot of each Gaussian, -1 if culled
     n: Int32,
     grid_w: Int32,
     grid_h: Int32,
-    active_bases: Int32,
-    rest_stride: Int32,
+    settings: KernelVector[DType.int32, 4],
 ):
     var lane = lane_id()
     var idx = block_idx.x * PREPROCESS_BLOCK + thread_idx.x
@@ -183,8 +186,13 @@ def _preprocess_kernel[
         mean.z.cast[DType.float32]() - cam[CAM_POS_Z],
         0.0,
     )
+    var cols = ExtraColumns(col0, col1, col2, col3)
+    comptime if R.EXTRA > 0:
+        var extra = R.extra(cols.skip(Pipe.Appear.NUM_COLUMNS), g)
+        comptime for k in range(R.EXTRA):
+            response_extra[unsafe_offset=slot * R.EXTRA + k] = extra[k]
     # Stored unclamped: blending clamps at 0, the backward needs the mask.
-    var rgb = Pipe.Appear.color(sh0, sh_rest, g, dir, Int(active_bases), Int(rest_stride))
+    var rgb = Pipe.Appear.color(cols, g, dir, settings.value)
     colors[unsafe_offset=slot * 3 + 0] = rgb[0]
     colors[unsafe_offset=slot * 3 + 1] = rgb[1]
     colors[unsafe_offset=slot * 3 + 2] = rgb[2]
@@ -199,21 +207,20 @@ def preprocess[
     log_scales: F32Ptr,
     rotations: F32Ptr,
     opacity_logits: F32Ptr,
-    sh0: F32Ptr,
-    sh_rest: F32Ptr,
+    extras: ExtraColumns,
     cam: SIMD[DType.float32, 32],
     depth_keys: U32Ptr,
     slots: I32Ptr,
     n_touched: U32Ptr,
     records: F32Ptr,
     colors: F32Ptr,
+    response_extra: F32Ptr,
     counters: U32Ptr,
     slot_of: I32Ptr,
     n: Int,
     grid_w: Int,
     grid_h: Int,
-    active_bases: Int,
-    rest_stride: Int,
+    settings: AppearanceSettings,
 ) raises:
     if n == 0:
         return
@@ -223,21 +230,23 @@ def preprocess[
         log_scales,
         rotations,
         opacity_logits,
-        sh0,
-        sh_rest,
+        extras.c0,
+        extras.c1,
+        extras.c2,
+        extras.c3,
         KernelVector[DType.float32, 32](cam),
         depth_keys,
         slots,
         n_touched,
         records,
         colors,
+        response_extra,
         counters,
         slot_of,
         Int32(n),
         Int32(grid_w),
         Int32(grid_h),
-        Int32(active_bases),
-        Int32(rest_stride),
+        KernelVector[DType.int32, 4](settings),
         grid_dim=num_blocks(n, PREPROCESS_BLOCK),
         block_dim=PREPROCESS_BLOCK,
     )

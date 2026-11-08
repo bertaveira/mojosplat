@@ -11,8 +11,7 @@ from std.math import rsqrt, sqrt
 
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, KernelVector, dptr, num_blocks
 from ..model.splats import Attr, Splats
-from ..render.preprocess_backward import ShRestGrad
-from ..render.blocks.appearance.sh import sh_rest_basis
+from ..render.blocks.appearance.sh import ShRestGrad, sh_rest_basis
 
 
 @always_inline
@@ -128,7 +127,7 @@ struct Adam(Movable):
     The moments live in `Splats` (exp_avg / exp_avg_sq), next to the rows
     they belong to."""
 
-    var lr: SIMD[DType.float32, 8]  # per Attr index
+    var lr: SIMD[DType.float32, 8]  # per `Splats` column
     var beta1: Float32
     var beta2: Float32
     var eps: Float32
@@ -156,13 +155,15 @@ struct Adam(Movable):
 
     def step(mut self, mut splats: Splats, sh_rest: ShRestGrad) raises:
         """One step where the sh_rest gradients are recomputed elementwise
-        from `sh_rest` (the backward ran with write_sh_rest=False): saves
+        from `sh_rest` (the backward ran with write_all=False): saves
         writing and reading the largest gradient buffer."""
         self._step(splats, Optional(sh_rest))
 
     def _step(mut self, mut splats: Splats, sh_rest: Optional[ShRestGrad]) raises:
         if not splats.training:
             raise Error("Adam.step: call splats.enable_training() first")
+        if len(splats.columns) > 8:
+            raise Error("Adam: at most 8 columns have learning rates")
         self.step_count += 1
         var t = Float64(self.step_count)
         var bc1 = 1.0 - Float64(self.beta1) ** t
@@ -172,7 +173,7 @@ struct Adam(Movable):
         var stream = ctx.stream()
 
         var step_size = SIMD[DType.float32, 8](0.0)  # lr / bias correction 1, per Attr
-        for a in range(Attr.COUNT):
+        for a in range(len(splats.columns)):
             step_size[a] = Float32(Float64(self.lr[a]) / bc1)
 
         # sh_rest first: its recomputed gradient needs the means before they move.
@@ -201,8 +202,8 @@ struct Adam(Movable):
                     block_dim=BLOCK_SIZE,
                 )
         var kernel = ctx.compile_function[_adam_kernel]()
-        for a in range(Attr.COUNT):
-            if a == Attr.SH_REST and sh_rest:
+        for a in range(len(splats.columns)):
+            if not splats.columns[a].trainable or (a == Attr.SH_REST and sh_rest):
                 continue
             var n = splats.count * splats.width(a)
             if n == 0:

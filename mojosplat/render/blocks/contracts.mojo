@@ -9,8 +9,8 @@ memory, and everything is inlined, so a block costs what the same expressions
 cost written out flat.
 
 Blocks import no GPU primitives. A block touches memory only where the
-contract says so: `Response` lays out its own warp-local slab, and an
-`Appearance` reads its own columns (higher SH bands are loaded only if active).
+contract says so: `Response` lays out its own warp-local slab, and `Response`
+and `Appearance` read their own columns.
 
 Add a block by implementing one of these traits and naming it in a pipeline
 (`render/pipelines.mojo`). Metal rules for anything running in a kernel are in
@@ -18,9 +18,14 @@ docs/design.md under "Portability".
 """
 
 from ...core.linalg import Sym2, V2, V3, V4
-from ...core.types import F32Ptr, SlabPtr
+from ...core.splats import AppearanceSettings, ExtraColumns
+from ...core.types import SlabPtr
 from ..record import REC
 from .shape import QuatScale, ShapeGrad
+
+
+# What `LoadedResponse.eval` returns: lane 0 is alpha, the rest is the block's own.
+comptime Hit = SIMD[DType.float32, 8]
 
 
 @fieldwise_init
@@ -64,20 +69,53 @@ trait Placement(Deinitable):
         ...
 
 
+trait LoadedResponse(Deinitable):
+    """One Gaussian ready to be evaluated at pixels, in both blend kernels.
+
+    `eval` returns a `Hit` for the backward to pass to `add`, so the gradient
+    sums need no hidden per-pixel state.
+    """
+
+    def __init__(out self):
+        """An empty lane, for the lanes with no Gaussian."""
+        ...
+
+    def __init__(out self, src: SlabPtr):
+        """From the blend slab (`Response.store_slab`)."""
+        ...
+
+    def __init__(out self, rec: SIMD[DType.float32, REC], extra: SIMD[DType.float32, 8]):
+        """From the record and the response's per-slot values."""
+        ...
+
+    def eval(self, px: Float32, py: Float32) -> Hit:
+        ...
+
+    def add(mut self, hit: Hit, dL_dalpha: Float32):
+        """Backward: add this pixel's contribution to the gradient sums."""
+        ...
+
+    def gradient(self) -> SIMD[DType.float32, 8]:
+        """The summed slot gradients (`Response.GRAD` lanes)."""
+        ...
+
+
 trait Response(Deinitable):
     """What a pixel sees of a Gaussian. Float32: this runs inside blend.
 
-    One block spans three kernels, so a footprint's coverage test, its pixel
-    evaluation and their derivatives stay together. The blend kernels stay
-    hand-tuned around it: they own the tile walk, sub-tile skipping,
-    transmittance and snapshots.
+    A footprint's coverage test, pixel evaluation and derivatives stay together
+    in one file. The blend kernels stay hand-tuned around it: they own the tile
+    walk, sub-tile skipping, transmittance and snapshots.
     """
 
+    comptime Loaded: LoadedResponse
     comptime TILE_ARGS: Int  # lanes of `tile_args` that are used
     comptime SLAB: Int  # floats per Gaussian in the blend slab
     comptime GRAD: Int  # per-slot gradient values, see `grad_index`
+    comptime EXTRA: Int  # per-slot floats saved besides the record (<= 8)
+    comptime NUM_COLUMNS: Int  # `Splats` columns owned by the response
 
-    # --- Preprocess (forward and backward) ---
+    # --- Preprocess ---
 
     def __init__(out self, mean2d: V2[DType.float32], cov2d: Sym2[DType.float32]):
         ...
@@ -94,8 +132,9 @@ trait Response(Deinitable):
         """The per-slot payload (bounds lanes are filled in by the kernel)."""
         ...
 
-    def backward(self, grad: SIMD[DType.float32, 8]) -> ScreenGrad:
-        """Slot gradients (`GRAD` lanes of `gradient`) -> screen gradients."""
+    @staticmethod
+    def extra(cols: ExtraColumns, g: Int) -> SIMD[DType.float32, 8]:
+        """The `EXTRA` per-slot values of Gaussian `g`, from the response's columns."""
         ...
 
     @staticmethod
@@ -110,11 +149,9 @@ trait Response(Deinitable):
     # --- Blend ---
 
     @staticmethod
-    def store_slab(dst: SlabPtr, rec: SIMD[DType.float32, REC], color: SIMD[DType.float32, 4]):
-        ...
-
-    @staticmethod
-    def alpha_at(src: SlabPtr, px: Float32, py: Float32) -> Float32:
+    def store_slab(
+        dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: SIMD[DType.float32, 8], color: SIMD[DType.float32, 4]
+    ):
         ...
 
     @staticmethod
@@ -122,23 +159,20 @@ trait Response(Deinitable):
         """Color channel `k` as stored by `store_slab`."""
         ...
 
-    # --- Blend backward: one per lane, accumulated over the tile's pixels ---
+    # --- Preprocess backward ---
 
-    def __init__(out self):
-        """An empty lane, for the lanes with no Gaussian."""
+    def backward(self, grad: SIMD[DType.float32, 8]) -> ScreenGrad:
+        """Slot gradients (`GRAD` lanes of `Loaded.gradient`) -> screen gradients."""
         ...
 
-    def load(mut self, rec: SIMD[DType.float32, REC]):
+    @staticmethod
+    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: SIMD[DType.float32, 8]):
+        """Write the gradients of the response's own columns."""
         ...
 
-    def alpha_of_pixel(mut self, px: Float32, py: Float32) -> Float32:
-        """Evaluates the pixel, keeping what `accumulate` needs."""
-        ...
-
-    def accumulate(mut self, alpha: Float32, dL_dalpha: Float32):
-        ...
-
-    def gradient(self) -> SIMD[DType.float32, 8]:
+    @staticmethod
+    def zero_gradients(grads: ExtraColumns, g: Int):
+        """Write zero gradients of the response's columns for a culled Gaussian."""
         ...
 
     @staticmethod
@@ -150,35 +184,42 @@ trait Response(Deinitable):
 trait Appearance:
     """Per-Gaussian color for a view direction, and its pullback.
 
-    Takes the spherical-harmonics columns for now; `Splats` columns owned by
-    the appearance replace `sh0` / `sh_rest`.
+    An appearance owns the first `NUM_COLUMNS` columns after the core ones,
+    and up to four run-time integers.
     """
+
+    comptime NUM_COLUMNS: Int
 
     @staticmethod
     def color(
-        sh0: F32Ptr, sh_rest: F32Ptr, g: Int, dir: SIMD[DType.float32, 4], active_bases: Int, rest_stride: Int
+        cols: ExtraColumns, g: Int, dir: SIMD[DType.float32, 4], settings: AppearanceSettings
     ) -> SIMD[DType.float32, 4]:
         ...
 
     @staticmethod
     def backward(
-        sh_rest: F32Ptr,
-        grad_sh0: F32Ptr,
-        grad_sh_rest: F32Ptr,
+        cols: ExtraColumns,
+        grads: ExtraColumns,
         g: Int,
         dir: SIMD[DType.float32, 4],
         grad_color: SIMD[DType.float32, 4],
-        active_bases: Int,
-        rest_stride: Int,
-        write_rest: Bool,
+        settings: AppearanceSettings,
+        write_all: Bool,
     ) -> SIMD[DType.float32, 4]:
-        """Writes the appearance gradients of `g`; returns dL/d(mean) through `dir`."""
+        """Writes the gradients of `g`; returns dL/d(mean) through `dir`.
+        `write_all=False` skips columns a fused optimizer recomputes."""
+        ...
+
+    @staticmethod
+    def zero_gradients(grads: ExtraColumns, g: Int, settings: AppearanceSettings, write_all: Bool):
+        """Writes zero gradients for a culled Gaussian."""
         ...
 
 
 trait Pipeline:
     """A renderer: which blocks the kernels are built from."""
 
+    comptime ID: Int  # checked between a forward and its backward
     comptime Place: Placement
     comptime Resp: Response
     comptime Appear: Appearance

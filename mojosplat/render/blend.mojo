@@ -52,6 +52,7 @@ def _blend_kernel[
     instance_ids: I32Ptr,  # [M] slots sorted by (tile, depth)
     records: F32Ptr,  # [slot, REC]
     colors: F32Ptr,  # [slot, CDIM] (clamped at 0 here)
+    response_extra: F32Ptr,  # [slot, Response.EXTRA]
     background_arg: KernelVector[DType.float32, 4],
     image: F32Ptr,  # out [H, W, CDIM]
     width: Int32,
@@ -132,14 +133,17 @@ def _blend_kernel[
                 var c = SIMD[DType.float32, 4](0.0)
                 comptime for k in range(CDIM):
                     c[k] = max(colors[unsafe_offset=g * CDIM + k], 0.0)
-                R.store_slab(slab.unsafe_offset(lane * STRIDE), rec, c)
+                var extra = SIMD[DType.float32, 8](0.0)
+                comptime for k in range(R.EXTRA):
+                    extra[k] = response_extra[unsafe_offset=g * R.EXTRA + k]
+                R.store_slab(slab.unsafe_offset(lane * STRIDE), rec, extra, c)
         var pending = warp.vote[LANE_MASK_DTYPE](overlaps)
         syncwarp()
         while not done and pending != 0:
             var j = Int(count_trailing_zeros(pending))
             pending &= pending - 1
             var src = slab.unsafe_offset(j * STRIDE)
-            var alpha = R.alpha_at(src, px, py)
+            var alpha = R.Loaded(src).eval(px, py)[0]
             if alpha < MIN_ALPHA:
                 continue
             var weight = T * alpha
@@ -207,6 +211,7 @@ def blend[
     instance_ids: I32Ptr,
     records: F32Ptr,
     colors: F32Ptr,
+    response_extra: F32Ptr,
     background: SIMD[DType.float32, 4],
     image: F32Ptr,
     width: Int,
@@ -226,6 +231,7 @@ def blend[
         instance_ids,
         records,
         colors,
+        response_extra,
         KernelVector[DType.float32, 4](background),
         image,
         Int32(width),

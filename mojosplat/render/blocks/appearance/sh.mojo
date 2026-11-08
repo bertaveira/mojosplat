@@ -31,7 +31,8 @@ from ....core.math import (
     SH_C3J,
     SH_C3K,
 )
-from ....core.types import F32Ptr
+from ....core.splats import AppearanceSettings, ExtraColumns
+from ....core.types import F32Ptr, I32Ptr
 from ..contracts import Appearance
 
 
@@ -269,27 +270,84 @@ def sh_to_color_backward(
     )
 
 
+@fieldwise_init
+struct ShRestGrad(ImplicitlyCopyable, Movable):
+    """What an optimizer needs to recompute the higher-order SH gradients
+    elementwise instead of reading them from memory:
+        dL/d sh_rest[g, k, c] = sh_rest_basis(k, dir_g) * grad_color[slot_of[g], c]
+    for k < active_bases - 1 and visible g (slot_of[g] >= 0), else 0, with
+    dir_g the normalized (mean_g - camera position) *before* the update.
+    Valid until the rasterizer's next forward / backward."""
+
+    var slot_of: I32Ptr  # [N] slot of each Gaussian, -1 if culled
+    var grad_color: F32Ptr  # [slot, 3] dL/d(color before clamping)
+    var cam_pos: SIMD[DType.float32, 4]
+    var active_bases: Int
+
+
 struct SphericalHarmonics(Appearance):
+    comptime NUM_COLUMNS = 2
+
+    @always_inline
+    @staticmethod
+    def _sh0(cols: ExtraColumns) -> F32Ptr:
+        return cols.c0  # [N, 3]
+
+    @always_inline
+    @staticmethod
+    def _sh_rest(cols: ExtraColumns) -> F32Ptr:
+        return cols.c1  # [N, rest_stride, 3]
+
+    @always_inline
+    @staticmethod
+    def _active_bases(settings: AppearanceSettings) -> Int:
+        return Int(settings[0])
+
+    @always_inline
+    @staticmethod
+    def _rest_stride(settings: AppearanceSettings) -> Int:
+        return Int(settings[1])
+
     @always_inline
     @staticmethod
     def color(
-        sh0: F32Ptr, sh_rest: F32Ptr, g: Int, dir: SIMD[DType.float32, 4], active_bases: Int, rest_stride: Int
+        cols: ExtraColumns, g: Int, dir: SIMD[DType.float32, 4], settings: AppearanceSettings
     ) -> SIMD[DType.float32, 4]:
-        return sh_to_color(sh0, sh_rest, g, dir, active_bases, rest_stride)
+        return sh_to_color(
+            Self._sh0(cols), Self._sh_rest(cols), g, dir, Self._active_bases(settings), Self._rest_stride(settings)
+        )
 
     @always_inline
     @staticmethod
     def backward(
-        sh_rest: F32Ptr,
-        grad_sh0: F32Ptr,
-        grad_sh_rest: F32Ptr,
+        cols: ExtraColumns,
+        grads: ExtraColumns,
         g: Int,
         dir: SIMD[DType.float32, 4],
         grad_color: SIMD[DType.float32, 4],
-        active_bases: Int,
-        rest_stride: Int,
-        write_rest: Bool,
+        settings: AppearanceSettings,
+        write_all: Bool,
     ) -> SIMD[DType.float32, 4]:
         return sh_to_color_backward(
-            sh_rest, grad_sh0, grad_sh_rest, g, dir, grad_color, active_bases, rest_stride, write_rest
+            Self._sh_rest(cols),
+            Self._sh0(grads),
+            Self._sh_rest(grads),
+            g,
+            dir,
+            grad_color,
+            Self._active_bases(settings),
+            Self._rest_stride(settings),
+            write_all,
         )
+
+    @always_inline
+    @staticmethod
+    def zero_gradients(grads: ExtraColumns, g: Int, settings: AppearanceSettings, write_all: Bool):
+        var grad_sh0 = Self._sh0(grads)
+        comptime for k in range(3):
+            grad_sh0[unsafe_offset=g * 3 + k] = 0.0
+        if write_all:
+            var grad_rest = Self._sh_rest(grads)
+            var rest_stride = Self._rest_stride(settings)
+            for k in range(rest_stride * 3):
+                grad_rest[unsafe_offset=g * rest_stride * 3 + k] = 0.0

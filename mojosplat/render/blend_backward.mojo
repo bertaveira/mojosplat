@@ -57,6 +57,7 @@ def _blend_backward_kernel[
     instance_ids: I32Ptr,  # [M] slots
     records: F32Ptr,  # [slot, REC]
     colors: F32Ptr,  # [slot, 3] unclamped
+    response_extra: F32Ptr,  # [slot, Response.EXTRA]
     background_arg: KernelVector[DType.float32, 4],
     image: F32Ptr,  # [H, W, 3] forward output
     grad_image: F32Ptr,  # [H, W, 3]
@@ -89,13 +90,16 @@ def _blend_backward_kernel[
     var tp = tile_bucket * WARP_SIZE + lane  # this lane's Gaussian, tile-local
     var valid = tp < count
     var g = 0
-    var resp = R()
+    var resp = R.Loaded()
     var col = SIMD[DType.float32, 4](0.0)
     var col_factor = SIMD[DType.float32, 4](0.0)
     if valid:
         g = Int(instance_ids[unsafe_offset=start + tp])
         var rec = load_record(records, g)
-        resp.load(rec)
+        var extra = SIMD[DType.float32, 8](0.0)
+        comptime for k in range(R.EXTRA):
+            extra[k] = response_extra[unsafe_offset=g * R.EXTRA + k]
+        resp = R.Loaded(rec, extra)
         comptime for k in range(3):
             var c = colors[unsafe_offset=g * 3 + k]
             col[k] = max(c, 0.0)
@@ -205,7 +209,8 @@ def _blend_backward_kernel[
         if x >= W32 or y >= H32:
             continue
 
-        var alpha = resp.alpha_of_pixel(Float32(x) + 0.5, Float32(y) + 0.5)
+        var hit = resp.eval(Float32(x) + 0.5, Float32(y) + 0.5)
+        var alpha = hit[0]
         if alpha < MIN_ALPHA:
             continue
         var w = T * alpha
@@ -223,7 +228,7 @@ def _blend_backward_kernel[
             + (T * col[2] - after_b * rcp) * gb
             + g_alpha_bg * rcp
         )
-        resp.accumulate(alpha, dL_dalpha)
+        resp.add(hit, dL_dalpha)
         T *= one_minus
 
     if valid:
@@ -247,6 +252,7 @@ def blend_backward[
     instance_ids: I32Ptr,
     records: F32Ptr,
     colors: F32Ptr,
+    response_extra: F32Ptr,
     background: SIMD[DType.float32, 4],
     image: F32Ptr,
     grad_image: F32Ptr,
@@ -270,6 +276,7 @@ def blend_backward[
         instance_ids,
         records,
         colors,
+        response_extra,
         KernelVector[DType.float32, 4](background),
         image,
         grad_image,
