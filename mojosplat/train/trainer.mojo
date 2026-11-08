@@ -77,6 +77,18 @@ struct TrainConfig(Copyable, Defaultable, Movable):
     @__annotation(Arg("Background color (RGB in [0, 1])"))
     var background: SIMD[DType.float32, 4]
 
+    @__annotation(Arg("Initial opacity of every Gaussian"))
+    var initial_opacity: Float32
+
+    @__annotation(Arg("Image folder inside the scene"))
+    var images: String
+
+    @__annotation(Arg("Near plane of the cameras"))
+    var near: Float32
+
+    @__annotation(Arg("Far plane of the cameras"))
+    var far: Float32
+
     @__annotation(Arg("Random seed"))
     var seed: Int
 
@@ -124,6 +136,10 @@ struct TrainConfig(Copyable, Defaultable, Movable):
         self.lr_sh0 = 0.0025
         self.lr_sh_rest = 0.0025 / 20.0
         self.background = SIMD[DType.float32, 4](0.0)
+        self.initial_opacity = 0.1
+        self.images = "images_4"
+        self.near = 0.2
+        self.far = 10000.0
         self.seed = 0
         self.log_interval = 100
         self.densify = True
@@ -162,9 +178,19 @@ struct Trainer[Pipe: Pipeline = Standard3DGS](Movable):
     def __init__(out self, ctx: DeviceContext, var dataset: Dataset, config: TrainConfig) raises:
         self.ctx = ctx
         self.config = config.copy()
-        self.splats = splats_from_points(ctx, dataset.points.xyz, dataset.points.rgb, config.sh_degree)
-        var specs = Self.Pipe.Resp.columns()
-        for s in specs:
+        seed(config.seed)
+        self.splats = splats_from_points(
+            ctx, dataset.points.xyz, dataset.points.rgb, config.sh_degree, initial_opacity=config.initial_opacity
+        )
+        var specs = Self.Pipe.Appear.columns()
+        for i in range(len(specs)):
+            ref s = specs[i]
+            self.splats.add_column(
+                s.name, s.width, trainable=s.trainable, values=Self.Pipe.Appear.init_column(i, self.splats.count)
+            )
+        var response_specs = Self.Pipe.Resp.columns()
+        for s in response_specs:
+            specs.append(s.copy())
             self.splats.add_column(
                 s.name,
                 s.width,
@@ -199,7 +225,6 @@ struct Trainer[Pipe: Pipeline = Standard3DGS](Movable):
         self.order = List[Int]()
         self.order_pos = 0
         self.iteration = 0
-        seed(config.seed)
 
     def active_sh_degree(self) -> Int:
         """SH degree used by the next iteration."""

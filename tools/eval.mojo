@@ -19,6 +19,7 @@ from std.time import perf_counter_ns
 
 from mojosplat import Rasterizer, Splats, download, read_ply, write_png
 from mojosplat.cli import Arg, ProgressBar, Table, bold, dim, done, fmt_fixed, fmt_thousands, parse_args
+from mojosplat.methods import FasterGS, Method
 from mojosplat.train.dataset import load_colmap_dataset
 
 
@@ -29,7 +30,10 @@ struct EvalArgs(Defaultable, Movable):
     @__annotation(Arg("Trained model (.ply)", positional=True))
     var model: String
 
-    @__annotation(Arg("Image folder inside the scene"))
+    @__annotation(Arg("Reconstruction method the model was trained with"))
+    var method: String
+
+    @__annotation(Arg("Image folder inside the scene (default: the method's)"))
     var images: String
 
     @__annotation(Arg("Test views are every N-th image (as in training)"))
@@ -41,16 +45,27 @@ struct EvalArgs(Defaultable, Movable):
     def __init__(out self):
         self.scene = ""
         self.model = ""
-        self.images = "images_4"
+        self.method = FasterGS.name()
+        self.images = ""
         self.test_every = 8
         self.save = ""
 
 
 def main() raises:
     var args = parse_args[EvalArgs]("pixi run eval", "Evaluate a trained model on the held-out views of a scene.")
+    if args.method == FasterGS.name():
+        run[FasterGS](args)
+    else:
+        raise Error(String("unknown method '", args.method, "' (available: ", FasterGS.name(), ")"))
+
+
+def run[M: Method](args: EvalArgs) raises:
+    var parts = args.scene.rstrip("/").split("/")
+    var config = M.config(String(parts[len(parts) - 1]))
+    var images = args.images if args.images.byte_length() > 0 else config.images
     var ctx = DeviceContext()
     print(bold("MojoSplat"), dim("·"), "eval", dim("·"), ctx.name())
-    var ds = load_colmap_dataset(ctx, args.scene, args.images, args.test_every)
+    var ds = load_colmap_dataset(ctx, args.scene, images, args.test_every, config.near, config.far)
     if len(ds.test) == 0:
         raise Error("the scene has no test views (--test-every 0?)")
     var splats = Splats.from_host(ctx, read_ply(args.model))
@@ -76,7 +91,7 @@ def main() raises:
         var W = v.camera.width
         var H = v.camera.height
         var t0 = perf_counter_ns()
-        r.render(splats, v.camera, bg, image, splats.view().max_sh_degree())
+        r.render[M.Pipe](splats, v.camera, bg, image, splats.view().max_sh_degree())
         ctx.synchronize()
         ms += Float64(perf_counter_ns() - t0) / 1e6
         var px = download(ctx, image, W * H * 3)

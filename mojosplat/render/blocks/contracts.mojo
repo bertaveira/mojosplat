@@ -219,6 +219,16 @@ trait Appearance:
     comptime NUM_COLUMNS: Int
 
     @staticmethod
+    def columns() -> List[ColumnSpec]:
+        """Columns `Trainer` adds for this appearance, before the response's."""
+        ...
+
+    @staticmethod
+    def init_column(index: Int, count: Int) -> List[Float32]:
+        """Starting values of column `index` of `columns()`."""
+        ...
+
+    @staticmethod
     def color(
         cols: ExtraColumns, g: Int, dir: SIMD[DType.float32, 4], settings: AppearanceSettings
     ) -> SIMD[DType.float32, 4]:

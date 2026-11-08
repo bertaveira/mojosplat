@@ -33,7 +33,7 @@ from ....core.math import (
 )
 from ....core.splats import AppearanceSettings, ExtraColumns
 from ....core.types import F32Ptr, I32Ptr
-from ..contracts import Appearance
+from ..contracts import Appearance, ColumnSpec
 
 
 @always_inline
@@ -287,6 +287,14 @@ struct ShRestGrad(ImplicitlyCopyable, Movable):
 
 struct SphericalHarmonics(Appearance):
     comptime NUM_COLUMNS = 2
+
+    @staticmethod
+    def columns() -> List[ColumnSpec]:
+        return List[ColumnSpec]()
+
+    @staticmethod
+    def init_column(index: Int, count: Int) -> List[Float32]:
+        return List[Float32]()
 
     @always_inline
     @staticmethod

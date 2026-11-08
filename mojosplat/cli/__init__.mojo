@@ -4,7 +4,7 @@
 Depends only on the standard library, so configs anywhere in the package
 can carry `Arg` help annotations."""
 
-from .args import Arg, parse_args, parse_args_from
+from .args import Arg, config_items, parse_args, parse_args_from, parse_args_into, parse_args_over
 from .term import (
     ProgressBar,
     Table,

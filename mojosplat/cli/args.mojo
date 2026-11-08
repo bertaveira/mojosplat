@@ -308,13 +308,44 @@ def parse_args[T: Defaultable & Movable & Deinitable](prog: String, description:
     return T()  # unreachable
 
 
+def parse_args_over[T: Defaultable & Movable & Deinitable](var base: T, prog: String, description: String = "") -> T:
+    """Parse the command line starting from `base` instead of `T()`'s defaults:
+    only the options the user gives change it."""
+    var raw = argv()
+    var args = List[String]()
+    for i in range(1, len(raw)):
+        args.append(String(raw[i]))
+    try:
+        return parse_args_into[T](base^, args, prog, description)
+    except e:
+        _usage_error(prog, String(e))
+    return T()  # unreachable
+
+
 def parse_args_from[
     T: Defaultable & Movable & Deinitable
 ](args: List[String], prog: String, description: String = "") raises -> T:
     """Like `parse_args` for an explicit argument list (no program name);
     raises on usage errors instead of exiting (prints help and exits on
     `--help`)."""
-    var cfg = T()
+    return parse_args_into[T](T(), args, prog, description)
+
+
+def config_items[T: AnyType](ref cfg: T) raises -> List[Tuple[String, String, String]]:
+    """Every leaf field of `cfg` as (flag name, kind, value as text)."""
+    var opts = List[_Option]()
+    _collect[T](cfg, opts)
+    var out = List[Tuple[String, String, String]]()
+    for o in opts:
+        if o.kind != "GROUP":
+            out.append((o.name, o.kind, o.default))
+    return out^
+
+
+def parse_args_into[
+    T: Defaultable & Movable & Deinitable
+](var cfg: T, args: List[String], prog: String, description: String = "") raises -> T:
+    """Apply an argument list on top of `cfg`."""
     var opts = List[_Option]()
     _collect[T](cfg, opts)
     for i in range(len(opts)):
