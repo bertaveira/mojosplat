@@ -32,17 +32,15 @@ On a Mac, Mojo compiles kernels with Xcode's Metal toolchain: check it with `xcr
 
 ## Performance
 
-Mip-NeRF360 garden (`images_4`, 30k iterations). The last three columns are training time per GPU. PSNR, SSIM and LPIPS are from the RTX 5090 runs; the other GPUs land within 0.1 dB. Faster-GS was run from its official code on the same RTX 5090 and scored with the same metric code.
+Mip-NeRF360 garden (`images_4`, 30k iterations). The last four columns are training time per GPU. PSNR, SSIM and LPIPS are from the RTX 5090 runs; PSNR on the RTX 3080 and Apple M1 Pro lands within 0.1 dB. Faster-GS was run from its official code on the same RTX 5090 and scored with the same metric code.
 
-| | PSNR | SSIM | LPIPS | Gaussians | RTX 5090 | RTX 3080 (10 GB) | Apple M1 Pro† |
-|---|---|---|---|---|---|---|---|
-| **MojoSplat** | **27.45** | 0.866 | 0.122 | 4.2M | **3m19s** | **~10m30s** | 1h03m |
-| [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) (CUDA + PyTorch) | 27.44 | 0.866 | 0.121 | 4.1M | 3m48s | — | — |
-| 3DGS (published) | 27.41 | 0.868 | —\* | ~5.8M | — | — | — |
+| | PSNR | SSIM | LPIPS | Gaussians | RTX 5090 | RTX 3080 (10 GB) | Apple M4 Max | Apple M1 Pro |
+|---|---|---|---|---|---|---|---|---|
+| **MojoSplat** | **27.45** | 0.866 | 0.122 | 4.2M | **3m19s** | **~10m30s** | 16m06s | 1h03m |
+| [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) (CUDA + PyTorch) | 27.44 | 0.866 | 0.121 | 4.1M | 3m48s | — | — | — |
+| 3DGS (published) | 27.41 | 0.868 | —\* | ~5.8M | — | — | — | — |
 
 \* The 3DGS paper's LPIPS (0.103) is not comparable: its evaluation code passes images in [0, 1] to an LPIPS network that expects [-1, 1], which lowers the score. The other rows use LPIPS-VGG on correctly scaled images.
-
-† Measured on an earlier version, before the latest speed changes (27.43 dB PSNR).
 
 ## Using the library
 
