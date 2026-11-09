@@ -1,0 +1,223 @@
+---
+title: How rendering works
+sidebar_position: 3
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+import BuildUp from '@site/src/components/rendering/BuildUp';
+import Projection from '@site/src/components/rendering/Projection';
+import Preprocess from '@site/src/components/rendering/Preprocess';
+import Sorts from '@site/src/components/rendering/Sorts';
+import Blend from '@site/src/components/rendering/Blend';
+import Backward from '@site/src/components/rendering/Backward';
+import Tape from '@site/src/components/rendering/Tape';
+import styles from '@site/src/components/rendering/styles.module.css';
+
+# How rendering works
+
+A Gaussian Splatting image is millions of soft, translucent blobs, painted from
+nearest to farthest. That idea is simple. Doing it in a millisecond is what shapes
+all of the code.
+
+<BuildUp />
+
+This guide follows one image through MojoSplat's renderer, based on
+[Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting). It is
+written for someone who knows the usual 3DGS CUDA rasterizer, but you can follow
+it without that. The animations play on a small example scene and run the real
+steps on it; press Pause or drag the slider to go at your own pace.
+
+<ul className={styles.strip}>
+  <li><a href="#1-project"><span>1</span>Project</a></li>
+  <li><a href="#2-keep-only-what-is-visible"><span>2</span>Keep the visible</a></li>
+  <li><a href="#3-put-everything-in-order"><span>3</span>Sort</a></li>
+  <li><a href="#4-blend-one-tile-at-a-time"><span>4</span>Blend</a></li>
+  <li><a href="#5-what-training-saves"><span>5</span>Save for the backward</a></li>
+  <li><a href="#6-blend-backward"><span>6</span>Blend backward</a></li>
+  <li><a href="#7-back-to-the-parameters"><span>7</span>Back to the parameters</a></li>
+</ul>
+
+## 1. Project
+
+A Gaussian is described in 3D by a mean, a rotation, three scales and an opacity.
+To draw it, we need its 2D shape on the image. The mean projects like any point.
+For the covariance, we use the camera's Jacobian at the mean: the local linear
+approximation of the projection, `J Σ Jᵀ`.
+
+<Projection />
+
+In the code, `QuatScale` turns the raw parameters into a 3D covariance, and
+`PinholeEWA` does the projection.
+
+## 2. Keep only what is visible
+
+One GPU thread handles each Gaussian. Most Gaussians aren't visible in a given
+view, so this stage's most important job is to throw them away early and pack the
+rest together.
+
+<Preprocess />
+
+Three things happen for each survivor:
+
+- Its 2D covariance is inverted to a **conic**, so a pixel's distance is cheap to
+  compute.
+- It gets a screen rectangle that holds exactly the pixels where alpha can reach
+  1/255, and the tiles under that ellipse are counted with an exact test, not just
+  the rectangle.
+- It takes a **slot**. The k-th visible Gaussian writes slot k of every output.
+
+Each slot is one 32-byte record holding position, conic, opacity and the rectangle,
+which is a single memory access for the later stages.
+
+<div className={styles.heatRow}>
+  <div>
+    <img className={styles.photo} src={useBaseUrl('/img/rendering/final.webp')} alt="Final render of the garden scene" width={900} height={583} />
+    <div className={styles.note}>Final render, garden test view.</div>
+  </div>
+  <div>
+    <img className={styles.photo} src={useBaseUrl('/img/rendering/tile-load.webp')} alt="Heat map of how many Gaussians touch each tile" width={900} height={583} />
+    <div className={styles.note}>How many Gaussians touch each tile (log scale). The median is 437 and the busiest tile has 4,100.</div>
+  </div>
+</div>
+
+In that view, 1.59 million of 4.2 million Gaussians are visible, and together they
+produce 3.7 million tile entries across 5,740 tiles.
+
+## 3. Put everything in order
+
+To blend, each tile needs a list of the Gaussians touching it, nearest first. A
+Gaussian that touches several tiles appears in several lists.
+
+The usual approach makes one entry per Gaussian-tile pair and sorts them all by a
+wide (tile, depth) key. Here, the same result comes from two cheap sorts.
+
+<Sorts />
+
+The trick is in the last step. A **stable** sort keeps the existing order of
+entries with equal keys, and the entries were already in depth order. So sorting
+by tile alone leaves each tile nearest first, with no depth in the key. With about
+5,700 tiles, the key fits in 16 bits, which is two radix passes.
+
+## 4. Blend, one tile at a time
+
+Now the image is painted. A usual rasterizer loops over each pixel's Gaussians.
+Here, a tile (16×12 pixels on NVIDIA, one block of 192 threads) is divided into
+six sub-tiles of 8×4 pixels, and each one belongs to one **warp** of 32 threads,
+one thread per pixel.
+
+<Blend />
+
+A warp walks the tile's list on its own, 32 Gaussians at a time. Its lanes fetch
+one record each and vote on which ones overlap its sub-tile. The overlapping ones
+go into a small shared-memory **slab**, and every lane composites them at its own
+pixel. This has two benefits: a Gaussian that misses a sub-tile costs that warp
+nothing per pixel, and a warp stops as soon as its pixels are opaque, without
+waiting for the others.
+
+Compositing a fragment is one multiply and one `exp2`:
+
+```
+alpha = opacity * exp2(min(power, 0))
+```
+
+As in 3DGS, fragments with alpha below 1/255 are skipped, and a pixel stops after
+the fragment that brings its transmittance below 1e-4.
+
+## 5. What training saves
+
+A plain render ends here. Training needs gradients, and for that the backward
+needs the state of each pixel partway through the tile. So a training forward also
+saves:
+
+- each pixel's accumulated color and transmittance before every group of 32
+  Gaussians, called a **snapshot**,
+- each pixel's final transmittance, and the last Gaussian that affected it.
+
+The snapshots let the backward start at any group of 32 without replaying the
+tile. All of this is described by `ForwardState`, which holds only sizes and
+pointers.
+
+## 6. Blend backward
+
+This is the stage least like a per-pixel backward. One warp takes one group of 32
+consecutive Gaussians (a **bucket**), and each lane owns one Gaussian. The tile's
+pixels stream through the lanes.
+
+<Backward />
+
+Each lane keeps its Gaussian's gradient in registers across all pixels, then does
+one set of atomic additions at the end. That's the point of the design: atomics
+are expensive, and here there are 32 sets per bucket instead of one per pixel per
+Gaussian.
+
+For one pixel, with `T` the transmittance before this Gaussian, `c` its color,
+`after` the color contributed by Gaussians behind it, and `g` the loss gradient at
+that pixel:
+
+```
+dL/dalpha = sum over channels of g * (T * c - after / (1 - alpha))
+            - T_final * dot(g, background) / (1 - alpha)
+```
+
+The gradients of position, conic and opacity all follow from that value.
+
+## 7. Back to the parameters
+
+The last stage turns each slot's gradients into gradients of the raw parameters,
+one thread per Gaussian. It writes in Gaussian order, so memory writes are
+contiguous, and it recomputes the forward from the parameters instead of storing
+it. Culled Gaussians simply get zero gradients.
+
+<Tape />
+
+The blocks in the code work exactly like this figure: a block's constructor runs
+its forward and stores what its backward needs, then `backward` walks it in
+reverse.
+
+```mojo
+var shape = QuatScale[dt](log_scales, rotations)    # forward, top to bottom
+var place = P(mean, shape, cam)
+var resp = R(place.mean2d(), place.cov2d())
+
+var screen = resp.backward(slot_gradients)          # backward, bottom to top
+var grad = place.backward(shape, screen.mean2d, screen.cov2d)
+```
+
+Fields the backward doesn't use are removed by the compiler, so this costs what
+the same expressions would cost written out flat.
+
+For training, the higher-order SH gradients aren't even written. Adam recomputes
+them per element, which avoids writing and reading the largest gradient buffer.
+
+## Where each stage lives
+
+| Stage | File |
+|---|---|
+| Stage order, scratch buffers | `mojosplat/render/rasterizer.mojo` |
+| Preprocess | `mojosplat/render/preprocess.mojo` |
+| Sorting and tile lists | `mojosplat/render/instances.mojo`, `mojosplat/gpu/sort.mojo` |
+| Blend | `mojosplat/render/blend.mojo` |
+| Backward | `mojosplat/render/blend_backward.mojo`, `preprocess_backward.mojo` |
+| 3D shape math | `mojosplat/render/blocks/shape.mojo` |
+| Projection and Jacobian | `mojosplat/render/blocks/placement/pinhole_ewa.mojo` |
+| Footprint: coverage, pixel alpha, gradients | `mojosplat/render/blocks/response/gaussian2d.mojo` |
+| Spherical harmonics | `mojosplat/render/blocks/appearance/sh.mojo` |
+
+`rasterizer.mojo` is mostly plumbing: buffers and pointer arguments. To read the
+algorithm, start at `_raster` there, then read the kernels in the order of this
+guide.
+
+## Reading Mojo if you know CUDA
+
+| CUDA | Mojo |
+|---|---|
+| `__global__ void kernel(...)` | a plain `def kernel(...)` |
+| `kernel<<<grid, block>>>(args)` | `stream.enqueue_function(ctx.compile_function[kernel](), args, grid_dim=, block_dim=)` |
+| `blockIdx.x`, `threadIdx.x` | `block_idx.x`, `thread_idx.x` |
+| `ptr[i]` | `ptr[unsafe_offset=i]` |
+| `__shared__ float s[N]` | `stack_allocation[N, Float32, address_space=AddressSpace.SHARED]()` |
+| `__ballot_sync(mask, pred)` | `warp.vote[...](pred)` |
+| `__shfl_sync(mask, v, lane)` | `warp.shuffle_idx(v, lane)` |
+| `__syncwarp()` | `syncwarp()` |
+| `atomicAdd(&p, v)` | `Atomic[...].fetch_add[...](p, v)` |
+| `template<...>` | parameters in `[...]`, and `comptime if` for compile-time branches |

@@ -11,6 +11,8 @@ Gaussian Splatting codebases are usually Python orchestrating hand-written CUDA 
 - **Faithful.** Images and gradients match a float64 reference implementation to about 1e-6.
 - **Usable from PyTorch.** Bindings with autograd provide a fast drop-in rasterizer for existing training code.
 
+**Documentation:** [bertaveira.github.io/mojosplat](https://bertaveira.github.io/mojosplat/) has a quickstart, an illustrated walkthrough of the renderer, and how to add a method.
+
 ## Quick start
 
 All you need is [pixi](https://pixi.sh) and an NVIDIA GPU, AMD GPU, or an Apple silicon Mac. No CUDA toolkit, compiler or Python needed: pixi installs Mojo into the project folder on the first run. Just clone this repository `git clone https://github.com/bertaveira/mojosplat.git` and you're ready to go.

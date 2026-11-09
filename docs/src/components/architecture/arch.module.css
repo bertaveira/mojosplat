@@ -1,0 +1,425 @@
+/* Tones: used only for borders and tints, so text keeps the page's color. */
+.tPlacement { --tone: #2563eb; }
+.tResponse { --tone: #c2410c; }
+.tLoaded { --tone: #b45309; }
+.tAppearance { --tone: #15803d; }
+.tShape { --tone: #64748b; }
+.tPipeline { --tone: #7c3aed; }
+.tKernel { --tone: #475569; }
+.tData { --tone: #0e7490; }
+.tNone { --tone: var(--ifm-color-emphasis-400); }
+
+:global([data-theme='dark']) .tPlacement { --tone: #60a5fa; }
+:global([data-theme='dark']) .tResponse { --tone: #fb923c; }
+:global([data-theme='dark']) .tLoaded { --tone: #fbbf24; }
+:global([data-theme='dark']) .tAppearance { --tone: #4ade80; }
+:global([data-theme='dark']) .tShape { --tone: #94a3b8; }
+:global([data-theme='dark']) .tPipeline { --tone: #a78bfa; }
+:global([data-theme='dark']) .tKernel { --tone: #94a3b8; }
+:global([data-theme='dark']) .tData { --tone: #22d3ee; }
+
+.mono {
+  font-family: var(--ifm-font-family-monospace);
+}
+
+.small {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--ifm-color-emphasis-800);
+}
+
+/* Selector buttons */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+
+.chip {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  cursor: pointer;
+  text-align: left;
+}
+
+.chip:hover {
+  border-color: var(--ifm-color-primary);
+}
+
+.chipOn {
+  border-color: var(--ifm-color-primary);
+  background: color-mix(in srgb, var(--ifm-color-primary) 16%, transparent);
+  font-weight: 600;
+}
+
+.toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.88rem;
+}
+
+.toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+/* Main content next to a detail box */
+
+.detail {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ifm-color-emphasis-200) 25%, transparent);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  min-width: 0;
+}
+
+.detailTitle {
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+  overflow-wrap: anywhere;
+}
+
+.detail p {
+  margin: 0 0 0.5rem;
+}
+
+.detail p:last-child {
+  margin-bottom: 0;
+}
+
+.detail ul {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1.1rem;
+}
+
+.detail code {
+  overflow-wrap: anywhere;
+}
+
+/* Generic toned box */
+.boxOn {
+  border-color: var(--tone) !important;
+  background: color-mix(in srgb, var(--tone) 16%, transparent);
+}
+
+/* Layer stack */
+
+/* Code excerpts in figures */
+.code {
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 7px;
+  background: var(--ifm-code-background);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.code code {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: inherit;
+}
+
+.tok {
+  padding: 0 0.15rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--tone) 24%, transparent);
+  box-shadow: inset 0 -1px 0 var(--tone);
+}
+
+.fileTag {
+  display: inline-block;
+  margin-bottom: 0.3rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+  color: var(--ifm-color-emphasis-700);
+  overflow-wrap: anywhere;
+}
+
+/* Manual step bar */
+
+/* Struct map */
+
+/* Struct cards */
+
+/* Contracts */
+
+/* Field strips (tape figure) */
+.tape {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 0.6rem;
+}
+
+.tapeBlock {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tone);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.tapeName {
+  font-family: var(--ifm-font-family-monospace);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.tapeSub {
+  font-size: 0.75rem;
+  color: var(--ifm-color-emphasis-700);
+  margin-bottom: 0.3rem;
+}
+
+.fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.field {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 4px;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.72rem;
+  color: var(--ifm-color-emphasis-600);
+  transition: background 200ms ease, border-color 200ms ease;
+}
+
+.fieldW {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 22%, transparent);
+  color: inherit;
+}
+
+.fieldR {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 22%, transparent);
+  color: inherit;
+  font-weight: 700;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-top: 0.6rem;
+  font-size: 0.78rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 3px;
+  border: 1px solid var(--tone);
+  background: color-mix(in srgb, var(--tone) 28%, transparent);
+}
+
+/* Buffer strips: one row per array */
+
+/* Byte layouts */
+.layout {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.2rem;
+  margin-bottom: 0.7rem;
+}
+
+.layoutSlab {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.layoutCell {
+  padding: 0.4rem 0.1rem;
+  border: 1px solid var(--tone);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.layoutCellOn {
+  background: color-mix(in srgb, var(--tone) 36%, transparent);
+  font-weight: 700;
+}
+
+.layoutIdx {
+  display: block;
+  font-size: 0.65rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.gradBars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.7rem;
+}
+
+.gradBar {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.gradSeg {
+  flex: 1 1 0;
+  padding: 0.3rem 0.1rem;
+  border: 1px solid var(--tone);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  color: inherit;
+  cursor: pointer;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.74rem;
+  text-align: center;
+  min-width: 0;
+}
+
+/* Column table */
+.colRow {
+  display: grid;
+  grid-template-columns: 1.3rem minmax(0, 8rem) 2rem minmax(0, 1fr);
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.25rem 0.1rem;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  font-size: 0.82rem;
+}
+
+.colIdx {
+  font-family: var(--ifm-font-family-monospace);
+  color: var(--ifm-color-emphasis-700);
+}
+
+.colName {
+  font-family: var(--ifm-font-family-monospace);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.colW {
+  font-family: var(--ifm-font-family-monospace);
+  color: var(--ifm-color-emphasis-700);
+  text-align: right;
+}
+
+.colTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.tag {
+  padding: 0 0.3rem;
+  border: 1px solid var(--tone);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  font-size: 0.72rem;
+  font-family: var(--ifm-font-family-monospace);
+  white-space: nowrap;
+}
+
+.colHead {
+  font-size: 0.72rem;
+  color: var(--ifm-color-emphasis-700);
+  border-bottom: 1px solid var(--ifm-color-emphasis-300);
+}
+
+.extrasRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.extraBox {
+  padding: 0.3rem 0.25rem;
+  border: 1px solid var(--tone);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  font-size: 0.74rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.extraBox b {
+  display: block;
+  font-family: var(--ifm-font-family-monospace);
+}
+
+/* Buffers per stage */
+
+/* Change impact */
+.verdict {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--tone);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.touch {
+  display: grid;
+  grid-template-columns: minmax(0, 13rem) 6.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  font-size: 0.84rem;
+}
+
+.touchFile {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+
+  .touch {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+
+  .layout {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .extrasRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

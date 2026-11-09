@@ -72,7 +72,7 @@ Rules for kernels, all from Mojo 1.2 on Metal (Apple M1 Pro):
   Linux catches a violation: it compiles, cross-compiles for `apple-m4`
   (`--emit air`) and passes every test, and fails only when run on a Mac.
 - **Build SIMD values that hold device loads lane by lane**
-  (`v = SIMD(0); v[k] = p[unsafe_offset=...]`, see `render/sh.load_rgb`).
+  (`v = SIMD(0); v[k] = p[unsafe_offset=...]`, see `load_rgb` in `render/blocks/appearance/sh.mojo`).
   A variadic SIMD constructor that mixes device loads and local values
   lowers with mismatched address spaces and crashes Apple's `air-lld`.
 - **Raw-pointer fills and copies use kernels on macOS**

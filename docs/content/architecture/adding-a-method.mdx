@@ -1,0 +1,159 @@
+---
+title: Adding a method
+sidebar_position: 2
+description: What a new method touches, and what is not supported yet.
+---
+
+import ChangeImpact from '@site/src/components/architecture/ChangeImpact';
+
+# Adding a method
+
+A method is a pipeline plus its training settings. If the blocks you need already
+exist, skip to [step 6](#6-make-it-a-method).
+
+Some changes fit the contracts directly. Others need the kernels or the training code
+changed. Check which kind yours is before starting.
+
+<ChangeImpact />
+
+## Walkthrough: a new footprint
+
+Suppose you want a footprint with its own per-Gaussian parameter, say a Beta-kernel
+falloff with a learned exponent `b`. This walkthrough uses that as a hypothetical. The
+real, working example to copy from is `ScaledGaussian` in
+`tests/render/test_pipeline_seams.mojo`: a `Gaussian2D` with alpha scaled by a value from
+its own column, tested from the column through blend and back to the column's gradient.
+
+### 1. Decide where each value lives
+
+| What | Where | Limit |
+|---|---|---|
+| Position, shape, opacity for the tile test and blend | The record, your six floats | 6 floats |
+| A per-Gaussian value blend needs (here `b`) | Its own `Splats` column, copied per slot into `EXTRA` | 8 floats, in a separate array |
+| Values each lane needs per pixel | The slab, sized by `SLAB` | In shared memory, per lane |
+| What the backward sums per slot | `GRAD` lanes returned by `gradient` | 8 lanes |
+
+### 2. Write the two structs
+
+`render/blocks/response/<name>.mojo` holds both. Start with the constants:
+
+```mojo
+struct MyFootprint(ImplicitlyCopyable, Movable, Response):
+    comptime Loaded = LoadedMyFootprint
+    comptime TILE_ARGS = 6            # lanes of tile_args in use
+    comptime SLAB = 12                # floats per Gaussian in the blend slab
+    comptime GRAD = 7                 # Gaussian2D's 6, plus one for b
+    comptime EXTRA = 1                # b, copied per slot
+    comptime NUM_COLUMNS = 1
+    comptime MIN_OPACITY = MIN_ALPHA
+    comptime STOP_BEFORE_LAST = False
+```
+
+`Response` is what preprocess builds from a covariance. `LoadedResponse` is what the
+two blend kernels evaluate at pixels, built from the slab or the record. Its `eval`
+returns a `Hit`: lane 0 is alpha, and the other seven lanes belong to the block. The
+backward kernel passes that `Hit` back to `add`, so a block needs no hidden per-pixel
+state.
+
+Then the methods. Each exists because a specific kernel calls it:
+
+| You write | Called from | Purpose |
+|---|---|---|
+| `__init__(mean2d, cov2d)`, `valid`, `extent`, `record`, `tile_args`, `touches_tile` | preprocess, instances | Forward, culling, the tile test |
+| `extra(cols, g)` | preprocess | Read your column and return `b` for this slot |
+| `store_slab`, `channel`, `skip_fragment` | blend | Lay out the slab |
+| `Loaded(src)`, `Loaded()`, `Loaded(rec, extra)` | blend, blend backward | Unpack from slab or record |
+| `eval`, `add`, `gradient` | blend, blend backward | Pixel value, gradient sums |
+| `backward`, `opacity_gradient` | preprocess backward | Back to `ScreenGrad` and the opacity logit |
+| `write_gradients`, `zero_gradients`, `grad_index` | preprocess backward | Write the column's gradient; slot layout |
+| `columns()` | `Trainer` | Declare your column as a `ColumnSpec` with its initial value and learning rate |
+
+:::note
+`Response.backward` must return a `ScreenGrad`, gradients with respect to the screen
+position and the 2D covariance, because that is what `Placement.backward` takes. A
+footprint that needs other inputs from the projection does not fit this contract.
+:::
+
+### 3. Name it in a pipeline
+
+```mojo
+struct MyPipeline(Pipeline):
+    comptime ID = 1
+    comptime Place = PinholeEWA[DType.float32]
+    comptime Resp = MyFootprint
+    comptime Appear = SphericalHarmonics
+```
+
+`ID` must differ from other pipelines: it is how `Rasterizer.backward` detects a
+state from another pipeline's forward.
+
+### 4. Test it
+
+Add the block to `tests/render/test_block_gradients.mojo`, which checks each backward
+against finite differences, one output at a time. Mojo only checks a generic function
+when something instantiates it, so an unused block may not compile at all. Tests in
+`test_pipeline_seams.mojo` show the two checks worth copying: that the extra column
+really reaches the image, and that its gradient reaches the column.
+
+### 5. Use it from your own program
+
+Name it where a program picks a pipeline:
+
+```mojo
+var trainer = Trainer[MyPipeline](ctx, ds^, config)   # training
+rast.render[MyPipeline](splats.view(), camera, background, image, sh_degree)
+```
+
+`Trainer` then handles the rest: it adds your column from `columns()`, gives it the
+learning rate in its `ColumnSpec`, and `Splats.gather` keeps it through densification.
+The column saves in PLY as `extra_<name>_<i>` properties.
+
+### 6. Make it a method
+
+A `Method` in `mojosplat/methods/` gives the pipeline a name and its training settings:
+
+```mojo
+struct MyMethod(Method):
+    comptime Pipe = MyPipeline
+
+    @staticmethod
+    def name() -> String:
+        return "my-method"
+
+    @staticmethod
+    def config(scene: String) -> TrainConfig:
+        var c = TrainConfig()
+        c.initial_opacity = 0.5
+        return c^
+```
+
+`config` receives the scene's directory name, for settings that differ per scene.
+Export the struct from `methods/__init__.mojo` and add a branch for it in `main` in
+`tools/train.mojo` and `tools/eval.mojo`. Then run it:
+
+```bash
+pixi run train path/to/scene --method my-method
+```
+
+Flags on the command line override the method's settings. Each run writes `run.json`
+next to the model, with the method, scene, commit, GPU, resolved settings and results.
+
+## Limits at a glance
+
+| Limit | Where |
+|---|---|
+| `Splats` always creates `sh0` and `sh_rest`, as columns 4 and 5 | `model/splats.mojo`, constructor and `Attr` |
+| Four extra column pointers in kernels; two are taken by SH | `core/splats.mojo`, `NUM_EXTRA_COLUMNS` |
+| At most 8 columns for Adam | `train/adam.mojo` |
+| Record is 32 bytes: 6 floats plus the rectangle | `render/record.mojo`, `REC` |
+| Up to 8 extra per-slot floats and 8 gradient lanes | The `SIMD[float32, 8]` in the contract |
+| Blending is three channels | `render/rasterizer.mojo` `CDIM`, `render/blend.mojo` assert |
+| `Response.backward` returns a 2D position and covariance gradient | `render/blocks/contracts.mojo` `ScreenGrad` |
+| `Placement.depth` is also the sort key, so it must order Gaussians front to back | `render/blocks/contracts.mojo` |
+| Shape is always `QuatScale` | `render/blocks/contracts.mojo`, kernels |
+| `tools/train` and `tools/eval` get their pipeline from `--method`, and `FasterGS` is the only registered method | `tools/train.mojo`, `tools/eval.mojo` |
+| The viewer, `tools/render` and `tools/bench` always use `Standard3DGS` | `Viewer`, `tools/render`, `tools/bench` |
+
+[Data and state](data-and-state.mdx) explains why the record and the slab are laid out
+as they are, and the design document in the repository lists the [portability rules](https://github.com/bertaveira/mojosplat/blob/main/docs/design.md#portability)
+that apply to code running in a kernel.
