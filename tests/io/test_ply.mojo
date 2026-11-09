@@ -3,7 +3,7 @@ holds 100 * g + p, see tests/data/make_golden_io.py)."""
 
 from std.testing import assert_equal, assert_raises, TestSuite
 
-from mojosplat.io.ply import HostSplats, read_ply, write_ply
+from mojosplat.io.ply import HostColumn, HostSplats, read_ply, write_ply
 
 comptime FIXTURE = "tests/data/golden/io/tiny.ply"
 
@@ -73,6 +73,21 @@ def test_no_sh_rest() raises:
     assert_equal(t.rest_stride, 0)
     assert_equal(t.means[4], 7.0)
     assert_equal(t.opacity_logits[1], -2.0)
+
+
+def test_extra_columns_round_trip() raises:
+    var s = HostSplats(2, 0)
+    s.extras.append(HostColumn("spherical_sites", 2, [1.0, 2.0, 3.0, 4.0]))
+    s.extras.append(HostColumn("beta", 1, [5.0, 6.0]))
+    var path = String("tests/data/golden/io/_extras.ply")
+    write_ply(path, s)
+    var t = read_ply(path)
+    assert_equal(len(t.extras), 2)
+    assert_equal(t.extras[0].name, "spherical_sites")
+    assert_equal(t.extras[0].width, 2)
+    assert_equal(t.extras[0].data[3], 4.0)
+    assert_equal(t.extras[1].name, "beta")
+    assert_equal(t.extras[1].data[1], 6.0)
 
 
 def main() raises:

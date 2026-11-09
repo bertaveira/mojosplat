@@ -13,6 +13,20 @@ from std.sys.info import Endian
 from .binary import ByteReader, append_text
 
 comptime _CHUNK = 4096  # Gaussians per parallel work item
+comptime _EXTRA = "extra_"  # other columns: float properties extra_<name>_<i>
+
+
+struct HostColumn(Copyable, Movable):
+    """A column outside the standard 3DGS layout (host memory)."""
+
+    var name: String
+    var width: Int
+    var data: List[Float32]  # [N, width]
+
+    def __init__(out self, name: String, width: Int, var data: List[Float32]):
+        self.name = name
+        self.width = width
+        self.data = data^
 
 
 struct HostSplats(Movable):
@@ -26,6 +40,7 @@ struct HostSplats(Movable):
     var opacity_logits: List[Float32]  # [N]
     var sh0: List[Float32]  # [N, 3]
     var sh_rest: List[Float32]  # [N, K, 3]
+    var extras: List[HostColumn]
 
     def __init__(out self, count: Int, rest_stride: Int):
         self.count = count
@@ -36,6 +51,7 @@ struct HostSplats(Movable):
         self.opacity_logits = List[Float32](length=count, fill=0.0)
         self.sh0 = List[Float32](length=count * 3, fill=0.0)
         self.sh_rest = List[Float32](length=count * rest_stride * 3, fill=0.0)
+        self.extras = List[HostColumn]()
 
     @staticmethod
     def uninitialized(count: Int, rest_stride: Int) -> HostSplats:
@@ -68,6 +84,10 @@ def write_ply(path: String, s: HostSplats) raises:
     """Write Gaussians as a binary little-endian 3DGS PLY."""
     comptime assert Endian.native() == Endian.little, "PLY rows are written as host floats"
     var names = _ply_property_names(s.rest_stride)
+    var P0 = len(names)
+    for c in s.extras:
+        for k in range(c.width):
+            names.append(String(_EXTRA, c.name, "_", k))
     var header = String("ply\nformat binary_little_endian 1.0\nelement vertex ", s.count, "\n")
     for name in names:
         header += String("property float ", name, "\n")
@@ -106,6 +126,18 @@ def write_ply(path: String, s: HostSplats) raises:
                 o.unsafe_offset(9 + 3 * K + 4 + k).unsafe_store[alignment=1](rotations[unsafe_offset=g * 4 + k])
 
     parallelize(rows, (n + _CHUNK - 1) // _CHUNK)
+    var at = P0
+    for c in s.extras:
+        var data = c.data.unsafe_ptr()
+        var w = c.width
+
+        def extra_rows(chunk: Int) {var dst, var data, var w, var P, var at, var n}:
+            for g in range(chunk * _CHUNK, min((chunk + 1) * _CHUNK, n)):
+                for k in range(w):
+                    dst.unsafe_offset(g * P + at + k).unsafe_store[alignment=1](data[unsafe_offset=g * w + k])
+
+        parallelize(extra_rows, (n + _CHUNK - 1) // _CHUNK)
+        at += w
     with open(path, "w") as f:
         f.write_bytes(out)
 
@@ -116,6 +148,36 @@ def _col(names: List[String], name: String) -> Int:
         if names[i] == name:
             return i
     return -1
+
+
+def _read_extras(mut s: HostSplats, names: List[String], src: Pointer[Float32, _], P: Int) raises:
+    """Collect the extra_<name>_<i> properties into columns, in file order."""
+    var i = 0
+    while i < len(names):
+        if not names[i].startswith(_EXTRA):
+            i += 1
+            continue
+        var parts = names[i].removeprefix(_EXTRA).split("_")
+        var col = String(parts[0])
+        for p in range(1, len(parts) - 1):
+            col += String("_", parts[p])
+        var first = i
+        while i < len(names) and names[i].startswith(String(_EXTRA, col, "_")):
+            if names[i] != String(_EXTRA, col, "_", i - first):
+                raise Error(String("PLY column ", col, ": properties are not contiguously numbered"))
+            i += 1
+        var w = i - first
+        var n = s.count
+        var data = List[Float32](unsafe_uninit_length=n * w)
+        var out = data.unsafe_ptr()
+
+        def extra_rows(chunk: Int) {var src, var out, var first, var w, var P, var n}:
+            for g in range(chunk * _CHUNK, min((chunk + 1) * _CHUNK, n)):
+                for k in range(w):
+                    out[unsafe_offset=g * w + k] = src.unsafe_offset(g * P + first + k).unsafe_load[alignment=1]()
+
+        parallelize(extra_rows, (n + _CHUNK - 1) // _CHUNK)
+        s.extras.append(HostColumn(col, w, data^))
 
 
 def read_ply(path: String) raises -> HostSplats:
@@ -238,6 +300,7 @@ def read_ply(path: String) raises -> HostSplats:
                     ).unsafe_load[alignment=1]()
 
     parallelize(rows, (count + _CHUNK - 1) // _CHUNK)
+    _read_extras(s, names, src, P)
     _ = r^  # the file bytes must outlive the parallel loop
     _ = c_rest^
     return s^

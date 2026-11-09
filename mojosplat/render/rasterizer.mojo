@@ -27,17 +27,21 @@ from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.memory import ArcPointer
 from std.time import perf_counter_ns
 
-from ..core.splats import SplatView
+from ..core.splats import AppearanceSettings, SplatView
 from ..gpu.arena import DeviceArena, StateAllocator
 from ..gpu.elementwise import fill_f32
 from ..model.splats import Splats
 from .blend_backward import blend_backward
-from .preprocess_backward import ShRestGrad, preprocess_backward
+from .blocks.appearance.sh import ShRestGrad
+from .preprocess_backward import preprocess_backward
 from .blend import blend, bucket_bound, bucket_counts
 from ..core.camera import CAM_POS_X, CAM_POS_Y, CAM_POS_Z, Camera
 from ..core.types import F32Ptr, I32Ptr, U16Ptr, U32Ptr, dptr, placeholder
 from .instances import create_instances, depth_ordering, tile_key_bits, tile_offsets
-from .preprocess import REC, preprocess
+from .blocks.contracts import Pipeline
+from .pipelines import Standard3DGS
+from .preprocess import preprocess
+from .record import REC
 from ..gpu.scan import exclusive_scan, scan_workspace_size
 from ..core.math import sh_num_bases
 from ..gpu.sort import radix_sort_pairs, sort_hist_size, sort_partials_size
@@ -65,6 +69,8 @@ struct ForwardState(ImplicitlyCopyable, Movable):
     var slot_of: I32Ptr  # [N] slot of each Gaussian, -1 if culled
     var records: F32Ptr  # [N, REC]
     var colors: F32Ptr  # [N, 3]
+    var response_extra: F32Ptr  # [N, Response.EXTRA] (only if the response has any)
+    var pipeline_id: Int  # the pipeline that made this state
     var instance_slots: I32Ptr  # [M] sorted by (tile, depth)
     var inst_a: I32Ptr
     var inst_b: I32Ptr
@@ -92,6 +98,8 @@ struct ForwardState(ImplicitlyCopyable, Movable):
         self.slot_of = placeholder[DType.int32]()
         self.records = placeholder[DType.float32]()
         self.colors = placeholder[DType.float32]()
+        self.response_extra = placeholder[DType.float32]()
+        self.pipeline_id = 0
         self.instance_slots = placeholder[DType.int32]()
         self.inst_a = placeholder[DType.int32]()
         self.inst_b = placeholder[DType.int32]()
@@ -216,13 +224,15 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         self.sort_cap = n
 
     @staticmethod
-    def _alloc_slot_state[A: StateAllocator](mut st: ForwardState, mut alloc: A) raises:
+    def _alloc_slot_state[A: StateAllocator, Pipe: Pipeline](mut st: ForwardState, mut alloc: A) raises:
         """Per-slot arrays (before preprocessing). `render` and `forward`
         allocate in the same order so they share the arena's buffers."""
         var n = max(st.n, 1)
         st.slot_of = I32Ptr(unsafe_from_address=alloc.alloc(n * 4))
         st.records = F32Ptr(unsafe_from_address=alloc.alloc(n * REC * 4))
         st.colors = F32Ptr(unsafe_from_address=alloc.alloc(n * 3 * 4))
+        comptime if Pipe.Resp.EXTRA > 0:
+            st.response_extra = F32Ptr(unsafe_from_address=alloc.alloc(n * Pipe.Resp.EXTRA * 4))
 
     @staticmethod
     def _alloc_instance_state[A: StateAllocator](mut st: ForwardState, mut alloc: A) raises:
@@ -243,7 +253,9 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
     # Public API
     # ------------------------------------------------------------------
 
-    def render(
+    def render[
+        Pipe: Pipeline = Standard3DGS
+    ](
         mut self,
         splats: Splats,
         camera: Camera,
@@ -254,9 +266,11 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         """Render owned splats into an owned [H, W, 3] image buffer."""
         if len(image) < camera.width * camera.height * Self.CDIM:
             raise Error("image buffer too small")
-        self.render(splats.view(), camera, background, dptr(image), sh_degree)
+        self.render[Pipe](splats.view(), camera, background, dptr(image), sh_degree)
 
-    def render(
+    def render[
+        Pipe: Pipeline = Standard3DGS
+    ](
         mut self,
         splats: SplatView,
         camera: Camera,
@@ -274,20 +288,22 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         """
         var arena = self.arena.copy()
         arena[].reset()
-        var st = self._begin(splats, camera, background, sh_degree)
-        Self._alloc_slot_state(st, arena[])
+        var st = self._begin[Pipe](splats, camera, background, sh_degree)
+        Self._alloc_slot_state[Pipe=Pipe](st, arena[])
         var ms = SIMD[DType.float64, 8](0)
         var t_start = Int(perf_counter_ns())
         var t = t_start
-        self._preprocess(splats, st)
+        self._preprocess[Pipe=Pipe](splats, st)
         self._mark(t, 0, ms)
         Self._alloc_instance_state(st, arena[])
-        self._raster[False](st, image, t, ms)
+        self._raster[False, Pipe](st, image, t, ms)
         if self.profile:
             ms[7] = Float64(t - t_start) / 1e6
             self.stage_ms = ms
 
-    def forward(
+    def forward[
+        Pipe: Pipeline = Standard3DGS
+    ](
         mut self,
         splats: SplatView,
         camera: Camera,
@@ -302,10 +318,10 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         """
         var arena = self.arena.copy()
         arena[].reset()
-        return self.forward(splats, camera, background, image, sh_degree, arena[])
+        return self.forward[Pipe=Pipe](splats, camera, background, image, sh_degree, arena[])
 
     def forward[
-        A: StateAllocator
+        A: StateAllocator, Pipe: Pipeline = Standard3DGS
     ](
         mut self,
         splats: SplatView,
@@ -319,11 +335,11 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         `backward`. Persistent buffers come from `alloc` and must stay alive
         until the backward has run (keep the allocator alive too: Mojo
         destroys values after their last use)."""
-        var st = self._begin(splats, camera, background, sh_degree)
-        Self._alloc_slot_state(st, alloc)
+        var st = self._begin[Pipe](splats, camera, background, sh_degree)
+        Self._alloc_slot_state[Pipe=Pipe](st, alloc)
         var ms = SIMD[DType.float64, 8](0)
         var t = Int(perf_counter_ns())
-        self._preprocess[True](splats, st)
+        self._preprocess[True, Pipe](splats, st)
         st.n_bucket_blocks = bucket_bound(st.n_instances, st.n_tiles)
         var pixels = st.width * st.height
         Self._alloc_instance_state(st, alloc)
@@ -333,10 +349,12 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         st.snapshots = F32Ptr(unsafe_from_address=alloc.alloc(st.n_bucket_blocks * Self.BLOCK * 16))
         st.final_T = F32Ptr(unsafe_from_address=alloc.alloc(pixels * 4))
         st.n_processed = U32Ptr(unsafe_from_address=alloc.alloc(pixels * 4))
-        self._raster[True](st, image, t, ms)
+        self._raster[True, Pipe](st, image, t, ms)
         return st
 
-    def backward(
+    def backward[
+        Pipe: Pipeline = Standard3DGS
+    ](
         mut self,
         splats: SplatView,
         st: ForwardState,
@@ -345,7 +363,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         grads: SplatView,
         densification: F32Ptr = placeholder[DType.float32](),
         has_densification: Bool = False,
-        write_sh_rest: Bool = True,
+        write_all: Bool = True,
     ) raises:
         """Gradients of the loss w.r.t. the raw parameters.
 
@@ -355,23 +373,24 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         0), so they need no initialization. If
         `has_densification`, `densification` [2, N] accumulates (count,
         |dL/dmean2d| in NDC) per Gaussian, as used by 3DGS densification.
-        With `write_sh_rest=False`, `grads.sh_rest` is left untouched: a fused
+        With `write_all=False`, `grads.sh_rest` is left untouched: a fused
         optimizer recomputes those gradients from `sh_rest_grad(st)`.
         """
+        if st.pipeline_id != Pipe.ID:
+            raise Error("Rasterizer.backward: state comes from a forward with another pipeline")
         var ctx = self.ctx
         var stream = ctx.stream()
         var n = splats.count
         var nv = max(st.n_visible, 1)
-        if nv * 9 > self.grad_cap:
-            self.grad_cap = Self._grow(self.grad_cap, nv * 9)
+        var grad_floats = nv * (Pipe.Resp.GRAD + Self.CDIM)
+        if grad_floats > self.grad_cap:
+            self.grad_cap = Self._grow(self.grad_cap, grad_floats)
             self.grad_scratch = ctx.enqueue_create_buffer[DType.float32](self.grad_cap)
-        var g_mean2d = dptr(self.grad_scratch)
-        var g_conic = g_mean2d.unsafe_offset(nv * 2)
-        var g_opacity = g_mean2d.unsafe_offset(nv * 5)
-        var g_color = g_mean2d.unsafe_offset(nv * 6)
-        fill_f32(ctx, g_mean2d, 0.0, nv * 9)
+        var g_resp = dptr(self.grad_scratch)
+        var g_color = g_resp.unsafe_offset(nv * Pipe.Resp.GRAD)
+        fill_f32(ctx, g_resp, 0.0, grad_floats)
         if st.n_instances > 0:
-            blend_backward[Self.tile_w, Self.tile_h](
+            blend_backward[Self.tile_w, Self.tile_h, Pipe](
                 ctx,
                 stream,
                 st.n_bucket_blocks,
@@ -382,54 +401,51 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
                 st.instance_slots,
                 st.records,
                 st.colors,
+                st.response_extra,
                 st.background,
                 image,
                 grad_image,
                 st.final_T,
                 st.n_processed,
                 st.snapshots,
-                g_mean2d,
-                g_conic,
-                g_opacity,
+                g_resp,
+                nv,
                 g_color,
                 st.n_tiles,
                 st.width,
                 st.height,
             )
-        preprocess_backward(
+        preprocess_backward[Pipe](
             ctx,
             stream,
             splats.means,
             splats.log_scales,
             splats.rotations,
-            splats.sh_rest,
+            splats.extras,
             st.cam,
             st.slot_of,
-            g_mean2d,
-            g_conic,
-            g_opacity,
+            g_resp,
+            nv,
             g_color,
             grads.means,
             grads.log_scales,
             grads.rotations,
             grads.opacity_logits,
-            grads.sh0,
-            grads.sh_rest,
+            grads.extras,
             densification,
             has_densification,
             n,
-            st.active_bases,
-            splats.rest_stride,
-            write_sh_rest,
+            Self._appearance_settings(st, splats),
+            write_all,
         )
 
-    def sh_rest_grad(self, st: ForwardState) -> ShRestGrad:
+    def sh_rest_grad[Pipe: Pipeline = Standard3DGS](self, st: ForwardState) -> ShRestGrad:
         """Inputs to recompute the higher-order SH gradients of the last
         `backward` (on `st`) elementwise; valid until the next forward."""
         var nv = max(st.n_visible, 1)
         return ShRestGrad(
             st.slot_of,
-            dptr(self.grad_scratch).unsafe_offset(nv * 6),
+            dptr(self.grad_scratch).unsafe_offset(nv * Pipe.Resp.GRAD),
             SIMD[DType.float32, 4](st.cam[CAM_POS_X], st.cam[CAM_POS_Y], st.cam[CAM_POS_Z], 0.0),
             st.active_bases,
         )
@@ -438,7 +454,9 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
     # Pipeline stages
     # ------------------------------------------------------------------
 
-    def _begin(
+    def _begin[
+        Pipe: Pipeline
+    ](
         mut self,
         splats: SplatView,
         camera: Camera,
@@ -457,36 +475,38 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         st.active_bases = sh_num_bases(min(max(sh_degree, 0), splats.max_sh_degree()))
         st.cam = camera.packed()
         st.background = background
+        st.pipeline_id = Pipe.ID
         self._reserve_gaussians(max(st.n, 1))
         self._reserve_scan(st.n_tiles)
         return st
 
-    def _preprocess[train: Bool = False](mut self, splats: SplatView, mut st: ForwardState) raises:
+    def _preprocess[
+        train: Bool = False, Pipe: Pipeline = Standard3DGS
+    ](mut self, splats: SplatView, mut st: ForwardState) raises:
         """Preprocess into st's slot arrays; one host sync for the counts."""
         var ctx = self.ctx
         self.counters.enqueue_fill(0)
-        preprocess[Self.tile_w, Self.tile_h, train](
+        preprocess[Self.tile_w, Self.tile_h, train, Pipe](
             ctx,
             ctx.stream(),
             splats.means,
             splats.log_scales,
             splats.rotations,
             splats.opacity_logits,
-            splats.sh0,
-            splats.sh_rest,
+            splats.extras,
             st.cam,
             dptr(self.depth_keys_a),
             dptr(self.slots_a),
             dptr(self.n_touched),
             st.records,
             st.colors,
+            st.response_extra,
             dptr(self.counters),
             st.slot_of,
             st.n,
             st.grid_w,
             st.grid_h,
-            st.active_bases,
-            splats.rest_stride,
+            Self._appearance_settings(st, splats),
         )
         ctx.enqueue_copy(self.host_counters, self.counters)
         ctx.synchronize()
@@ -497,7 +517,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         self._reserve_instances(max(st.n_instances, 1))
 
     def _raster[
-        train: Bool
+        train: Bool, Pipe: Pipeline
     ](mut self, mut st: ForwardState, image: F32Ptr, mut t: Int, mut ms: SIMD[DType.float64, 8]) raises:
         var ctx = self.ctx
         var stream = ctx.stream()
@@ -538,7 +558,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
                 n_vis,
             )
             if key_bits <= 16:
-                create_instances[DType.uint16, Self.tile_w, Self.tile_h](
+                create_instances[DType.uint16, Self.tile_w, Self.tile_h, Pipe](
                     ctx,
                     stream,
                     ids_sorted,
@@ -552,7 +572,7 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
                     n_vis,
                 )
             else:
-                create_instances[DType.uint32, Self.tile_w, Self.tile_h](
+                create_instances[DType.uint32, Self.tile_w, Self.tile_h, Pipe](
                     ctx,
                     stream,
                     ids_sorted,
@@ -617,13 +637,14 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
                 dptr(self.scan_partials),
                 n_tiles,
             )
-            blend[Self.tile_w, Self.tile_h, Self.CDIM, True](
+            blend[Self.tile_w, Self.tile_h, Self.CDIM, True, Pipe](
                 ctx,
                 stream,
                 st.tile_offsets,
                 st.instance_slots,
                 st.records,
                 st.colors,
+                st.response_extra,
                 st.background,
                 image,
                 st.width,
@@ -636,19 +657,24 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
                 st.tile_max_n,
             )
         else:
-            blend[Self.tile_w, Self.tile_h, Self.CDIM](
+            blend[Self.tile_w, Self.tile_h, Self.CDIM, False, Pipe](
                 ctx,
                 stream,
                 st.tile_offsets,
                 st.instance_slots,
                 st.records,
                 st.colors,
+                st.response_extra,
                 st.background,
                 image,
                 st.width,
                 st.height,
             )
         self._mark(t, 4, ms)
+
+    @staticmethod
+    def _appearance_settings(st: ForwardState, splats: SplatView) -> AppearanceSettings:
+        return AppearanceSettings(Int32(st.active_bases), Int32(splats.rest_stride), 0, 0)
 
     def _keys16(self, b: Bool) -> U16Ptr:
         var p = dptr(self.keys_b) if b else dptr(self.keys_a)

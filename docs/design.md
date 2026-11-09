@@ -12,9 +12,10 @@ and [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 ```
 mojosplat/      the library: kernels + model, no CLI or dataset policy
-  core/         plain types: pointers, Camera, SplatView view, SH constants
+  core/         plain types: pointers, Camera, SplatView view, linalg, SH constants
   gpu/          generic GPU building blocks: scan, radix sort, fills, arenas
   render/       the rasterizer: forward (inference + training) and backward
+    blocks/     per-Gaussian math behind the kernels; start with contracts.mojo
   model/        owning storage of the Gaussians
   io/           raw arrays, .splat/.ply, COLMAP, JPEG (libjpeg-turbo FFI), images
   train/        dataset, loss (L1 + SSIM), PSNR, Adam, densification, trainer
@@ -98,6 +99,46 @@ per-Gaussian (one warp per 32 instances, pixel state passed by shuffles) plus
 a coalesced preprocess backward in Gaussian order. State that must outlive a
 call comes from a `StateAllocator` (`gpu/arena.mojo`).
 
+## Blocks and pipelines
+
+The render code separates GPU work from the math for one Gaussian:
+
+- **Kernels** (`render/*.mojo`) own threads, culling, memory, tile lists and
+  compositing. The blend kernels stay hand-tuned.
+- **Blocks** (`render/blocks/`) hold the math, forward and backward together.
+  A block's constructor runs its forward and keeps what its backward needs in
+  its fields, so a kernel's local variables are the tape. Everything is inlined;
+  fields the backward doesn't use are removed by the compiler.
+- A **pipeline** (`render/pipelines.mojo`) names one block of each kind.
+
+`blocks/contracts.mojo` defines the three kinds:
+
+| Trait | Question | Today |
+|---|---|---|
+| `Placement` | Where does a Gaussian land on the image? | `PinholeEWA` |
+| `Response` / `LoadedResponse` | What does a pixel see of it? | `Gaussian2D` |
+| `Appearance` | What color does it have? | `SphericalHarmonics` |
+
+Nothing is registered or looked up at run time. Kernels take the pipeline as a
+compile-time parameter (`_preprocess_kernel[..., Pipe]`), and Mojo generates one
+kernel per pipeline named in the code. `Rasterizer.render`, `forward` and
+`backward` take it per call (`rast.forward[SomePipeline](...)`) and default to
+`Standard3DGS`; a backward using another pipeline than its forward raises.
+
+A response or appearance owns `Splats` columns after the core ones. Kernels
+receive them as `ExtraColumns`, up to four pointers, with the appearance's first.
+A response can also save per-slot values besides the record (`EXTRA`) and has its
+own slot gradients (`GRAD`, `grad_index`). The per-slot record is otherwise fixed
+at 32 bytes, and blending at three channels.
+
+To add a block, implement one trait, name it in a pipeline, and add it to
+`tests/render/test_block_gradients.mojo`. Mojo checks generic code only when it
+is instantiated, so a block that no test instantiates may not compile.
+
+The current `Response` contract fits footprints evaluated in 2D. Evaluating along
+a ray with per-hit data (3DGUT, Neural Harmonic Textures) will need that contract
+extended or its own blend kernel.
+
 ## Training
 
 `Trainer` (`train/trainer.mojo`) runs the 3DGS recipe with Faster-GS's
@@ -107,12 +148,17 @@ defaults (`TrainConfig`); its docstring lists the order of one iteration.
 
 The central abstraction, `Splats` in `model/` (`SplatView` is its
 non-owning pointer view, `HostSplats` the CPU copy for file I/O). It owns,
-for capacity C >= n Gaussians, every per-Gaussian array, indexed by `Attr`:
+for capacity C >= n Gaussians, every per-Gaussian array as a list of `Column`s
+(name, width, trainable):
 
-- the six raw parameter arrays (means, log scales, quaternions, opacity
-  logits, sh0, shN),
-- after `enable_training()`: their gradients, Adam moments (m, v) and the
-  densification statistics.
+- the four core columns (means, log scales, quaternions, opacity logits), then
+  those of the appearance (sh0 and shN for spherical harmonics) and the response.
+  `Attr` holds the indices of the standard ones,
+- after `enable_training()`, for trainable columns: their gradients and Adam
+  moments (m, v), plus the densification statistics.
+
+`add_column` adds a column. Columns beyond the standard ones are saved in PLY
+files as `extra_<name>_<i>` properties.
 
 There is one row operation, `gather(index, n_out, zero_moments_from)`,
 applied to every array at once: clone and split append rows (the index is
@@ -121,7 +167,8 @@ pruning keeps the surviving rows, Morton reordering permutes them. The
 renderer takes a `SplatView`; the Adam kernel sees the same per-attribute
 layout. This keeps the bookkeeping that LichtFeld Studio spreads over its
 model, optimizer and each strategy in one place, and makes "one more
-per-Gaussian array" a one-line change.
+per-Gaussian array" a one-line change. `reset_moments` zeroes the Adam moments of
+arbitrary rows, and a permutation can keep the densification statistics.
 
 ### Optimizer
 
@@ -156,7 +203,9 @@ be added later as a second strategy on the same `gather`.
 
 ### Testing
 
-1. Kernels: golden data from float64 references.
+1. Kernels: golden data from float64 references. Blocks: finite-difference
+   checks of every backward, one output at a time
+   (`tests/render/test_block_gradients.mojo`).
 2. Optimizer: several steps against `torch.optim.Adam` with per-group rates.
 3. Densification: one step against a torch transcription of Faster-GS's
    `adaptive_density_control`.

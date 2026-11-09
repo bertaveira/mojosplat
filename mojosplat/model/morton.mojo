@@ -87,6 +87,6 @@ def morton_order(mut splats: Splats) raises:
         n,
         63,
     )
-    splats.gather(dptr(vals_b) if in_b else dptr(vals_a), n, n)
+    splats.gather(dptr(vals_b) if in_b else dptr(vals_a), n, n, keep_statistics=True)
     ctx.synchronize()
     _ = (keys_a^, keys_b^, vals_a^, vals_b^, hist^, partials^, total^)

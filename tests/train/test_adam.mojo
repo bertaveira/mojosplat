@@ -90,7 +90,7 @@ def _step_once(fused: Bool, sh_degree: Int = 3) raises -> List[List[Float32]]:
     var lr = SIMD[DType.float32, 8](0.01, 0.02, 0.003, 0.05, 0.004, 0.001, 0, 0)
     var adam = Adam(lr)
     var st = r.forward(splats.view(), s.camera, bg, dptr(image), sh_degree)
-    r.backward(splats.view(), st, dptr(image), dptr(grad_image), splats.grad_view(), write_sh_rest=not fused)
+    r.backward(splats.view(), st, dptr(image), dptr(grad_image), splats.grad_view(), write_all=not fused)
     if fused:
         adam.step(splats, r.sh_rest_grad(st))
     else:

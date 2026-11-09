@@ -2,7 +2,17 @@
 
 from std.testing import assert_equal, assert_false, assert_raises, assert_true, TestSuite
 
-from mojosplat.cli import Arg, fmt_count, fmt_duration, fmt_fixed, fmt_thousands, parse_args_from, visible_width
+from mojosplat.cli import (
+    Arg,
+    config_items,
+    parse_args_into,
+    fmt_count,
+    fmt_duration,
+    fmt_fixed,
+    fmt_thousands,
+    parse_args_from,
+    visible_width,
+)
 from mojosplat.train.trainer import TrainConfig
 
 
@@ -124,6 +134,29 @@ def test_formatting() raises:
     assert_equal(fmt_duration(211.4), "3m31s")
     assert_equal(fmt_duration(4000.0), "1h06m")
     assert_equal(visible_width("\x1b[1mab\x1b[0m━c"), 4)
+
+
+def test_presets_start_from_a_base_and_flags_override_it() raises:
+    var base = Opts()
+    base.scene = "preset"
+    base.max_steps = 123
+    var args: List[String] = ["garden", "model.ply", "--out", "x"]
+    var o = parse_args_into[Opts](base^, args, "prog")
+    assert_equal(o.max_steps, 123)
+    assert_equal(o.scene, "garden")
+    assert_equal(o.out, "x")
+
+
+def test_config_items_lists_resolved_values() raises:
+    var c = TrainConfig()
+    c.iterations = 7
+    var seen = False
+    for item in config_items[TrainConfig](c):
+        if item[0] == "iterations":
+            seen = True
+            assert_equal(item[1], "INT")
+            assert_equal(item[2], "7")
+    assert_true(seen, "iterations should be listed")
 
 
 def main() raises:

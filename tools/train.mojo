@@ -27,10 +27,14 @@ from mojosplat.cli import (
     fmt_fixed,
     fmt_thousands,
     parse_args,
+    parse_args_over,
     seconds_since,
 )
 from mojosplat.core.camera import Camera
 from mojosplat.train.dataset import load_colmap_dataset
+from mojosplat.methods import FasterGS, Method
+from mojosplat.render.pipelines import Standard3DGS
+from mojosplat.train.run_record import write_run_record
 from mojosplat.train.trainer import TrainConfig, Trainer
 from mojosplat.viewer import Viewer, ViewerConfig
 
@@ -39,8 +43,8 @@ struct TrainArgs(Defaultable, Movable):
     @__annotation(Arg("COLMAP scene directory (with sparse/0 and the image folder)", positional=True))
     var scene: String
 
-    @__annotation(Arg("Image folder inside the scene"))
-    var images: String
+    @__annotation(Arg("Reconstruction method (see mojosplat/methods)"))
+    var method: String
 
     @__annotation(Arg("Output directory (default: output/<scene name>)", short="o"))
     var out: String
@@ -59,7 +63,7 @@ struct TrainArgs(Defaultable, Movable):
 
     def __init__(out self):
         self.scene = ""
-        self.images = "images_4"
+        self.method = FasterGS.name()
         self.out = ""
         self.test_every = 8
         self.viewer = False
@@ -78,17 +82,38 @@ def _stats(it: Int, total: Int, loss: Float64, gaussians: Int, bar: ProgressBar)
     return items^
 
 
+comptime PROGRAM = "pixi run train"
+comptime DESCRIPTION = "Train a 3D Gaussian Splatting model on a COLMAP scene."
+
+
+def scene_name(path: String) raises -> String:
+    var parts = path.rstrip("/").split("/")
+    return String(parts[len(parts) - 1])
+
+
 def main() raises:
-    var args = parse_args[TrainArgs]("pixi run train", "Train a 3D Gaussian Splatting model on a COLMAP scene.")
-    var parts = args.scene.rstrip("/").split("/")
-    var name = String(parts[len(parts) - 1])
+    var first = parse_args[TrainArgs](PROGRAM, DESCRIPTION)
+    if first.method == FasterGS.name():
+        run[FasterGS](first.scene)
+    else:
+        raise Error(String("unknown method '", first.method, "' (available: ", FasterGS.name(), ")"))
+
+
+def run[M: Method](scene: String) raises:
+    # The method's settings are the starting point; flags on the command line override them.
+    var base = TrainArgs()
+    base.train = M.config(scene_name(scene))
+    var args = parse_args_over(base^, PROGRAM, DESCRIPTION)
+    var name = scene_name(args.scene)
     var out = args.out if args.out.byte_length() > 0 else String("output/", name)
     var config = args.train.copy()
+    if args.viewer and M.Pipe.ID != Standard3DGS.ID:
+        raise Error("--viewer only supports the standard pipeline for now")
 
     var ctx = DeviceContext()
     print(bold("MojoSplat"), dim("·"), "train", dim("·"), ctx.name())
     var t0 = Int(perf_counter_ns())
-    var ds = load_colmap_dataset(ctx, args.scene, args.images, args.test_every)
+    var ds = load_colmap_dataset(ctx, args.scene, config.images, args.test_every, config.near, config.far)
     done(
         String(
             "Loaded ",
@@ -103,7 +128,7 @@ def main() raises:
             dim(String("(", fmt_duration(seconds_since(t0)), ")")),
         )
     )
-    var trainer = Trainer(ctx, ds^, config)
+    var trainer = Trainer[M.Pipe](ctx, ds^, config)
     done(String("Initialized ", fmt_thousands(trainer.splats.count), " Gaussians"))
 
     var viewer = Optional[Viewer]()
@@ -170,6 +195,12 @@ def main() raises:
     var ply = out + "/point_cloud.ply"
     trainer.save_ply(ply)
     done(String("Saved ", ply))
+    var metrics = List[Tuple[String, Float64]]()
+    metrics.append(("train_seconds", train_s))
+    metrics.append(("gaussians", Float64(trainer.splats.count)))
+    if psnr >= 0.0:
+        metrics.append(("test_psnr", psnr))
+    write_run_record(out + "/run.json", M.name(), args.scene, ctx.name(), config, metrics)
 
     print()
     var table = Table("Results")

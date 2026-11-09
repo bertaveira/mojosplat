@@ -12,9 +12,8 @@ to lane 1 with a shuffle, and so on. Each lane accumulates its Gaussian's
 gradients in registers over all pixels and issues one set of atomics at the
 end (instead of one per pixel as in a per-pixel backward).
 
-Outputs per visible slot: dL/d(mean2d), dL/d(conic), dL/d(opacity logit),
-dL/d(color). Conic off-diagonal gradients are per entry of the symmetric
-matrix (half of the gradient w.r.t. the single value), as in Faster-GS.
+Outputs per visible slot: the gradients of the pipeline's `Response`
+(blocks/contracts.mojo) and dL/d(color).
 """
 
 from max.gpu import WARP_SIZE, block_idx, lane_id, thread_idx
@@ -23,15 +22,16 @@ from max.gpu.memory import AddressSpace
 from max.gpu.primitives import warp
 from max.gpu.sync import syncwarp
 from std.atomic import Atomic, Ordering
-from std.math import exp2, recip
+from std.math import recip
 from std.memory import stack_allocation
 from std.sys.info import is_amd_gpu
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
-from .preprocess import MIN_ALPHA, load_record
+from .blocks.contracts import Pipeline
+from .pipelines import Standard3DGS
+from .record import load_record
 
 comptime ONE_MINUS_ALPHA_EPS: Float32 = 1e-6
-comptime LOG2E: Float32 = 1.4426950408889634
 
 
 @always_inline
@@ -48,7 +48,7 @@ comptime BUCKETS_PER_BLOCK = 4  # one warp per bucket
 
 
 def _blend_backward_kernel[
-    tile_w: Int, tile_h: Int
+    tile_w: Int, tile_h: Int, Pipe: Pipeline
 ](
     tile_offsets: U32Ptr,  # [n_tiles + 1]
     bucket_start: U32Ptr,  # [n_tiles + 1]
@@ -57,15 +57,15 @@ def _blend_backward_kernel[
     instance_ids: I32Ptr,  # [M] slots
     records: F32Ptr,  # [slot, REC]
     colors: F32Ptr,  # [slot, 3] unclamped
+    response_extra: F32Ptr,  # [slot, Response.EXTRA]
     background_arg: KernelVector[DType.float32, 4],
     image: F32Ptr,  # [H, W, 3] forward output
     grad_image: F32Ptr,  # [H, W, 3]
     final_T: F32Ptr,  # [H * W]
     n_processed: U32Ptr,  # [H * W]
     snapshots: F32Ptr,  # [n_buckets, BLOCK, 4]
-    grad_mean2d: F32Ptr,  # out (accumulated) [slot, 2]
-    grad_conic: F32Ptr,  # out (accumulated) [slot, 3]
-    grad_opacity: F32Ptr,  # out (accumulated) [slot] w.r.t. the opacity logit
+    grad_resp: F32Ptr,  # out (accumulated) slot gradients of the Response
+    n_slots: Int32,
     grad_color: F32Ptr,  # out (accumulated) [slot, 3] w.r.t. the unclamped color
     n_tiles: Int32,
     width: Int32,
@@ -73,6 +73,7 @@ def _blend_backward_kernel[
     grid_w: Int32,
 ):
     var background = background_arg.value
+    comptime R = Pipe.Resp
     comptime BLOCK = tile_w * tile_h
     var warp_in_block = thread_idx.x // WARP_SIZE
     var bucket = block_idx.x * BUCKETS_PER_BLOCK + warp_in_block
@@ -89,30 +90,20 @@ def _blend_backward_kernel[
     var tp = tile_bucket * WARP_SIZE + lane  # this lane's Gaussian, tile-local
     var valid = tp < count
     var g = 0
-    var mx: Float32 = 0
-    var my: Float32 = 0
-    var ca: Float32 = 0
-    var cb: Float32 = 0
-    var cc: Float32 = 0
-    var opacity: Float32 = 0
+    var resp = R.Loaded()
     var col = SIMD[DType.float32, 4](0.0)
     var col_factor = SIMD[DType.float32, 4](0.0)
     if valid:
         g = Int(instance_ids[unsafe_offset=start + tp])
         var rec = load_record(records, g)
-        mx = rec[0]
-        my = rec[1]
-        ca = rec[2]
-        cb = rec[3]
-        cc = rec[4]
-        opacity = rec[5]
+        var extra = SIMD[DType.float32, 8](0.0)
+        comptime for k in range(R.EXTRA):
+            extra[k] = response_extra[unsafe_offset=g * R.EXTRA + k]
+        resp = R.Loaded(rec, extra)
         comptime for k in range(3):
             var c = colors[unsafe_offset=g * 3 + k]
             col[k] = max(c, 0.0)
             col_factor[k] = 1.0 if c >= 0.0 else 0.0
-    var ea = -0.5 * LOG2E * ca
-    var eb = -LOG2E * cb
-    var ec = -0.5 * LOG2E * cc
 
     var tile_x0 = (tile % Int(grid_w)) * tile_w
     var tile_y0 = (tile // Int(grid_w)) * tile_h
@@ -131,12 +122,6 @@ def _blend_backward_kernel[
     var snap = snapshots.unsafe_offset(bucket * BLOCK * 4)
 
     # Gradient accumulators for this lane's Gaussian.
-    var d_mx: Float32 = 0
-    var d_my: Float32 = 0
-    var d_ca: Float32 = 0
-    var d_cb: Float32 = 0
-    var d_cc: Float32 = 0
-    var d_op: Float32 = 0
     var d_col = SIMD[DType.float32, 4](0.0)
 
     # Pixel state handed from lane to lane.
@@ -224,12 +209,9 @@ def _blend_backward_kernel[
         if x >= W32 or y >= H32:
             continue
 
-        var dx = mx - (Float32(x) + 0.5)
-        var dy = my - (Float32(y) + 0.5)
-        var power = dx * (ea * dx + eb * dy) + ec * dy * dy
-        var gaussian = exp2(min(power, 0.0))
-        var alpha = opacity * gaussian
-        if alpha < MIN_ALPHA:
+        var hit = resp.eval(Float32(x) + 0.5, Float32(y) + 0.5)
+        var alpha = hit[0]
+        if R.skip_fragment(alpha):
             continue
         var w = T * alpha
         d_col[0] += w * gr
@@ -246,28 +228,19 @@ def _blend_backward_kernel[
             + (T * col[2] - after_b * rcp) * gb
             + g_alpha_bg * rcp
         )
-        d_op += gaussian * dL_dalpha
-        var helper = -alpha * dL_dalpha
-        d_ca += helper * dx * dx  # times 0.5 after the loop
-        d_cb += helper * dx * dy
-        d_cc += helper * dy * dy
-        d_mx += helper * (ca * dx + cb * dy)
-        d_my += helper * (cb * dx + cc * dy)
+        resp.add(hit, dL_dalpha)
         T *= one_minus
 
     if valid:
-        _atomic_add(grad_mean2d, g * 2 + 0, d_mx)
-        _atomic_add(grad_mean2d, g * 2 + 1, d_my)
-        _atomic_add(grad_conic, g * 3 + 0, 0.5 * d_ca)
-        _atomic_add(grad_conic, g * 3 + 1, 0.5 * d_cb)
-        _atomic_add(grad_conic, g * 3 + 2, 0.5 * d_cc)
-        _atomic_add(grad_opacity, g, opacity * (1.0 - opacity) * d_op)
+        var slot_grad = resp.gradient()
+        comptime for k in range(R.GRAD):
+            _atomic_add(grad_resp, R.grad_index(k, Int(n_slots), g), slot_grad[k])
         comptime for k in range(3):
             _atomic_add(grad_color, g * 3 + k, d_col[k] * col_factor[k])
 
 
 def blend_backward[
-    tile_w: Int, tile_h: Int
+    tile_w: Int, tile_h: Int, Pipe: Pipeline = Standard3DGS
 ](
     ctx: DeviceContext,
     stream: DeviceStream,
@@ -279,15 +252,15 @@ def blend_backward[
     instance_ids: I32Ptr,
     records: F32Ptr,
     colors: F32Ptr,
+    response_extra: F32Ptr,
     background: SIMD[DType.float32, 4],
     image: F32Ptr,
     grad_image: F32Ptr,
     final_T: F32Ptr,
     n_processed: U32Ptr,
     snapshots: F32Ptr,
-    grad_mean2d: F32Ptr,
-    grad_conic: F32Ptr,
-    grad_opacity: F32Ptr,
+    grad_resp: F32Ptr,
+    n_slots: Int,
     grad_color: F32Ptr,
     n_tiles: Int,
     width: Int,
@@ -295,7 +268,7 @@ def blend_backward[
 ) raises:
     var grid_w = (width + tile_w - 1) // tile_w
     stream.enqueue_function(
-        ctx.compile_function[_blend_backward_kernel[tile_w, tile_h]](),
+        ctx.compile_function[_blend_backward_kernel[tile_w, tile_h, Pipe]](),
         tile_offsets,
         bucket_start,
         bucket_tile,
@@ -303,15 +276,15 @@ def blend_backward[
         instance_ids,
         records,
         colors,
+        response_extra,
         KernelVector[DType.float32, 4](background),
         image,
         grad_image,
         final_T,
         n_processed,
         snapshots,
-        grad_mean2d,
-        grad_conic,
-        grad_opacity,
+        grad_resp,
+        Int32(n_slots),
         grad_color,
         Int32(n_tiles),
         Int32(width),

@@ -7,7 +7,7 @@ from std.testing import assert_equal, TestSuite
 from mojosplat.core.types import F32Ptr, KernelVector, dptr
 from mojosplat.gpu.reduce import bounds3
 from mojosplat.io.arrays import download, upload
-from mojosplat.render.sh import load_rgb
+from mojosplat.render.blocks.appearance.sh import load_rgb
 
 
 def _vector_kernel[width: Int](src: F32Ptr, dst: F32Ptr, weights: KernelVector[DType.float32, width]):
