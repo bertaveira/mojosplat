@@ -19,6 +19,17 @@ comptime REC_BOUNDS = 6  # first of the two lanes holding the pixel rectangle
 
 
 @always_inline
+def udiv(a: Int, b: Int) -> Int:
+    """32-bit unsigned a // b (64-bit signed floor division is slow on the GPU)."""
+    return Int(UInt32(a) // UInt32(b))
+
+
+@always_inline
+def umod(a: Int, b: Int) -> Int:
+    return Int(UInt32(a) % UInt32(b))
+
+
+@always_inline
 def pack_bounds(x0: Int, x1: Int, y0: Int, y1: Int) -> UInt64:
     """Pixel rectangle [x0, x1) x [y0, y1) as 4 x 16 bits."""
     return UInt64(x0) | (UInt64(x1) << 16) | (UInt64(y0) << 32) | (UInt64(y1) << 48)
@@ -53,8 +64,8 @@ def tile_rect[tile_w: Int, tile_h: Int](b: UInt64) -> SIMD[DType.int32, 4]:
     """Pixel rectangle -> tile rectangle (tx0, tx1, ty0, ty1), exclusive max."""
     var p = unpack_bounds(b)
     return SIMD[DType.int32, 4](
-        p[0] // Int32(tile_w),
-        (p[1] + Int32(tile_w - 1)) // Int32(tile_w),
-        p[2] // Int32(tile_h),
-        (p[3] + Int32(tile_h - 1)) // Int32(tile_h),
+        Int32(UInt32(p[0]) // UInt32(tile_w)),
+        Int32(UInt32(p[1] + Int32(tile_w - 1)) // UInt32(tile_w)),
+        Int32(UInt32(p[2]) // UInt32(tile_h)),
+        Int32(UInt32(p[3] + Int32(tile_h - 1)) // UInt32(tile_h)),
     )

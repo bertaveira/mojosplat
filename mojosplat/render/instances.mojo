@@ -19,7 +19,7 @@ from ..gpu.elementwise import fill_u32
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
 from .blocks.contracts import Pipeline
 from .pipelines import Standard3DGS
-from .record import N_SEQUENTIAL, load_record, record_bounds, tile_rect
+from .record import udiv, umod, N_SEQUENTIAL, load_record, record_bounds, tile_rect
 
 
 def _depth_ordering_kernel(
@@ -70,8 +70,8 @@ def _create_instances_kernel[
 
     if active:
         for t in range(min(tile_count, N_SEQUENTIAL)):
-            var tx = tx0 + t % tw
-            var ty = ty0 + t // tw
+            var tx = tx0 + umod(t, tw)
+            var ty = ty0 + udiv(t, tw)
             if w < end and R.touches_tile[tile_w, tile_h](args, tx, ty):
                 keys[unsafe_offset=w] = Scalar[key_dtype](ty * Int(grid_w) + tx)
                 instance_ids[unsafe_offset=w] = Int32(g)
@@ -94,8 +94,8 @@ def _create_instances_kernel[
             s_args[k] = warp.shuffle_idx(args[k], src)
         var t = N_SEQUENTIAL + lane
         while t - lane < s_count:
-            var tx = s_tx0 + t % s_tw
-            var ty = s_ty0 + t // s_tw
+            var tx = s_tx0 + umod(t, s_tw)
+            var ty = s_ty0 + udiv(t, s_tw)
             var hit = t < s_count and R.touches_tile[tile_w, tile_h](s_args, tx, ty)
             var hits = warp.vote[LANE_MASK_DTYPE](hit)
             if hit:

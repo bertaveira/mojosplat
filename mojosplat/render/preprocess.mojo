@@ -39,7 +39,7 @@ from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, LaneMask
 from .blocks.contracts import Pipeline
 from .blocks.shape import QuatScale
 from .pipelines import Standard3DGS
-from .record import N_SEQUENTIAL, pack_bounds, store_record
+from .record import udiv, umod, N_SEQUENTIAL, pack_bounds, store_record
 
 comptime PREPROCESS_BLOCK = 128
 
@@ -117,10 +117,10 @@ def _preprocess_kernel[
     var y0 = Int(min(pad_h, max(Float32(0.0), floor(my - ext_y))))
     var y1 = Int(min(pad_h, max(Float32(0.0), ceil(my + ext_y))))
     # 32-bit: ptxas (CUDA 12.9, sm_86) miscompiles the 64-bit tile count when ty0 == 0.
-    var tx0_32 = Int32(x0) // Int32(tile_w)
-    var tx1_32 = (Int32(x1) + Int32(tile_w - 1)) // Int32(tile_w)
-    var ty0_32 = Int32(y0) // Int32(tile_h)
-    var ty1_32 = (Int32(y1) + Int32(tile_h - 1)) // Int32(tile_h)
+    var tx0_32 = Int32(UInt32(x0) // UInt32(tile_w))
+    var tx1_32 = Int32(UInt32(x1 + tile_w - 1) // UInt32(tile_w))
+    var ty0_32 = Int32(UInt32(y0) // UInt32(tile_h))
+    var ty1_32 = Int32(UInt32(y1 + tile_h - 1) // UInt32(tile_h))
     var tx0 = Int(tx0_32)
     var ty0 = Int(ty0_32)
     var tw = Int(tx1_32 - tx0_32)
@@ -135,7 +135,7 @@ def _preprocess_kernel[
     var touched = 0
     if active:
         for t in range(min(tile_count, N_SEQUENTIAL)):
-            if R.touches_tile[tile_w, tile_h](args, tx0 + t % tw, ty0 + t // tw):
+            if R.touches_tile[tile_w, tile_h](args, tx0 + umod(t, tw), ty0 + udiv(t, tw)):
                 touched += 1
     var coop = warp.vote[LANE_MASK_DTYPE](active and tile_count > N_SEQUENTIAL)
     while coop != 0:  # warp-uniform loop over lanes that need help
@@ -150,7 +150,9 @@ def _preprocess_kernel[
             s_args[k] = warp.shuffle_idx(args[k], src)
         var t = N_SEQUENTIAL + lane
         while t - lane < s_count:  # uniform trip count across the warp
-            var hit = t < s_count and R.touches_tile[tile_w, tile_h](s_args, s_tx0 + t % s_tw, s_ty0 + t // s_tw)
+            var hit = t < s_count and R.touches_tile[tile_w, tile_h](
+                s_args, s_tx0 + umod(t, s_tw), s_ty0 + udiv(t, s_tw)
+            )
             var hits = warp.vote[LANE_MASK_DTYPE](hit)
             if lane == Int(src):
                 touched += Int(pop_count(hits))

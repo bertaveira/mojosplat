@@ -11,7 +11,7 @@ that order in the scratch buffer. Conic off-diagonal gradients are per entry
 of the symmetric matrix (half of the gradient w.r.t. the single value).
 """
 
-from std.math import exp2, log, sqrt
+from std.math import exp2, log, recip, sqrt
 
 from ....core.linalg import Sym2, V2
 from ....core.splats import ExtraColumns
@@ -44,10 +44,10 @@ def _will_contribute[
     Evaluates it at the point of the tile closest to its center along the
     conic (StopThePop's test, as used by Faster-GS).
     """
-    var rmin_x = Float32(tile_x * tile_w)
-    var rmin_y = Float32(tile_y * tile_h)
-    var rmax_x = Float32((tile_x + 1) * tile_w - 1)
-    var rmax_y = Float32((tile_y + 1) * tile_h - 1)
+    var rmin_x = Float32(Int32(tile_x) * Int32(tile_w))
+    var rmin_y = Float32(Int32(tile_y) * Int32(tile_h))
+    var rmax_x = rmin_x + Float32(tile_w - 1)
+    var rmax_y = rmin_y + Float32(tile_h - 1)
 
     var x_min_diff = rmin_x - mx
     var x_left: Float32 = 1.0 if x_min_diff >= 0.0 else 0.0
@@ -64,8 +64,8 @@ def _will_contribute[
     var diff_y = my - corner_y
     var dx = Float32(tile_w - 1) if x_min_diff >= 0.0 else -Float32(tile_w - 1)
     var dy = Float32(tile_h - 1) if y_min_diff >= 0.0 else -Float32(tile_h - 1)
-    var tx = not_in_y * min(max((dx * ca * diff_x + dx * cb * diff_y) / (dx * ca * dx), 0.0), 1.0)
-    var ty = not_in_x * min(max((dy * cb * diff_x + dy * cc * diff_y) / (dy * cc * dy), 0.0), 1.0)
+    var tx = not_in_y * min(max((dx * ca * diff_x + dx * cb * diff_y) * recip(dx * ca * dx), 0.0), 1.0)
+    var ty = not_in_x * min(max((dy * cb * diff_x + dy * cc * diff_y) * recip(dy * cc * dy), 0.0), 1.0)
     var ddx = mx - (corner_x + tx * dx)
     var ddy = my - (corner_y + ty * dy)
     var power = 0.5 * (ca * ddx * ddx + cc * ddy * ddy) + cb * ddx * ddy
