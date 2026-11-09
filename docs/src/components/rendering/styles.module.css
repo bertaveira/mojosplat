@@ -1,0 +1,231 @@
+.figure {
+  margin: 1.75rem 0;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 10px;
+  background: var(--ifm-background-surface-color);
+  overflow: hidden;
+}
+
+.figTitle {
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.stage {
+  padding: 1rem;
+}
+
+.stage svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.twoCol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 1.25rem;
+  align-items: center;
+}
+
+.mat {
+  position: relative;
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0e1116;
+}
+
+.chain {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.node {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.55rem 0.4rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.nodeForward {
+  border-color: var(--ifm-color-primary);
+  background: color-mix(in srgb, var(--ifm-color-primary) 16%, transparent);
+}
+
+.nodeBackward {
+  border-color: #c2410c;
+  background: rgba(194, 65, 12, 0.16);
+}
+
+.nodeName {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.nodeSub {
+  font-size: 0.72rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.arrow {
+  align-self: center;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.chainNote {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .chain {
+    flex-direction: column;
+  }
+
+  .arrow {
+    transform: rotate(90deg);
+  }
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.controls button {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.controls button:hover {
+  border-color: var(--ifm-color-primary);
+  color: var(--ifm-color-primary);
+}
+
+.play {
+  min-width: 4rem !important;
+}
+
+.controls input[type='range'] {
+  flex: 1;
+  min-width: 60px;
+  accent-color: var(--ifm-color-primary);
+}
+
+.counter {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ifm-color-emphasis-700);
+  white-space: nowrap;
+}
+
+.caption {
+  padding: 0.65rem 1rem 0.85rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  min-height: 3.6rem;
+  color: var(--ifm-color-emphasis-800);
+}
+
+.photo {
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  display: block;
+}
+
+.panel {
+  min-width: 0;
+  text-align: center;
+}
+
+.listPanel {
+  margin-top: 1rem;
+}
+
+.panelTitle {
+  font-size: 0.78rem;
+  margin-bottom: 0.35rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.pixels {
+  image-rendering: pixelated;
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.mono {
+  font-family: var(--ifm-font-family-monospace);
+}
+
+.imagePlane {
+  background: #0e1116;
+  border-radius: 6px;
+}
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.25rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.strip li {
+  margin: 0;
+}
+
+.strip a {
+  display: block;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.strip a:hover {
+  border-color: var(--ifm-color-primary);
+  text-decoration: none;
+}
+
+.strip span {
+  color: var(--ifm-color-emphasis-600);
+  margin-right: 0.35rem;
+}
+
+.heatRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.heatRow > div {
+  flex: 1 1 280px;
+}
+
+.note {
+  font-size: 0.8rem;
+  color: var(--ifm-color-emphasis-700);
+  margin-top: 0.25rem;
+}

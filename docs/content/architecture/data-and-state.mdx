@@ -1,0 +1,96 @@
+---
+title: Data and state
+sidebar_label: 'Reference: data and state'
+sidebar_position: 3
+description: Per-Gaussian columns, slots, records, the slab, gradients, and what a forward saves for its backward.
+---
+
+import ColumnMap from '@site/src/components/architecture/ColumnMap';
+import RecordLayout from '@site/src/components/architecture/RecordLayout';
+
+# Data and state
+
+This page is reference for anyone changing the kernels or a block's memory layout.
+You don't need it to use the library.
+
+A Gaussian is stored in several forms, and each one exists to make a kernel fast.
+Most of this page is about a single question: for a given stage, what index does it
+use, and which buffer holds that value?
+
+| Index | Counts | Used by |
+|---|---|---|
+| Gaussian `g` | Every Gaussian in `Splats`, 0 to N−1 | Columns, gradient columns, preprocess and its backward |
+| Slot | The visible Gaussians only, in arbitrary (warp) order | Records, colors, slot gradients |
+| Instance | One per Gaussian-tile pair, sorted by tile then depth | The tile lists that blend walks |
+| Lane | One thread in a warp (32 on NVIDIA) | The blend slab |
+
+## Columns
+
+`Splats` holds one array per `Column`. Kernels get a `SplatView`: the four core columns
+by name, and the rest as `ExtraColumns`, pointers `c0..c3`. The appearance's columns
+come first, then the response's. `ExtraColumns.skip(Pipe.Appear.NUM_COLUMNS)` gives a
+`Response` its own columns starting at `c0`.
+
+<ColumnMap />
+
+There are four extra pointers because a kernel signature is a fixed list of plain
+pointers. `Splats` leaves any extra column beyond the fourth out of the view without an
+error. Adam allows at most 8 columns in total and raises if there are more.
+
+`Splats.gather` applies one row operation to all of this at once: clone and split
+append rows, pruning keeps the surviving rows, Morton reordering permutes them.
+
+## Slots and the record
+
+Preprocess compacts each visible Gaussian into one **slot**. Slot arrays are written
+contiguously, and the record's 32 bytes hold the geometry and opacity that the blend kernels read per instance.
+
+<RecordLayout />
+
+The record is fixed at `REC = 8` floats (`render/record.mojo`). A Response can carry
+per-slot values beyond its six floats, up to 8, through `EXTRA`, in a separate
+`response_extra` array.
+
+The **slab** is the warp-private shared memory that blend composites from. It is
+laid out by `Response.store_slab`, read through `Loaded(src)` and `channel`, and sized
+by `Response.SLAB`. A `Gaussian2D` uses 12 floats per lane, three vectors of 4.
+
+## What forward saves for backward
+
+`ForwardState` holds only sizes and raw pointers. `Rasterizer.forward` takes the
+memory from a `StateAllocator`: its own arena by default, or an allocator you pass
+(the PyTorch bindings pass one so that several forwards can be in flight). The arena's
+buffers are reused, so a state from `rast.forward` stays valid only until the next
+`forward` or `render` on that rasterizer.
+
+### What is saved
+
+These hold what the backward can't afford to rebuild, mostly per-pixel state
+partway through compositing:
+
+| Saved | Buffer | Needed by |
+|---|---|---|
+| Which slot a Gaussian went to | `slot_of [N]` | Preprocess backward, to find a Gaussian's slot gradients |
+| Geometry of each visible Gaussian | `records [slot, 8]` | Blend backward, to rebuild `Loaded` |
+| Per-slot values of a response with `EXTRA > 0` | `response_extra [slot, EXTRA]` | Blend backward, to rebuild `Loaded` |
+| Colors, before clamping | `colors [slot, 3]` | Blend backward, for the clamp mask and the pixel color |
+| Pixel state before every 32 instances | `snapshots [buckets, BLOCK, 4]` | Blend backward, to start at any bucket without replaying the tile |
+| Each pixel's final T and last contributing instance | `final_T`, `n_processed` | Blend backward, to compute the color still to come and to stop lanes |
+| Tile lists | `tile_offsets`, `instance_slots`, `bucket_start`, `bucket_tile`, `tile_max_n` | Blend backward, to find a tile's buckets |
+
+Sizes, the packed camera and the background are plain values in the struct.
+
+### What is recomputed instead
+
+| Not stored | How it is recovered |
+|---|---|
+| 3D covariance, Jacobian pieces, 2D covariance and its inverse | `preprocess_backward` re-runs the constructors from the raw parameters, so **the parameters must not change between forward and backward** |
+| Alpha and the fragment's offsets at each pixel | `blend_backward` calls `Loaded.eval` again, and passes the returned `Hit` to `add` |
+| The color still to come at a fragment | From the image, final T and the snapshot: `image - final_T * background - snapshot color`, updated by each lane as the pixel moves through the warp |
+| The view direction | Recomputed from the mean and the camera position |
+| Gradients of culled Gaussians | Written as zero directly, with no slot involved |
+| `sh_rest` gradients | With `write_all=False`, Adam computes `sh_rest_basis(k, dir) * grad_color[slot]` per element, so this gradient is neither stored nor read back |
+
+Slot gradients live in `Rasterizer.grad_scratch`, not in `ForwardState`. They are
+allocated in `backward`, zeroed, and filled with atomics by blend backward. Their layout
+is `Response.grad_index`, with the slot's color gradients stored right after them.

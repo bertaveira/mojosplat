@@ -1,0 +1,110 @@
+---
+title: Overview
+sidebar_position: 1
+description: The layers of MojoSplat, and how kernels, blocks and pipelines fit together.
+---
+
+import Anatomy from '@site/src/components/architecture/Anatomy';
+import OpTape from '@site/src/components/architecture/OpTape';
+
+# Architecture overview
+
+[How rendering works](../how-rendering-works.mdx) explains what the renderer does.
+This page explains how the code is organized. It assumes you know 3D Gaussian
+Splatting and CUDA.
+
+## The layers
+
+Each layer answers one question. Dependencies point one way, down the table.
+
+| Layer | Question it answers | What it holds |
+|---|---|---|
+| `tools/` | Which program do I run? | `train`, `eval`, `render`, `bench`, `view` |
+| `methods/` | Which settings reproduce a paper? | A `Method` names a pipeline and its training settings |
+| `train/` | How do the parameters get better? | The training loop, loss, Adam, densification, the COLMAP dataset |
+| `render/` | How does the GPU do this for millions of Gaussians? | Kernels, blocks and pipelines, described below |
+| `model/` | Who owns the Gaussians? | `Splats`, initialization, Morton reordering |
+| `gpu/` | What general GPU tools does this need? | Scan, radix sort, fills, allocators. It knows nothing about Gaussians |
+| `core/` | What vocabulary does everything share? | Pointer aliases, the camera, `SplatView`, small vector and matrix types |
+
+Beside the stack are `io/` (file formats), `cli/` (options from config structs),
+`viewer/` (the browser viewer) and `bindings/torch/` (PyTorch, outside the Mojo
+package). `render/` can be used for inference without any training code.
+
+## Kernels, blocks and pipelines
+
+Most of the difficulty in this code is in `render/`, so that is the layer split
+further. Three words do the work:
+
+| | Question it answers | Owns | Example |
+|---|---|---|---|
+| **Kernel** | How does the GPU do this for millions of Gaussians? | Threads, culling, memory, tile lists, compositing | `_preprocess_kernel` |
+| **Block** | What is the math for one Gaussian, forward and backward? | Formulas only. Blocks import no GPU primitives. | `PinholeEWA` |
+| **Pipeline** | Which blocks make this renderer? | Nothing but one choice of each block | `Standard3DGS` |
+
+If you know the usual 3DGS CUDA rasterizer: kernels are the `__global__` functions,
+stripped of their projection and Gaussian formulas. Those formulas moved into blocks
+that the kernels call. `Rasterizer` is the host code that runs the kernels in order
+and owns their scratch memory.
+
+<Anatomy />
+
+Blocks are grouped by the question they answer:
+
+- A **Placement** decides where a Gaussian lands on the image.
+- A **Response** decides what a pixel sees of it.
+- An **Appearance** decides its color.
+
+Kernels find their blocks with no registry and no virtual call. The pipeline is a
+compile-time parameter passed down to the kernel, the same mechanism as a C++ template
+parameter. As with templates, generic code is only checked when something instantiates
+it, so a block that no test or program names may not compile.
+
+## How a block works
+
+`render/blocks/contracts.mojo` is the file to read first. It defines what a kernel
+requires of a block.
+
+A block is a struct. **Its constructor runs the forward and stores what its backward
+needs in its fields, and `backward` is the pullback.** Here is `ConicFromCov`, the
+smallest block (with `@always_inline` and an empty constructor left out):
+
+```mojo
+struct ConicFromCov[dt: DType](ImplicitlyCopyable, Movable):
+    """2D covariance -> conic (its inverse)."""
+
+    var cov: Sym2[Self.dt]
+    var det: Scalar[Self.dt]
+    var conic: Sym2[Self.dt]
+
+    def __init__(out self, cov: Sym2[Self.dt]):
+        self.cov = cov
+        self.det = cov.a * cov.c - cov.b * cov.b
+        self.conic = Sym2[Self.dt](cov.c / self.det, -cov.b / self.det, cov.a / self.det)
+
+    def backward(self, g: Sym2[Self.dt]) -> Sym2[Self.dt]:
+        var a = self.cov.a
+        var b = self.cov.b
+        var c = self.cov.c
+        var rs = 1.0 / (self.det * self.det)
+        return Sym2[Self.dt](
+            rs * (2.0 * b * c * g.b - c * c * g.a - b * b * g.c),
+            rs * (b * c * g.a - (a * c + b * b) * g.b + a * b * g.c),
+            rs * (2.0 * a * b * g.b - b * b * g.a - a * a * g.c),
+        )
+```
+
+A kernel chains blocks top to bottom, then calls `backward` bottom to top. Its local
+variables are the tape, and nothing goes to memory.
+
+<OpTape />
+
+Everything is inlined, and fields the kernel does not end up reading are removed by the
+compiler, so a block costs what the same expressions cost written out flat. The same
+walk is shown for the values, rather than the fields, in
+[How rendering works](../how-rendering-works.mdx#7-back-to-the-parameters).
+
+## Where to read next
+
+- [Adding a method](adding-a-method.mdx): what a new method touches, and what is not supported yet.
+- [Data and state](data-and-state.mdx): reference for anyone changing the kernels or a block's memory layout.

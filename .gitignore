@@ -196,3 +196,6 @@ bindings/torch/mojosplat_torch/*.so
 /data
 # Scratch files written by tests
 tests/data/golden/**/_*
+
+# Local benchmark notes, not published
+/docs/results
