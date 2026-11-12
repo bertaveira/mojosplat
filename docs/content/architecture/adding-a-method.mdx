@@ -19,8 +19,9 @@ changed. Check which kind yours is before starting.
 ## Walkthrough: a new footprint
 
 Suppose you want a footprint with its own per-Gaussian parameter, say a Beta-kernel
-falloff with a learned exponent `b`. This walkthrough uses that as a hypothetical. The
-real, working example to copy from is `ScaledGaussian` in
+falloff with a learned exponent `b`. This walkthrough uses a simplified version of it;
+the full block is `BetaFootprint` in `render/blocks/response/beta.mojo`, used by the
+`beta-splatting` method. The smallest working example to copy from is `ScaledGaussian` in
 `tests/render/test_pipeline_seams.mojo`: a `Gaussian2D` with alpha scaled by a value from
 its own column, tested from the column through blend and back to the column's gradient.
 
@@ -191,7 +192,7 @@ Blocks, strategies and methods defined there work the same as the ones in MojoSp
 | `Response.backward` returns a 2D position and covariance gradient | `render/blocks/contracts.mojo` `ScreenGrad` |
 | `Placement.depth` is also the sort key, so it must order Gaussians front to back | `render/blocks/contracts.mojo` |
 | Shape is always `QuatScale` | `render/blocks/contracts.mojo`, kernels |
-| `tools/train` and `tools/eval` get their method from `--method`, from the methods registered in their `main`; `FasterGS` is the only one so far | `tools/train.mojo`, `tools/eval.mojo` |
+| `tools/train` and `tools/eval` get their method from `--method`, from the methods registered in their `main` | `tools/train.mojo`, `tools/eval.mojo` |
 | The viewer, `tools/render` and `tools/bench` always use `Standard3DGS` | `Viewer`, `tools/render`, `tools/bench` |
 
 [Data and state](data-and-state.mdx) explains why the record and the slab are laid out

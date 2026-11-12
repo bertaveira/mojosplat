@@ -13,7 +13,9 @@ has not been tested yet.
 
 The rasterizer and training recipe are a Mojo port of
 [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting)
-(Hahlbohm et al., CVPR 2026).
+(Hahlbohm et al., CVPR 2026). Other methods, such as Beta Splatting, are built from the
+same blocks and selected with `--method`. Each one is checked against its official code:
+see [Methods and results](results.md).
 
 ## Where to go next
 
@@ -21,4 +23,5 @@ The rasterizer and training recipe are a Mojo port of
 - **[Using the Mojo library](getting-started/mojo-library.md):** render and train from your own Mojo code.
 - **[PyTorch](getting-started/pytorch.md):** use the rasterizer from existing Python training code.
 - **[How rendering works](how-rendering-works.mdx):** the pipeline step by step, compared with 3DGS CUDA.
+- **[Methods and results](results.md):** each method against its official code, for quality, training time and rendering speed.
 - **[Architecture](architecture/overview.mdx):** how the code is organized: layers, kernels, blocks, pipelines and data.

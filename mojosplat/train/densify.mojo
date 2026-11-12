@@ -454,5 +454,8 @@ struct ClassicDensification(Densification):
     def collects_stats(self, it: Int) -> Bool:
         return self.config.densify and it < self.config.densify_until
 
+    def after_backward(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises -> Bool:
+        return True
+
     def finish(mut self, mut splats: Splats) raises -> Int:
         return self.densifier.prune_final(splats)

@@ -7,6 +7,7 @@ One iteration `it` (0-based, Faster-GS's callback order):
     image, state = rasterizer.forward(splats, view.camera)       # saves backward state
     grad  = loss.backward(image, view.image)                      # L1 + D-SSIM
     rasterizer.backward(state, grad) -> splats.grads              # all raw parameters
+    strategy.after_backward(it)                                   # may skip the step below
     adam.step(splats)                                             # per-attribute lrs
 plus the schedules: the means learning rate decays exponentially (scaled by
 the scene extent) and the SH degree grows by one every 1000 iterations.
@@ -251,13 +252,15 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
             stats,
             write_all=False,
         )
-        self.adam.lr[Attr.MEANS] = exponential_lr(
+        var means_lr = exponential_lr(
             self.config.lr_means_init * self.dataset.scene_extent,
             self.config.lr_means_final * self.dataset.scene_extent,
             it + 1,
             self.config.lr_means_steps,
         )
-        self.adam.step(self.splats, self.rasterizer.sh_rest_grad[Self.Pipe](st))
+        self.adam.lr[Attr.MEANS] = means_lr
+        if self.strategy.after_backward(it, self.splats, means_lr):
+            self.adam.step(self.splats, self.rasterizer.sh_rest_grad[Self.Pipe](st))
         self.iteration += 1
         return value if log_now else -1.0
 

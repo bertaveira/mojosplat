@@ -31,6 +31,22 @@ Gaussian/tile intersection test and the instance-range extraction, and
 Splatshop (Schütz et al.) for the separate depth and tile sorts, and
 Taming 3DGS (Mallick et al., 2024) for the per-Gaussian backward pass.
 
+## Deformable Beta Splatting
+
+The Spherical Beta color in `mojosplat/render/blocks/appearance/spherical_beta.mojo`
+is ported from the official Beta Splatting code. The Beta-kernel footprint in
+`mojosplat/render/blocks/response/beta.mojo` and the `beta-splatting` method's
+settings follow it:
+
+- Project: https://github.com/RongLiu-Leo/beta-splatting
+- Paper: R. Liu, D. Sun, M. Chen, Y. Wang, A. Feng, "Deformable Beta Splatting", arXiv:2501.18630, 2025
+- Copyright the Deformable Beta Splatting authors
+- License: Apache License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0
+
+Changes made in the port: rewritten in Mojo as MojoSplat blocks, with the color
+evaluated in MojoSplat's preprocess kernels and its gradients written by
+MojoSplat's preprocess backward.
+
 ## NeRFICG
 
 The Morton (Z-order) encoding in `mojosplat/model/morton.mojo` follows

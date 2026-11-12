@@ -1,0 +1,187 @@
+---
+title: Methods and results
+sidebar_position: 3
+description: Every method against its official code on Mip-NeRF 360, for quality, training time and rendering speed.
+---
+
+# Methods and results
+
+Each method in MojoSplat reproduces a paper and is selected with `--method`. Every method is
+trained with its official code and with MojoSplat on the same GPU and the same scenes,
+and both are scored with the same metric code. Differences that are still open are
+listed with each method.
+
+| Method | `--method` | Paper | Training time per scene | Rendering |
+|---|---|---|---|---|
+| Faster-GS | `faster-gs` (default) | [Hahlbohm et al., CVPR 2026](https://fhahlbohm.github.io/faster-gaussian-splatting) | 2m24s (1.13×) | 1119 FPS (0.88×) |
+| Beta Splatting | `beta-splatting` | [Liu et al., 2025](https://arxiv.org/abs/2501.18630) | 3m43s (3.70×) | 369 FPS (3.43×) |
+
+MojoSplat's mean training time per scene and rendering speed on an RTX 5090, over the
+seven Mip-NeRF 360 scenes below. In brackets is the speedup over the official code: its
+time divided by MojoSplat's, from total training time and mean milliseconds per view.
+Below 1× means MojoSplat is slower. The official times are in each method's section.
+
+## How the comparison is run
+
+- **GPU:** NVIDIA RTX 5090, one job at a time.
+- **Scenes:** the seven Mip-NeRF 360 scenes available here: garden, bicycle and stump
+  at `images_4`, and room, counter, kitchen and bonsai at `images_2`. Every 8th image is
+  a test view. `flowers` and `treehill` were not available.
+- **Final model only:** all numbers come from the final iteration of training. No
+  checkpoint is selected on test views.
+- **Same scorer:** both sides render 8-bit PNGs, which are scored against the same
+  ground truth with the metric functions the official code uses. LPIPS values are only
+  comparable within one method, because methods use different LPIPS implementations.
+- **Repeats:** a quality gap of about 0.15 dB or more on a first run is repeated on both
+  sides, with a different seed each time, before it counts as a real difference.
+- **Training time** is the training loop only, from each codebase's own timer. Dataset
+  loading and evaluation are excluded.
+- **Rendering time** is milliseconds per view for the same model, cameras and
+  resolution. Each frame is timed from a device sync to a device sync, with no image
+  readback. Every cell is two alternating rounds of 11 passes over all test views, with
+  the first pass of each round dropped. The two renderers' images agree at a mean of
+  82-106 dB per scene, so they do the same work.
+
+## Faster-GS
+
+[Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) is MojoSplat's
+default method. Its rasterizer and training recipe are a Mojo port of the official CUDA
+code. Official code: NeRFICG at `623ad16`.
+
+### Quality
+
+PSNR / SSIM / LPIPS of the first run of each side. SSIM is torchmetrics with
+`data_range=1.0`, and LPIPS is VGG with `normalize=True`.
+
+| Scene | Official | MojoSplat |
+|---|---|---|
+| garden | 27.51 / 0.867 / 0.120 | 27.43 / 0.866 / 0.122 |
+| bicycle | 25.29 / 0.766 / 0.231 | 25.26 / 0.765 / 0.233 |
+| stump | 26.60 / 0.771 / 0.247 | 26.63 / 0.770 / 0.248 |
+| room | 31.66 / 0.920 / 0.282 | 31.62 / 0.920 / 0.284 |
+| counter | 29.12 / 0.910 / 0.254 | 29.05 / 0.908 / 0.256 |
+| kitchen | 31.56 / 0.929 / 0.152 | 31.21 / 0.928 / 0.153 |
+| bonsai | 32.20 / 0.942 / 0.251 | 32.05 / 0.941 / 0.253 |
+| **mean** | **29.13 / 0.872 / 0.220** | **29.04 / 0.871 / 0.221** |
+
+Kitchen, bonsai and counter were run three times on each side. The means agree:
+
+| Scene | Official PSNR | MojoSplat PSNR |
+|---|---|---|
+| kitchen | 31.56, 31.45, 31.34 (mean 31.45) | 31.21, 31.43, 31.46 (mean 31.37) |
+| bonsai | 32.20, 32.22, 32.25 (mean 32.22) | 32.05, 32.29, 32.36 (mean 32.23) |
+| counter | 29.12, 29.12, 29.15 (mean 29.13) | 29.05, 29.10, 29.10 (mean 29.08) |
+
+Both sides end with the same number of Gaussians to within 2.5%. For example, garden
+has 4.15M with the official code and 4.20M with MojoSplat.
+
+### Training time
+
+| Scene | Official (s) | MojoSplat (s) | Speedup |
+|---|---|---|---|
+| garden | 225 | 199 | 1.13× |
+| bicycle | 233 | 204 | 1.14× |
+| stump | 197 | 166 | 1.19× |
+| room | 115 | 105 | 1.10× |
+| counter | 112 | 104 | 1.08× |
+| kitchen | 147 | 137 | 1.07× |
+| bonsai | 110 | 93 | 1.18× |
+| **total** | **1139** | **1008** | **1.13×** |
+
+### Rendering speed
+
+Milliseconds per view, with frames per second in brackets.
+
+| Scene | Official | MojoSplat | Speedup |
+|---|---|---|---|
+| garden | 0.96 ms (1037) | 1.08 ms (924) | 0.89× |
+| bicycle | 1.13 ms (888) | 1.26 ms (795) | 0.90× |
+| stump | 0.76 ms (1311) | 0.85 ms (1181) | 0.90× |
+| room | 0.63 ms (1597) | 0.71 ms (1406) | 0.88× |
+| counter | 0.64 ms (1553) | 0.75 ms (1339) | 0.86× |
+| kitchen | 0.83 ms (1209) | 0.97 ms (1033) | 0.85× |
+| bonsai | 0.55 ms (1808) | 0.64 ms (1558) | 0.86× |
+| **mean** | **0.79 ms (1272)** | **0.89 ms (1119)** | **0.88×** |
+
+The remaining gap is the radix sort. MojoSplat's sort runs separate upsweep, scan and
+downsweep kernels for every pass, while the official code uses CUB's single-pass
+Onesweep sort. Official timings are for its `rasterize` entry point.
+
+## Beta Splatting
+
+[Deformable Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) replaces the
+Gaussian footprint with a Beta kernel, whose sharpness is learned per primitive, and
+view-dependent color with Spherical Beta lobes. It densifies by relocation, as 3DGS-MCMC
+does, up to a fixed cap per scene. Official code: `431d575`, with the settings of its
+`benchmark.py`.
+
+```bash
+pixi run train data/mipnerf360/garden --method beta-splatting
+```
+
+### Quality
+
+PSNR / SSIM / LPIPS of the first run of each side. SSIM is `fused_ssim`, and LPIPS is
+`lpipsPyTorch` VGG, as in the official code. Its LPIPS values are not comparable with the
+Faster-GS table above.
+
+| Scene | Official | MojoSplat |
+|---|---|---|
+| garden | 27.63 / 0.869 / 0.102 | 27.61 / 0.870 / 0.102 |
+| bicycle | 25.23 / 0.783 / 0.174 | 25.27 / 0.783 / 0.174 |
+| stump | 26.76 / 0.794 / 0.186 | 26.77 / 0.795 / 0.186 |
+| room | 32.55 / 0.933 / 0.192 | 32.59 / 0.931 / 0.193 |
+| counter | 30.12 / 0.922 / 0.174 | 30.15 / 0.923 / 0.173 |
+| kitchen | 32.23 / 0.932 / 0.122 | 32.22 / 0.933 / 0.121 |
+| bonsai | 33.70 / 0.952 / 0.182 | 33.40 / 0.951 / 0.183 |
+| **mean** | **29.75 / 0.884 / 0.162** | **29.72 / 0.884 / 0.162** |
+
+Repeats, PSNR per run. The official numbers here are the float values it reports, which
+are about 0.05 dB above its 8-bit scores.
+
+| Scene | Official PSNR | MojoSplat PSNR |
+|---|---|---|
+| room | 32.60, 32.54, 32.53 (mean 32.56) | 32.59, 32.50, 32.37 (mean 32.49) |
+| bonsai | 33.76, 33.75, 33.75 with seed 0; 33.62 seed 1; 33.63 seed 2 | 33.40, 33.56, 33.48 (mean 33.48) |
+
+Two differences are still open:
+
+- **Bonsai PSNR** is about 0.13 dB below the mean of the three official seeds, with SSIM
+  and LPIPS level. All three MojoSplat runs are below the lowest official run, so it may
+  be a small real difference.
+- **Room SSIM** is about 0.002 lower in all three MojoSplat runs, while PSNR matches.
+
+Both sides reach the fixed Gaussian cap: 5M for garden, 6M for bicycle, 4.5M for stump
+and 1.5M for the indoor scenes.
+
+### Training time
+
+| Scene | Official (s) | MojoSplat (s) | Speedup |
+|---|---|---|---|
+| garden | 1098 | 247 | 4.45× |
+| bicycle | 1262 | 261 | 4.84× |
+| stump | 947 | 210 | 4.51× |
+| room | 580 | 184 | 3.15× |
+| counter | 693 | 248 | 2.79× |
+| kitchen | 623 | 211 | 2.95× |
+| bonsai | 564 | 199 | 2.83× |
+| **total** | **5767** | **1560** | **3.70×** |
+
+### Rendering speed
+
+Milliseconds per view, with frames per second in brackets. Both renderers draw the
+MojoSplat-trained model. The official timing is the same call as its `BetaModel.render`.
+
+| Scene | Official | MojoSplat | Speedup |
+|---|---|---|---|
+| garden | 11.43 ms (87) | 1.89 ms (529) | 6.05× |
+| bicycle | 15.40 ms (65) | 2.38 ms (420) | 6.47× |
+| stump | 12.69 ms (79) | 2.40 ms (417) | 5.29× |
+| room | 5.93 ms (169) | 2.68 ms (373) | 2.21× |
+| counter | 7.21 ms (139) | 3.92 ms (255) | 1.84× |
+| kitchen | 6.46 ms (155) | 2.53 ms (395) | 2.55× |
+| bonsai | 5.94 ms (168) | 3.15 ms (317) | 1.89× |
+| **mean** | **9.29 ms (108)** | **2.71 ms (369)** | **3.43×** |
+
+The Beta timings were taken before MojoSplat's 32-bit tile math was merged, which made
+Faster-GS rendering about 9% faster. They will be updated.

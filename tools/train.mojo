@@ -9,12 +9,14 @@ The program itself is `mojosplat.apps.train`; this picks the method.
 """
 
 from mojosplat.apps import method_arg, train, unknown_method
-from mojosplat.methods import FasterGS
+from mojosplat.methods import BetaSplattingMethod, FasterGS
 
 
 def main() raises:
     var name = method_arg(FasterGS.name())
     if name == FasterGS.name():
         train[FasterGS]()
+    elif name == BetaSplattingMethod.name():
+        train[BetaSplattingMethod]()
     else:
-        unknown_method(name, [FasterGS.name()])
+        unknown_method(name, [FasterGS.name(), BetaSplattingMethod.name()])
