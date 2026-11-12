@@ -20,8 +20,9 @@ Each layer answers one question. Dependencies point one way, down the table.
 | Layer | Question it answers | What it holds |
 |---|---|---|
 | `tools/` | Which program do I run? | `train`, `eval`, `render`, `bench`, `view` |
-| `methods/` | Which settings reproduce a paper? | A `Method` names a pipeline and its training settings |
-| `train/` | How do the parameters get better? | The training loop, loss, Adam, densification, the COLMAP dataset |
+| `apps/` | What do `train` and `eval` do, for any method? | The whole programs, `train[M]` and `evaluate[M]`, so another repository can run them for its own method |
+| `methods/` | Which settings reproduce a paper? | A `Method` names a pipeline, a densification strategy and its own settings |
+| `train/` | How do the parameters get better? | The training loop, loss, Adam, densification strategies, the COLMAP dataset |
 | `render/` | How does the GPU do this for millions of Gaussians? | Kernels, blocks and pipelines, described below |
 | `model/` | Who owns the Gaussians? | `Splats`, initialization, Morton reordering |
 | `gpu/` | What general GPU tools does this need? | Scan, radix sort, fills, allocators. It knows nothing about Gaussians |

@@ -110,21 +110,44 @@ The column saves in PLY as `extra_<name>_<i>` properties.
 
 ### 6. Make it a method
 
-A `Method` in `mojosplat/methods/` gives the pipeline a name and its training settings:
+A `Method` in `mojosplat/methods/` gives the pipeline a name, a densification strategy
+and its settings. The settings are a struct of the method's own: the shared
+`TrainConfig`, the strategy's config, and any settings only this method has. Every
+field becomes a command-line option, so a method shows only the options it uses.
 
 ```mojo
+struct MyMethodConfig(MethodConfig):
+    comptime Strategy = ClassicDensification
+
+    @__annotation(Arg("Training"))
+    var train: TrainConfig
+
+    @__annotation(Arg("Densification"))
+    var densify: DensifyConfig
+
+    def __init__(out self):
+        self.train = TrainConfig()
+        self.train.initial_opacity = 0.5
+        self.densify = DensifyConfig()
+
+    def training(self) -> TrainConfig:
+        return self.train.copy()
+
+    def densification(self) -> DensifyConfig:
+        return self.densify.copy()
+
+
 struct MyMethod(Method):
     comptime Pipe = MyPipeline
+    comptime Config = MyMethodConfig
 
     @staticmethod
     def name() -> String:
         return "my-method"
 
     @staticmethod
-    def config(scene: String) -> TrainConfig:
-        var c = TrainConfig()
-        c.initial_opacity = 0.5
-        return c^
+    def config(scene: String) -> MyMethodConfig:
+        return MyMethodConfig()
 ```
 
 `config` receives the scene's directory name, for settings that differ per scene.
@@ -135,8 +158,25 @@ Export the struct from `methods/__init__.mojo` and add a branch for it in `main`
 pixi run train path/to/scene --method my-method
 ```
 
-Flags on the command line override the method's settings. Each run writes `run.json`
-next to the model, with the method, scene, commit, GPU, resolved settings and results.
+Flags on the command line override the method's settings, and
+`pixi run train --method my-method --help` lists them. Each run writes `run.json` next
+to the model, with the method, scene, MojoSplat commit (and whether it had uncommitted
+changes), GPU, resolved settings and results.
+
+### In a repository of your own
+
+The whole `train` and `eval` programs are library functions, `train[M]` and
+`evaluate[M]` in `mojosplat.apps`. A paper can live in its own repository that uses
+MojoSplat, with a `main` of a few lines:
+
+```mojo
+from mojosplat.apps import train
+
+def main() raises:
+    train[MyMethod]()
+```
+
+Blocks, strategies and methods defined there work the same as the ones in MojoSplat.
 
 ## Limits at a glance
 
@@ -151,7 +191,7 @@ next to the model, with the method, scene, commit, GPU, resolved settings and re
 | `Response.backward` returns a 2D position and covariance gradient | `render/blocks/contracts.mojo` `ScreenGrad` |
 | `Placement.depth` is also the sort key, so it must order Gaussians front to back | `render/blocks/contracts.mojo` |
 | Shape is always `QuatScale` | `render/blocks/contracts.mojo`, kernels |
-| `tools/train` and `tools/eval` get their pipeline from `--method`, and `FasterGS` is the only registered method | `tools/train.mojo`, `tools/eval.mojo` |
+| `tools/train` and `tools/eval` get their method from `--method`, from the methods registered in their `main`; `FasterGS` is the only one so far | `tools/train.mojo`, `tools/eval.mojo` |
 | The viewer, `tools/render` and `tools/bench` always use `Standard3DGS` | `Viewer`, `tools/render`, `tools/bench` |
 
 [Data and state](data-and-state.mdx) explains why the record and the slab are laid out
