@@ -1,4 +1,4 @@
-"""Reconstruction methods: a pipeline plus its training settings."""
+"""Reconstruction methods: a pipeline, a densification strategy and their settings."""
 
-from .faster_gs import FasterGS
-from .method import Method
+from .faster_gs import FasterGS, FasterGSConfig
+from .method import Method, MethodConfig

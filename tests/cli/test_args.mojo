@@ -13,6 +13,8 @@ from mojosplat.cli import (
     parse_args_from,
     visible_width,
 )
+from mojosplat.methods import FasterGS
+from mojosplat.train.densify import DensifyConfig
 from mojosplat.train.trainer import TrainConfig
 
 
@@ -109,15 +111,16 @@ def test_errors() raises:
         _ = parse(["a", "b", "c"])
 
 
-def test_train_config() raises:
-    var c = parse_args_from[TrainConfig](
+def test_method_settings() raises:
+    """A method's settings parse as groups: the shared ones and its strategy's."""
+    var c = parse_args_from[FasterGS.Config](
         ["--iterations", "7000", "--sh-degree", "1", "--no-densify", "--lr-means-init", "1e-4"], "train"
     )
-    assert_equal(c.iterations, 7000)
-    assert_equal(c.sh_degree, 1)
-    assert_false(c.densify)
-    assert_equal(c.lr_means_init, Float32(1e-4))
-    assert_equal(c.densify_from, TrainConfig().densify_from)
+    assert_equal(c.train.iterations, 7000)
+    assert_equal(c.train.sh_degree, 1)
+    assert_equal(c.train.lr_means_init, Float32(1e-4))
+    assert_false(c.densify.densify)
+    assert_equal(c.densify.densify_from, DensifyConfig().densify_from)
 
 
 def test_formatting() raises:

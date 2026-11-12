@@ -1,27 +1,45 @@
 """`run.json`: everything needed to tell what produced a result."""
 
-from std.os.path import exists
+from std.reflection import source_location
+from std.subprocess import run
 
 from ..cli.args import config_items
 
 
-def _read(path: String) raises -> String:
-    with open(path, "r") as f:
-        return f.read()
-
-
-def git_commit() -> String:
-    """The checked-out commit, or "unknown" outside a git repository."""
+def _git(root: String, command: String) -> String:
+    """Output of `git -C <root> <command>`, or "" if git fails or is missing."""
     try:
-        var head = String(_read(".git/HEAD").strip())
-        if not head.startswith("ref: "):
-            return head
-        var ref_path = String(".git/", head[byte=5:])
-        if exists(ref_path):
-            return String(_read(ref_path).strip())
-        return "unknown"
+        return String(run(String("git -C '", root, "' ", command, " 2>/dev/null")).strip())
     except:
-        return "unknown"
+        return ""
+
+
+def mojosplat_root() -> String:
+    """The MojoSplat checkout this program was built from (where `mojosplat/` lives).
+
+    Taken from this file's path at compile time, so it is MojoSplat's own
+    repository even when the program belongs to another one that uses it. The
+    path is relative when the package is found through a relative `-I`; it is
+    then relative to the directory the program runs from, as with `pixi run`."""
+    var here = String()
+    here.write(source_location().file_name())
+    var marker = "/mojosplat/train/"
+    var at = here.find(marker)
+    return String(here[byte=:at]) if at >= 0 else String(".")
+
+
+@fieldwise_init
+struct GitState(Copyable, Movable):
+    var commit: String  # "unknown" outside a git checkout
+    var dirty: Bool  # tracked files differ from the commit
+
+
+def git_state(root: String) -> GitState:
+    """The checked-out commit of `root` and whether tracked files have uncommitted changes."""
+    var commit = _git(root, "rev-parse HEAD")
+    if commit.byte_length() == 0:
+        return GitState("unknown", False)
+    return GitState(commit, _git(root, "status --porcelain --untracked-files=no").byte_length() > 0)
 
 
 def _quoted(text: String) -> String:
@@ -41,11 +59,14 @@ def write_run_record[
 ](
     path: String, method: String, scene: String, gpu: String, ref config: T, metrics: List[Tuple[String, Float64]]
 ) raises:
-    """Write `run.json`: method, scene, commit, GPU, the resolved settings and the results."""
+    """Write `run.json`: method, scene, MojoSplat's commit (and whether it had
+    uncommitted changes), GPU, the resolved settings and the results."""
+    var git = git_state(mojosplat_root())
     var out = String("{\n")
     out += String('  "method": ', _quoted(method), ",\n")
     out += String('  "scene": ', _quoted(scene), ",\n")
-    out += String('  "commit": ', _quoted(git_commit()), ",\n")
+    out += String('  "commit": ', _quoted(git.commit), ",\n")
+    out += String('  "dirty": ', "true" if git.dirty else "false", ",\n")
     out += String('  "gpu": ', _quoted(gpu), ",\n")
     out += '  "config": {\n'
     var items = config_items[T](config)

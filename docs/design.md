@@ -21,6 +21,8 @@ mojosplat/      the library: kernels + model, no CLI or dataset policy
   train/        dataset, loss (L1 + SSIM), PSNR, Adam, densification, trainer
   cli/          command-line options from config structs, terminal output
   viewer/       web viewer: HTTP + WebSocket server, JPEG frames
+  methods/      per paper: a pipeline, a densification strategy and their settings
+  apps/         the train and eval programs, for any method
 tools/          command-line programs: train, eval, render, bench
 tests/          mirrors the package; golden data + generators in tests/data/
 bindings/torch/ PyTorch extension (render_splats with autograd)
@@ -29,7 +31,9 @@ bindings/torch/ PyTorch extension (render_splats with autograd)
 Dependencies point one way: `core` <- `gpu` <- `model` <- `render` <- `train`
 <- `tools`. `gpu/` knows nothing about splats; `render/` is usable for
 inference without any training code. Executables live in `tools/` (as in
-llama.cpp) and stay thin: argument parsing and output around library calls.
+llama.cpp) and stay thin: the `train` and `eval` programs themselves are
+library functions (`apps/`), so a repository with its own method can run
+them too, and the tools only pick the method named by `--method`.
 
 `cli/` depends only on the standard library. `parse_args[T]()` turns the
 fields of a config struct into options by compile-time reflection (in the
@@ -143,6 +147,11 @@ extended or its own blend kernel.
 
 `Trainer` (`train/trainer.mojo`) runs the 3DGS recipe with Faster-GS's
 defaults (`TrainConfig`); its docstring lists the order of one iteration.
+Densification is a strategy (`train/strategy.mojo`) with its own config,
+called before each iteration and after training; classic clone, split and
+prune (`ClassicDensification`) is the default. A method's settings are its
+own struct holding `TrainConfig`, its strategy's config and anything else it
+needs, so options only appear for the methods that use them.
 
 ### Splats: one owner for every per-Gaussian row
 

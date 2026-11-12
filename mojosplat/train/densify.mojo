@@ -26,11 +26,13 @@ from std.math import exp, log, sqrt
 from std.random import random_ui64
 from std.random.philox import NormalRandom
 
+from ..cli.args import Arg
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, U32Ptr, dptr, num_blocks
 from ..gpu.elementwise import fill_f32, fill_u32
 from ..gpu.scan import exclusive_scan, scan_workspace_size
 from ..io.arrays import upload
 from ..model.splats import Attr, Splats
+from .strategy import Densification
 
 
 @always_inline
@@ -377,3 +379,80 @@ struct Densifier(Movable):
         ctx.synchronize()
         _ = (split^, keep^, keep_off^, keep_index^)
         return n - n_keep
+
+
+struct DensifyConfig(Copyable, Defaultable, Movable):
+    """Settings of `ClassicDensification`; defaults are Faster-GS's."""
+
+    @__annotation(Arg("Clone, split and prune Gaussians (classic 3DGS densification)"))
+    var densify: Bool
+
+    @__annotation(Arg("First densification iteration"))
+    var densify_from: Int
+
+    @__annotation(Arg("Last densification iteration"))
+    var densify_until: Int
+
+    @__annotation(Arg("Densify every N iterations"))
+    var densify_interval: Int
+
+    @__annotation(Arg("Reset opacities every N iterations (during densification)"))
+    var opacity_reset_interval: Int
+
+    @__annotation(Arg("Densify Gaussians whose mean screen-space gradient exceeds this"))
+    var grad_threshold: Float32
+
+    @__annotation(Arg("Clone below / split above this size (fraction of the scene extent)"))
+    var percent_dense: Float32
+
+    def __init__(out self):
+        self.densify = True
+        self.densify_from = 600
+        self.densify_until = 14_900
+        self.densify_interval = 100
+        self.opacity_reset_interval = 3000
+        self.grad_threshold = 0.0002
+        self.percent_dense = 0.01
+
+
+struct ClassicDensification(Densification):
+    """3DGS's adaptive density control, on Faster-GS's schedule (iteration `it`, 0-based):
+
+        densify           if densify_from <= it <= densify_until and
+                          (it - densify_from) % densify_interval == 0
+        reset opacities   if it % opacity_reset_interval == 0, it >= opacity_reset_interval,
+                          and it is inside the densification window above
+
+    The backward collects statistics until `densify_until`. After training,
+    nearly transparent and degenerate Gaussians are pruned.
+    """
+
+    comptime Config = DensifyConfig
+
+    var config: DensifyConfig
+    var densifier: Densifier
+    var last: DensifyStats
+
+    def __init__(out self, ctx: DeviceContext, config: DensifyConfig) raises:
+        self.config = config.copy()
+        self.densifier = Densifier(ctx)
+        self.densifier.grad_threshold = config.grad_threshold
+        self.densifier.percent_dense = config.percent_dense
+        self.last = DensifyStats()
+
+    def before_step(mut self, it: Int, mut splats: Splats, scene_extent: Float32) raises:
+        var c = self.config.copy()
+        if not c.densify or it < c.densify_from or it > c.densify_until:
+            return
+        if (it - c.densify_from) % c.densify_interval == 0:
+            self.last = self.densifier.densify(splats, scene_extent, it > c.opacity_reset_interval)
+            if it < c.densify_until:
+                splats.reset_densification()
+        if it >= c.opacity_reset_interval and it % c.opacity_reset_interval == 0:
+            self.densifier.reset_opacities(splats)
+
+    def collects_stats(self, it: Int) -> Bool:
+        return self.config.densify and it < self.config.densify_until
+
+    def finish(mut self, mut splats: Splats) raises -> Int:
+        return self.densifier.prune_final(splats)

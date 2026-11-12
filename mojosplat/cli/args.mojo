@@ -265,6 +265,9 @@ def _print_help(prog: String, description: String, opts: List[_Option]):
         if o.positional:
             continue
         if o.kind == "GROUP":
+            # A group that only holds groups (a method's settings) gets no header of its own.
+            if i + 1 < len(opts) and opts[i + 1].kind == "GROUP":
+                continue
             print()
             print(bold(String(o.help if o.help.byte_length() > 0 else o.name, ":")))
             continue
