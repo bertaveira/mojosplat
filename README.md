@@ -92,7 +92,7 @@ image.mean().backward()
 
 - Validate on AMD GPUs and tune on AMD and Apple GPUs (every kernel already compiles for both; Apple runs).
 - Benchmarks on all Mip-NeRF360, Tanks&Temples and Deep Blending scenes.
-- MCMC densification, anti-aliasing, faster optimizer options, LPIPS in Mojo.
+- Anti-aliasing, faster optimizer options, LPIPS in Mojo.
 
 Contributions are welcome; please include tests (`pixi run test`).
 

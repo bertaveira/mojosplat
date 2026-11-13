@@ -4,6 +4,6 @@ from .adam import Adam
 from .dataset import Dataset, View, load_colmap_dataset
 from .densify import ClassicDensification, Densifier, DensifyConfig
 from .loss import PhotometricLoss
-from .relocate import RelocateConfig, Relocation
+from .relocate import MCMCRelocation, RelocateConfig, Relocation
 from .strategy import Densification
-from .trainer import TrainConfig, Trainer
+from .trainer import InitConfig, TrainConfig, Trainer
