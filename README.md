@@ -50,6 +50,7 @@ Each method, selected with `--method`, is also trained with its official code on
 |---|---|---|---|
 | [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) | `faster-gs` (default) | 2m24s (1.13×) | 1119 FPS (0.88×) |
 | [Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) | `beta-splatting` | 3m31s (3.90×) | 489 FPS (4.58×) |
+| [3DGS-MCMC](https://github.com/ubc-vision/3dgs-mcmc) | `3dgs-mcmc` | 3m19s (7.13×) | 682 FPS (2.86×) |
 
 ## Using the library
 
