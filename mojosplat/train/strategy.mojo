@@ -23,7 +23,7 @@ from ..model.splats import Splats
 
 
 trait Densification(Deinitable, Movable):
-    comptime Config: Copyable & Defaultable & Deinitable & Movable
+    comptime Config: Copyable & Defaultable & Deinitable
 
     def __init__(out self, ctx: DeviceContext, config: Self.Config) raises:
         ...
