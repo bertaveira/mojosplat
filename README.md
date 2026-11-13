@@ -49,7 +49,7 @@ Each method, selected with `--method`, is also trained with its official code on
 | Method | `--method` | Training time per scene | Rendering |
 |---|---|---|---|
 | [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) | `faster-gs` (default) | 2m24s (1.13×) | 1119 FPS (0.88×) |
-| [Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) | `beta-splatting` | 3m43s (3.70×) | 369 FPS (3.43×) |
+| [Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) | `beta-splatting` | 3m31s (3.90×) | 489 FPS (4.58×) |
 
 ## Using the library
 

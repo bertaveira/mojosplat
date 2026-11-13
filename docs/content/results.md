@@ -14,7 +14,7 @@ listed with each method.
 | Method | `--method` | Paper | Training time per scene | Rendering |
 |---|---|---|---|---|
 | Faster-GS | `faster-gs` (default) | [Hahlbohm et al., CVPR 2026](https://fhahlbohm.github.io/faster-gaussian-splatting) | 2m24s (1.13×) | 1119 FPS (0.88×) |
-| Beta Splatting | `beta-splatting` | [Liu et al., 2025](https://arxiv.org/abs/2501.18630) | 3m43s (3.70×) | 369 FPS (3.43×) |
+| Beta Splatting | `beta-splatting` | [Liu et al., 2025](https://arxiv.org/abs/2501.18630) | 3m31s (3.90×) | 489 FPS (4.58×) |
 
 MojoSplat's mean training time per scene and rendering speed on an RTX 5090, over the
 seven Mip-NeRF 360 scenes below. In brackets is the speedup over the official code: its
@@ -156,32 +156,33 @@ and 1.5M for the indoor scenes.
 
 ### Training time
 
+MojoSplat's times are from a later run of all seven scenes, with the code as merged. Its
+PSNR, from MojoSplat's own evaluator, was within run-to-run noise of the runs above.
+
 | Scene | Official (s) | MojoSplat (s) | Speedup |
 |---|---|---|---|
-| garden | 1098 | 247 | 4.45× |
-| bicycle | 1262 | 261 | 4.84× |
-| stump | 947 | 210 | 4.51× |
-| room | 580 | 184 | 3.15× |
-| counter | 693 | 248 | 2.79× |
-| kitchen | 623 | 211 | 2.95× |
-| bonsai | 564 | 199 | 2.83× |
-| **total** | **5767** | **1560** | **3.70×** |
+| garden | 1098 | 243 | 4.53× |
+| bicycle | 1262 | 259 | 4.86× |
+| stump | 947 | 207 | 4.57× |
+| room | 580 | 172 | 3.37× |
+| counter | 693 | 217 | 3.19× |
+| kitchen | 623 | 199 | 3.14× |
+| bonsai | 564 | 180 | 3.13× |
+| **total** | **5767** | **1478** | **3.90×** |
 
 ### Rendering speed
 
 Milliseconds per view, with frames per second in brackets. Both renderers draw the
-MojoSplat-trained model. The official timing is the same call as its `BetaModel.render`.
+MojoSplat-trained model from the training-time run. The official timing is the same call
+as its `BetaModel.render`.
 
 | Scene | Official | MojoSplat | Speedup |
 |---|---|---|---|
-| garden | 11.43 ms (87) | 1.89 ms (529) | 6.05× |
-| bicycle | 15.40 ms (65) | 2.38 ms (420) | 6.47× |
-| stump | 12.69 ms (79) | 2.40 ms (417) | 5.29× |
-| room | 5.93 ms (169) | 2.68 ms (373) | 2.21× |
-| counter | 7.21 ms (139) | 3.92 ms (255) | 1.84× |
-| kitchen | 6.46 ms (155) | 2.53 ms (395) | 2.55× |
-| bonsai | 5.94 ms (168) | 3.15 ms (317) | 1.89× |
-| **mean** | **9.29 ms (108)** | **2.71 ms (369)** | **3.43×** |
-
-The Beta timings were taken before MojoSplat's 32-bit tile math was merged, which made
-Faster-GS rendering about 9% faster. They will be updated.
+| garden | 11.51 ms (87) | 1.79 ms (557) | 6.41× |
+| bicycle | 15.54 ms (64) | 2.26 ms (443) | 6.88× |
+| stump | 12.76 ms (78) | 2.22 ms (450) | 5.75× |
+| room | 5.98 ms (167) | 1.90 ms (528) | 3.15× |
+| counter | 7.18 ms (139) | 2.28 ms (439) | 3.15× |
+| kitchen | 6.50 ms (154) | 1.76 ms (567) | 3.68× |
+| bonsai | 6.05 ms (165) | 2.10 ms (477) | 2.89× |
+| **mean** | **9.36 ms (107)** | **2.04 ms (489)** | **4.58×** |
