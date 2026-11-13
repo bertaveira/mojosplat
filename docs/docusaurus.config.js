@@ -42,6 +42,7 @@ const config = {
           {type: 'doc', docId: 'getting-started/quickstart', position: 'left', label: 'Getting started'},
           {type: 'doc', docId: 'how-rendering-works', position: 'left', label: 'How rendering works'},
           {type: 'doc', docId: 'architecture/overview', position: 'left', label: 'Architecture'},
+          {type: 'doc', docId: 'results', position: 'left', label: 'Methods and results'},
           {href: 'https://github.com/bertaveira/mojosplat', label: 'GitHub', position: 'right'},
         ],
       },

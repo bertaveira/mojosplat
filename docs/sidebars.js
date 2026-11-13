@@ -11,6 +11,7 @@ const sidebars = {
       items: ['getting-started/quickstart', 'getting-started/mojo-library', 'getting-started/pytorch'],
     },
     'how-rendering-works',
+    'results',
     {
       type: 'category',
       label: 'Architecture',

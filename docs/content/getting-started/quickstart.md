@@ -46,7 +46,7 @@ ones you are most likely to use:
 | `--test-every` | Hold out every N-th image (0 trains on all) | `8` |
 | `--iterations` | Training iterations | `30000` |
 | `--viewer` | Serve the live web viewer while training | off |
-| `--method` | Reconstruction method | `faster-gs` |
+| `--method` | Reconstruction method: `faster-gs` or `beta-splatting` ([Methods and results](../results.md)) | `faster-gs` |
 | `--no-densify` | Turn densification off | densification on |
 | `--seed` | Random seed | `0` |
 | `--port` | Viewer port | `8080` |

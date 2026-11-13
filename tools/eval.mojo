@@ -8,12 +8,14 @@ The program itself is `mojosplat.apps.evaluate`; this picks the method.
 """
 
 from mojosplat.apps import evaluate, method_arg, unknown_method
-from mojosplat.methods import FasterGS
+from mojosplat.methods import BetaSplattingMethod, FasterGS
 
 
 def main() raises:
     var name = method_arg(FasterGS.name())
     if name == FasterGS.name():
         evaluate[FasterGS]()
+    elif name == BetaSplattingMethod.name():
+        evaluate[BetaSplattingMethod]()
     else:
-        unknown_method(name, [FasterGS.name()])
+        unknown_method(name, [FasterGS.name(), BetaSplattingMethod.name()])

@@ -44,6 +44,13 @@ Mip-NeRF360 garden (`images_4`, 30k iterations). The last four columns are train
 
 \* The 3DGS paper's LPIPS (0.103) is not comparable: its evaluation code passes images in [0, 1] to an LPIPS network that expects [-1, 1], which lowers the score. The other rows use LPIPS-VGG on correctly scaled images.
 
+Each method, selected with `--method`, is also trained with its official code on seven Mip-NeRF 360 scenes, on the same RTX 5090, and scored the same way. The table gives MojoSplat's mean training time per scene and rendering speed, with the speedup over the official code in brackets (below 1× is slower). Per-scene quality, timings and open differences are in the [full results](https://bertaveira.github.io/mojosplat/results).
+
+| Method | `--method` | Training time per scene | Rendering |
+|---|---|---|---|
+| [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) | `faster-gs` (default) | 2m24s (1.13×) | 1119 FPS (0.88×) |
+| [Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) | `beta-splatting` | 3m31s (3.90×) | 489 FPS (4.58×) |
+
 ## Using the library
 
 `mojosplat` is a plain Mojo package (`pixi run mojo run -I . my_program.mojo`):
