@@ -2,7 +2,7 @@
 
 from ..render.blocks.contracts import Pipeline
 from ..train.strategy import Densification
-from ..train.trainer import TrainConfig
+from ..train.trainer import InitConfig, TrainConfig
 
 
 trait MethodConfig(Copyable, Defaultable, Deinitable, Movable):
@@ -21,6 +21,10 @@ trait MethodConfig(Copyable, Defaultable, Deinitable, Movable):
     def densification(self) -> Self.Strategy.Config:
         """The densification strategy's settings."""
         ...
+
+    def initialization(self) -> InitConfig:
+        """Where training starts: 3DGS's SfM start unless the method defines it."""
+        return InitConfig()
 
 
 trait Method:

@@ -115,6 +115,8 @@ A `Method` in `mojosplat/methods/` gives the pipeline a name, a densification st
 and its settings. The settings are a struct of the method's own: the shared
 `TrainConfig`, the strategy's config, and any settings only this method has. Every
 field becomes a command-line option, so a method shows only the options it uses.
+A method that starts from something other than the SfM points also returns an
+`InitConfig` from `initialization()`, as `MCMCConfig` does.
 
 ```mojo
 struct MyMethodConfig(MethodConfig):

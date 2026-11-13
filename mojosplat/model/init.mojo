@@ -8,6 +8,9 @@ DC spherical-harmonics term (higher-order terms zero).
 The 3-NN search is brute force on the GPU (exact; every query scans all
 points through shared-memory tiles): O(N^2), a few seconds for a few
 hundred thousand SfM points, run once.
+
+`random_points` is the random start of 3DGS-MCMC, for scenes initialized
+without SfM points.
 """
 
 from max.gpu import block_idx, thread_idx
@@ -15,6 +18,7 @@ from max.gpu.host import DeviceContext
 from max.gpu.memory import AddressSpace
 from max.gpu.sync import barrier
 from std.math import log, sqrt
+from std.random import random_float64
 from std.memory import stack_allocation
 
 from ..core.math import SH_C0
@@ -96,6 +100,19 @@ def knn3_mean_dist2(ctx: DeviceContext, xyz: List[Float32]) raises -> List[Float
     return r^
 
 
+comptime RANDOM_INIT_POINTS = 100_000
+comptime RANDOM_INIT_GRAY: UInt8 = 127  # the color 3DGS-MCMC's random start stores
+
+
+def random_points(count: Int, radius: Float32) -> List[Float32]:
+    """Uniform points in the cube of half-width 3 * radius around the origin, xyz [N, 3]
+    (3DGS-MCMC's random start, with radius the scene extent)."""
+    var xyz = List[Float32](capacity=count * 3)
+    for _ in range(count * 3):
+        xyz.append(Float32(random_float64(0.0, 1.0)) * radius * 6.0 - radius * 3.0)
+    return xyz^
+
+
 def splats_from_points(
     ctx: DeviceContext,
     xyz: List[Float32],
@@ -103,8 +120,10 @@ def splats_from_points(
     sh_degree: Int = 3,
     initial_opacity: Float32 = 0.1,
     capacity: Int = 0,
+    initial_scale: Float32 = 1.0,
 ) raises -> Splats:
-    """3DGS initialization from a colored point cloud (xyz [N, 3], rgb [N, 3])."""
+    """3DGS initialization from a colored point cloud (xyz [N, 3], rgb [N, 3]).
+    `initial_scale` multiplies the nearest-neighbor scale (3DGS-MCMC uses 0.1)."""
     var n = len(xyz) // 3
     var dist2 = knn3_mean_dist2(ctx, xyz)
     var log_scales = List[Float32](capacity=n * 3)
@@ -113,7 +132,7 @@ def splats_from_points(
     var sh0 = List[Float32](capacity=n * 3)
     var logit = log(initial_opacity / (1.0 - initial_opacity))
     for i in range(n):
-        var s = log(sqrt(max(dist2[i], 1e-7)))
+        var s = log(sqrt(max(dist2[i], 1e-7)) * initial_scale)
         for _ in range(3):
             log_scales.append(s)
         rotations.append(1.0)

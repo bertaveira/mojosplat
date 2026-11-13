@@ -433,7 +433,7 @@ struct ClassicDensification(Densification):
     var densifier: Densifier
     var last: DensifyStats
 
-    def __init__(out self, ctx: DeviceContext, config: DensifyConfig) raises:
+    def __init__(out self, ctx: DeviceContext, config: DensifyConfig, iterations: Int) raises:
         self.config = config.copy()
         self.densifier = Densifier(ctx)
         self.densifier.grad_threshold = config.grad_threshold

@@ -9,6 +9,7 @@ One iteration `it` (0-based, Faster-GS's callback order):
     rasterizer.backward(state, grad) -> splats.grads              # all raw parameters
     strategy.after_backward(it)                                   # may skip the step below
     adam.step(splats)                                             # per-attribute lrs
+    strategy.after_step(it)
 plus the schedules: the means learning rate decays exponentially (scaled by
 the scene extent) and the SH degree grows by one every 1000 iterations.
 The backward accumulates densification statistics while the strategy asks for them.
@@ -21,7 +22,7 @@ from std.random import random_ui64, seed
 from ..cli.args import Arg
 from ..core.types import dptr
 from ..io.ply import write_ply
-from ..model.init import splats_from_points
+from ..model.init import RANDOM_INIT_GRAY, RANDOM_INIT_POINTS, random_points, splats_from_points
 from ..model.morton import morton_order
 from ..model.splats import Attr, Splats
 from ..render.blocks.contracts import Pipeline
@@ -127,6 +128,21 @@ struct TrainConfig(Copyable, Defaultable, Movable):
         self.morton_until = 15_000
 
 
+struct InitConfig(Copyable, Defaultable, Movable):
+    """Where training starts. The defaults are 3DGS's: the SfM points, each with
+    the root mean squared distance to its 3 nearest neighbors as its scale."""
+
+    @__annotation(Arg("Start from 100,000 random points in a cube 3 times the scene extent, not the SfM points"))
+    var random_init: Bool
+
+    @__annotation(Arg("Multiplier on each initial Gaussian's nearest-neighbor scale"))
+    var initial_scale: Float32
+
+    def __init__(out self):
+        self.random_init = False
+        self.initial_scale = 1.0
+
+
 def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> Float32:
     """3DGS's get_expon_lr_func (without delay): log-linear interpolation."""
     var t = min(max(Float64(step) / Float64(max(max_steps, 1)), 0.0), 1.0)
@@ -154,12 +170,23 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         var dataset: Dataset,
         config: TrainConfig,
         strategy: Self.Strategy.Config = Self.Strategy.Config(),
+        init: InitConfig = InitConfig(),
     ) raises:
         self.ctx = ctx
         self.config = config.copy()
         seed(config.seed)
+        var xyz = dataset.points.xyz.copy()
+        var rgb = dataset.points.rgb.copy()
+        if init.random_init:
+            xyz = random_points(RANDOM_INIT_POINTS, dataset.scene_extent)
+            rgb = List[UInt8](length=RANDOM_INIT_POINTS * 3, fill=RANDOM_INIT_GRAY)
         self.splats = splats_from_points(
-            ctx, dataset.points.xyz, dataset.points.rgb, config.sh_degree, initial_opacity=config.initial_opacity
+            ctx,
+            xyz,
+            rgb,
+            config.sh_degree,
+            initial_opacity=config.initial_opacity,
+            initial_scale=init.initial_scale,
         )
         var specs = Self.Pipe.Appear.columns()
         for i in range(len(specs)):
@@ -189,7 +216,7 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         self.adam = Adam(lr)
         self.rasterizer = Rasterizer(ctx)
         self.loss = PhotometricLoss(ctx, config.lambda_dssim)
-        self.strategy = Self.Strategy(ctx, strategy)
+        self.strategy = Self.Strategy(ctx, strategy, config.iterations)
         var max_px = 1
         for v in dataset.train:
             max_px = max(max_px, v.camera.width * v.camera.height)
@@ -261,6 +288,7 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         self.adam.lr[Attr.MEANS] = means_lr
         if self.strategy.after_backward(it, self.splats, means_lr):
             self.adam.step(self.splats, self.rasterizer.sh_rest_grad[Self.Pipe](st))
+        self.strategy.after_step(it, self.splats, means_lr)
         self.iteration += 1
         return value if log_now else -1.0
 

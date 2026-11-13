@@ -15,6 +15,7 @@ listed with each method.
 |---|---|---|---|---|
 | Faster-GS | `faster-gs` (default) | [Hahlbohm et al., CVPR 2026](https://fhahlbohm.github.io/faster-gaussian-splatting) | 2m24s (1.13×) | 1119 FPS (0.88×) |
 | Beta Splatting | `beta-splatting` | [Liu et al., 2025](https://arxiv.org/abs/2501.18630) | 3m31s (3.90×) | 489 FPS (4.58×) |
+| 3DGS-MCMC | `3dgs-mcmc` | [Kheradmand et al., NeurIPS 2024](https://arxiv.org/abs/2404.09591) | 3m19s (7.13×) | 682 FPS (2.86×) |
 
 MojoSplat's mean training time per scene and rendering speed on an RTX 5090, over the
 seven Mip-NeRF 360 scenes below. In brackets is the speedup over the official code: its
@@ -40,7 +41,8 @@ Below 1× means MojoSplat is slower. The official times are in each method's sec
   resolution. Each frame is timed from a device sync to a device sync, with no image
   readback. Every cell is two alternating rounds of 11 passes over all test views, with
   the first pass of each round dropped. The two renderers' images agree at a mean of
-  82-106 dB per scene, so they do the same work.
+  82-108 dB per scene for Faster-GS and Beta Splatting and 70-77 dB for 3DGS-MCMC,
+  far closer than one 8-bit step (about 48 dB), so they do the same work.
 
 ## Faster-GS
 
@@ -186,3 +188,83 @@ as its `BetaModel.render`.
 | kitchen | 6.50 ms (154) | 1.76 ms (567) | 3.68× |
 | bonsai | 6.05 ms (165) | 2.10 ms (477) | 2.89× |
 | **mean** | **9.36 ms (107)** | **2.04 ms (489)** | **4.58×** |
+
+## 3DGS-MCMC
+
+[3DGS-MCMC](https://github.com/ubc-vision/3dgs-mcmc) keeps the 3DGS renderer and replaces
+its densification: Gaussians that become transparent are moved onto opaque ones, the
+model grows by 5% at a time up to a fixed cap per scene, and position noise lets
+Gaussians explore. MojoSplat implements it from the paper and uses the official per-scene
+settings. Training starts from 100,000 random points, as the official code does by
+default; `--no-random-init` starts from the SfM points. Official code: `7b4fc9f`.
+
+```bash
+pixi run train data/mipnerf360/garden --method 3dgs-mcmc
+```
+
+### Quality
+
+PSNR / SSIM / LPIPS of the first run of each side, from random starts. SSIM and LPIPS
+are the functions of the official `metrics.py` (3DGS's SSIM, `lpipsPyTorch` VGG).
+
+| Scene | Official | MojoSplat |
+|---|---|---|
+| garden | 27.57 / 0.873 / 0.100 | 27.59 / 0.873 / 0.101 |
+| bicycle | 25.59 / 0.795 / 0.175 | 25.59 / 0.794 / 0.176 |
+| stump | 27.27 / 0.808 / 0.177 | 27.16 / 0.807 / 0.178 |
+| room | 31.99 / 0.928 / 0.201 | 32.00 / 0.928 / 0.200 |
+| counter | 29.11 / 0.913 / 0.192 | 29.04 / 0.913 / 0.192 |
+| kitchen | 31.81 / 0.931 / 0.126 | 32.02 / 0.932 / 0.126 |
+| bonsai | 32.41 / 0.945 / 0.197 | 32.50 / 0.946 / 0.196 |
+| **mean** | **29.39 / 0.885 / 0.167** | **29.41 / 0.884 / 0.167** |
+
+The two largest gaps were run again on both sides, with a different seed:
+
+| Scene | Official PSNR | MojoSplat PSNR |
+|---|---|---|
+| stump | 27.27, 27.24 (mean 27.26) | 27.16, 27.24 (mean 27.20) |
+| kitchen | 31.81, 31.95 (mean 31.88) | 32.02, 31.83 (mean 31.93) |
+
+Both are run-to-run noise. Both sides reach the same Gaussian cap: 5.2M for garden,
+5.9M for bicycle, 4.75M for stump, 1.5M for room, 1.2M for counter, 1.8M for kitchen
+and 1.3M for bonsai.
+
+The paper's random-start table is 0.05-0.47 dB higher on every scene than both
+codebases here. The unmodified official code is as far below it as MojoSplat, so the
+difference is not in the reimplementation.
+
+### Training time
+
+The official times are the wall time of its `train.py`, which has no timer of its own.
+That includes loading the dataset and saving the model, about 16 s of a 22-minute
+kitchen run, so the speedups are about 1% too high.
+
+| Scene | Official (s) | MojoSplat (s) | Speedup |
+|---|---|---|---|
+| garden | 1695 | 277 | 6.13× |
+| bicycle | 1832 | 293 | 6.25× |
+| stump | 1580 | 256 | 6.18× |
+| room | 1242 | 131 | 9.45× |
+| counter | 1173 | 134 | 8.74× |
+| kitchen | 1342 | 172 | 7.80× |
+| bonsai | 1042 | 127 | 8.21× |
+| **total** | **9906** | **1390** | **7.13×** |
+
+### Rendering speed
+
+Milliseconds per view, with frames per second in brackets. Both renderers draw the
+MojoSplat-trained model. MojoSplat renders it with the same rasterizer as Faster-GS. The
+official timing is its `render` function, which uses the original 3DGS rasterizer.
+Their images agree at a mean of 70-77 dB per scene, a little less closely than the
+other methods because the two rasterizers round and cull slightly differently.
+
+| Scene | Official | MojoSplat | Speedup |
+|---|---|---|---|
+| garden | 4.09 ms (245) | 1.66 ms (603) | 2.47× |
+| bicycle | 5.24 ms (191) | 1.88 ms (533) | 2.79× |
+| stump | 5.18 ms (193) | 2.13 ms (471) | 2.44× |
+| room | 3.29 ms (304) | 0.95 ms (1056) | 3.48× |
+| counter | 3.94 ms (254) | 1.09 ms (920) | 3.62× |
+| kitchen | 4.33 ms (231) | 1.42 ms (704) | 3.05× |
+| bonsai | 3.30 ms (303) | 1.16 ms (865) | 2.85× |
+| **mean** | **4.20 ms (238)** | **1.47 ms (682)** | **2.86×** |

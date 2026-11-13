@@ -148,10 +148,13 @@ extended or its own blend kernel.
 `Trainer` (`train/trainer.mojo`) runs the 3DGS recipe with Faster-GS's
 defaults (`TrainConfig`); its docstring lists the order of one iteration.
 Densification is a strategy (`train/strategy.mojo`) with its own config,
-called before each iteration and after training; classic clone, split and
-prune (`ClassicDensification`) is the default. A method's settings are its
+called before each iteration, around the optimizer step and after training;
+classic clone, split and prune (`ClassicDensification`) is the default, and
+`Relocation` / `MCMCRelocation` (`train/relocate.mojo`) are 3DGS-MCMC's, on
+Beta Splatting's schedule and on the paper's. A method's settings are its
 own struct holding `TrainConfig`, its strategy's config and anything else it
-needs, so options only appear for the methods that use them.
+needs (3DGS-MCMC: `InitConfig`, its random start), so options only appear for
+the methods that use them.
 
 ### Splats: one owner for every per-Gaussian row
 
@@ -195,8 +198,8 @@ percent dense 0.01, prune opacity < 0.005, and Gaussians larger than 0.1 x
 the scene extent after the first opacity reset), opacity reset every 3,000
 iterations (Faster-GS resets once more at 500 only with a non-black
 background; MojoSplat trains on black), Morton reordering every 5,000 until
-15,000 and once at the end, and a final prune of opacity < 1/255. MCMC can
-be added later as a second strategy on the same `gather`.
+15,000 and once at the end, and a final prune of opacity < 1/255. The
+relocation strategies grow the model with the same `gather`.
 
 ### Loss, data, I/O
 

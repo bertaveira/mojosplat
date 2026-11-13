@@ -8,6 +8,7 @@ densification strategy and settings, then reports the test PSNR and writes
 
 from max.gpu.host import DeviceContext
 from std.os import makedirs
+from std.sys import argv
 from std.os.path import exists
 from std.time import perf_counter_ns
 
@@ -22,7 +23,7 @@ from ..cli import (
     fmt_duration,
     fmt_fixed,
     fmt_thousands,
-    parse_args,
+    parse_args_from,
     parse_args_over,
     seconds_since,
 )
@@ -98,7 +99,17 @@ def train[M: Method](program: String = "pixi run train") raises:
         def main() raises:
             train[MyMethod]("pixi run train")
     """
-    var first = parse_args[TrainArgs[M.Config]](program, DESCRIPTION)
+    # The scene first, ignoring --help, so that help shows the scene's settings.
+    var raw = argv()
+    var without_help = List[String]()
+    for i in range(1, len(raw)):
+        if raw[i] != "-h" and raw[i] != "--help":
+            without_help.append(String(raw[i]))
+    var first = TrainArgs[M.Config]()
+    try:
+        first = parse_args_from[TrainArgs[M.Config]](without_help, program, DESCRIPTION)
+    except:
+        pass  # the full parse below reports it
     var base = TrainArgs[M.Config]()
     base.method = M.name()
     base.settings = M.config(scene_name(first.scene))
@@ -127,7 +138,9 @@ def train[M: Method](program: String = "pixi run train") raises:
             dim(String("(", fmt_duration(seconds_since(t0)), ")")),
         )
     )
-    var trainer = Trainer[M.Pipe, M.Config.Strategy](ctx, ds^, config, args.settings.densification())
+    var trainer = Trainer[M.Pipe, M.Config.Strategy](
+        ctx, ds^, config, args.settings.densification(), args.settings.initialization()
+    )
     done(String("Initialized ", fmt_thousands(trainer.splats.count), " Gaussians"))
 
     var viewer = Optional[Viewer]()
