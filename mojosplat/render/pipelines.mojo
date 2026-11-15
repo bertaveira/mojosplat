@@ -2,6 +2,7 @@
 
 from .blocks.appearance.sh import SphericalHarmonics
 from .blocks.appearance.spherical_beta import SphericalBetaColor
+from .blocks.appearance.spherical_voronoi import SphericalVoronoi
 from .blocks.contracts import Pipeline
 from .blocks.placement.pinhole_ewa import PinholeEWA
 from .blocks.response.beta import BetaFootprint
@@ -33,3 +34,12 @@ struct BetaSplatting(Pipeline):
     comptime Place = PinholeEWA[DType.float32]
     comptime Resp = BetaFootprint
     comptime Appear = SphericalBetaColor[2]
+
+
+struct SphericalVoronoiBeta(Pipeline):
+    """Spherical Voronoi: the Beta-kernel footprint with Spherical Voronoi color (`--method spherical-voronoi`)."""
+
+    comptime ID = 3
+    comptime Place = PinholeEWA[DType.float32]
+    comptime Resp = BetaFootprint
+    comptime Appear = SphericalVoronoi[8]

@@ -47,6 +47,25 @@ Changes made in the port: rewritten in Mojo as MojoSplat blocks, with the color
 evaluated in MojoSplat's preprocess kernels and its gradients written by
 MojoSplat's preprocess backward.
 
+## Spherical Voronoi
+
+The Spherical Voronoi color and its gradients in
+`mojosplat/render/blocks/appearance/spherical_voronoi.mojo` are ported from the
+official CUDA kernel (`spherical_voronoi_cuda.cu`). Its starting values,
+learning-rate schedule and the `spherical-voronoi` method's settings follow the
+official `radiance/` code:
+
+- Project: https://github.com/sphericalvoronoi/sphericalvoronoi
+- Paper: F. Di Sario, D. Rebain, D. Verbin, M. Grangetto, A. Tagliasacchi,
+  "Spherical Voronoi: Directional Appearance as a Differentiable Partition of the Sphere",
+  CVPR 2026, arXiv:2512.14180
+- Copyright (c) 2026 sphericalvoronoi
+- License: MIT
+
+Changes made in the port: rewritten in Mojo as a MojoSplat appearance block,
+evaluated in MojoSplat's preprocess kernels with its gradients written by
+MojoSplat's preprocess backward.
+
 ## NeRFICG
 
 The Morton (Z-order) encoding in `mojosplat/model/morton.mojo` follows
@@ -67,7 +86,7 @@ moments, computed with separable Gaussian passes) follows fused-ssim:
 - Copyright (c) 2024 Rahul Goel
 - License: MIT
 
-## MIT License text (NeRFICG, fused-ssim)
+## MIT License text (Spherical Voronoi, NeRFICG, fused-ssim)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

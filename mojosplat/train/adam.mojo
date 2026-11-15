@@ -127,7 +127,7 @@ struct Adam(Movable):
     The moments live in `Splats` (exp_avg / exp_avg_sq), next to the rows
     they belong to."""
 
-    var lr: SIMD[DType.float32, 8]  # per `Splats` column
+    var lr: SIMD[DType.float32, 16]  # per `Splats` column
     var beta1: Float32
     var beta2: Float32
     var eps: Float32
@@ -135,7 +135,7 @@ struct Adam(Movable):
 
     def __init__(
         out self,
-        lr: SIMD[DType.float32, 8],
+        lr: SIMD[DType.float32, 16],
         beta1: Float32 = 0.9,
         beta2: Float32 = 0.999,
         eps: Float32 = 1e-15,
@@ -162,8 +162,8 @@ struct Adam(Movable):
     def _step(mut self, mut splats: Splats, sh_rest: Optional[ShRestGrad]) raises:
         if not splats.training:
             raise Error("Adam.step: call splats.enable_training() first")
-        if len(splats.columns) > 8:
-            raise Error("Adam: at most 8 columns have learning rates")
+        if len(splats.columns) > 16:
+            raise Error("Adam: at most 16 columns have learning rates")
         self.step_count += 1
         var t = Float64(self.step_count)
         var bc1 = 1.0 - Float64(self.beta1) ** t
@@ -172,7 +172,7 @@ struct Adam(Movable):
         var ctx = splats.ctx
         var stream = ctx.stream()
 
-        var step_size = SIMD[DType.float32, 8](0.0)  # lr / bias correction 1, per Attr
+        var step_size = SIMD[DType.float32, 16](0.0)  # lr / bias correction 1, per Attr
         for a in range(len(splats.columns)):
             step_size[a] = Float32(Float64(self.lr[a]) / bc1)
 

@@ -38,7 +38,7 @@ def _images(scene: String) -> String:
 
 
 struct BetaSplattingConfig(MethodConfig):
-    comptime Strategy = Relocation
+    comptime Strategy = Relocation[]
 
     @__annotation(Arg("Training"))
     var train: TrainConfig

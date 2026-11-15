@@ -151,10 +151,13 @@ Densification is a strategy (`train/strategy.mojo`) with its own config,
 called before each iteration, around the optimizer step and after training;
 classic clone, split and prune (`ClassicDensification`) is the default, and
 `Relocation` / `MCMCRelocation` (`train/relocate.mojo`) are 3DGS-MCMC's, on
-Beta Splatting's schedule and on the paper's. A method's settings are its
-own struct holding `TrainConfig`, its strategy's config and anything else it
-needs (3DGS-MCMC: `InitConfig`, its random start), so options only appear for
-the methods that use them.
+Beta Splatting's schedule and on the paper's (`Relocation[step_first=True]`
+relocates after the optimizer step, as Spherical Voronoi does). A method's
+settings are its own struct holding `TrainConfig`, its strategy's config and
+anything else it needs (3DGS-MCMC: `InitConfig`, its random start; Spherical
+Voronoi: `ScheduleConfig`, its final color-only iterations), so options only
+appear for the methods that use them. An appearance may scale the learning
+rates of its own columns per iteration (`Appearance.lr_scale`).
 
 ### Splats: one owner for every per-Gaussian row
 

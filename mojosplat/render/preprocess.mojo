@@ -55,6 +55,8 @@ def _preprocess_kernel[
     col1: F32Ptr,
     col2: F32Ptr,
     col3: F32Ptr,
+    col4: F32Ptr,
+    col5: F32Ptr,
     cam: KernelVector[DType.float32, 32],
     depth_keys: U32Ptr,  # out [slot] depth bits (sort keys)
     slots: I32Ptr,  # out [slot] = slot (sort values)
@@ -188,7 +190,7 @@ def _preprocess_kernel[
         mean.z.cast[DType.float32]() - cam[CAM_POS_Z],
         0.0,
     )
-    var cols = ExtraColumns(col0, col1, col2, col3)
+    var cols = ExtraColumns(col0, col1, col2, col3, col4, col5)
     comptime if R.EXTRA > 0:
         var extra = R.extra(cols.skip(Pipe.Appear.NUM_COLUMNS), g)
         comptime for k in range(R.EXTRA):
@@ -236,6 +238,8 @@ def preprocess[
         extras.c1,
         extras.c2,
         extras.c3,
+        extras.c4,
+        extras.c5,
         KernelVector[DType.float32, 32](cam),
         depth_keys,
         slots,

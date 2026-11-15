@@ -53,7 +53,7 @@ struct SphericalBetaColor[K: Int](Appearance):
         return [ColumnSpec("sb_params", Self.K * LOBE_FLOATS, True, 0.0, 0.0025)]
 
     @staticmethod
-    def init_column(index: Int, count: Int) -> List[Float32]:
+    def init_column(index: Int, count: Int, rgb: List[UInt8]) -> List[Float32]:
         """Zero lobe colors and sharpness; directions uniform in (theta, phi)."""
         var out = List[Float32](length=count * Self.K * LOBE_FLOATS, fill=0.0)
         for g in range(count):
@@ -62,6 +62,10 @@ struct SphericalBetaColor[K: Int](Appearance):
                 out[at + 3] = Float32(random_float64(0.0, PI))
                 out[at + 4] = Float32(random_float64(0.0, 2.0 * PI))
         return out^
+
+    @staticmethod
+    def lr_scale(index: Int, iteration: Int, total: Int, frozen_last: Int) -> Float32:
+        return 1.0
 
     @always_inline
     @staticmethod

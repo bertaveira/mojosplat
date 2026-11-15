@@ -2,7 +2,7 @@
 
 from ..render.blocks.contracts import Pipeline
 from ..train.strategy import Densification
-from ..train.trainer import InitConfig, TrainConfig
+from ..train.trainer import InitConfig, ScheduleConfig, TrainConfig
 
 
 trait MethodConfig(Copyable, Defaultable, Deinitable, Movable):
@@ -25,6 +25,10 @@ trait MethodConfig(Copyable, Defaultable, Deinitable, Movable):
     def initialization(self) -> InitConfig:
         """Where training starts: 3DGS's SfM start unless the method defines it."""
         return InitConfig()
+
+    def schedules(self) -> ScheduleConfig:
+        """Learning-rate schedules beyond the means decay: none unless the method defines them."""
+        return ScheduleConfig()
 
 
 trait Method:

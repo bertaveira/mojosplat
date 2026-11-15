@@ -139,7 +139,7 @@ def train[M: Method](program: String = "pixi run train") raises:
         )
     )
     var trainer = Trainer[M.Pipe, M.Config.Strategy](
-        ctx, ds^, config, args.settings.densification(), args.settings.initialization()
+        ctx, ds^, config, args.settings.densification(), args.settings.initialization(), args.settings.schedules()
     )
     done(String("Initialized ", fmt_thousands(trainer.splats.count), " Gaussians"))
 

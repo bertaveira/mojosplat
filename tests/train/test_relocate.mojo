@@ -3,13 +3,20 @@
 from max.gpu.host import DeviceContext
 from std.math import exp, log
 from std.random import seed
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from mojosplat.core.types import dptr
 from mojosplat.gpu.elementwise import fill_f32
 from mojosplat.io.arrays import download
 from mojosplat.model.splats import Attr, Splats
-from mojosplat.train.relocate import add_gaussians, add_position_noise, add_regularizer_gradients, relocate
+from mojosplat.train.relocate import (
+    add_gaussians,
+    add_position_noise,
+    add_regularizer_gradients,
+    relocate,
+    RelocateConfig,
+    Relocation,
+)
 
 
 def logit(p: Float64) -> Float32:
@@ -100,6 +107,30 @@ def test_noise_moves_only_nearly_transparent_gaussians() raises:
     var m = download(ctx, splats.params[Attr.MEANS], 6)
     assert_true(abs(m[0] - 0.0) < 1e-5, "(1 - 0.9)^100 is effectively zero")
     assert_true(abs(m[3] - 10.0) > 1e-3 or abs(m[4] - 11.0) > 1e-3, "the transparent one moves")
+
+
+def test_beta_skips_the_step_when_relocating() raises:
+    var ctx = DeviceContext()
+    var splats = make(ctx, [0.001, 0.9])
+    var strategy = Relocation[](ctx, RelocateConfig(), iterations=30_000)
+    assert_true(strategy.after_backward(498, splats, 1e-4), "before the window")
+    assert_false(strategy.after_backward(599, splats, 1e-4), "a relocation (t = 600)")
+    assert_true(strategy.after_backward(600, splats, 1e-4), "between relocations")
+
+
+def test_step_first_relocates_after_the_step() raises:
+    """Spherical Voronoi: the optimizer steps on relocation iterations, then relocation moves the dead row."""
+    var ctx = DeviceContext()
+    var splats = make(ctx, [0.001, 0.9])
+    var strategy = Relocation[step_first=True](ctx, RelocateConfig(), iterations=30_000)
+    assert_true(strategy.after_backward(599, splats, 1e-4), "steps at t = 600")
+    var before = download(ctx, splats.params[Attr.MEANS], 6)
+    assert_equal(before[0], 0.0)
+    strategy.after_step(598, splats, 1e-4)  # t = 599: not a relocation
+    assert_equal(download(ctx, splats.params[Attr.MEANS], 6)[0], 0.0)
+    strategy.after_step(599, splats, 1e-4)
+    var after = download(ctx, splats.params[Attr.MEANS], 6)
+    assert_true(abs(after[0] - 10.0) < 0.5, "the dead row moved onto the live one")
 
 
 def main() raises:

@@ -27,15 +27,15 @@ use, and which buffer holds that value?
 ## Columns
 
 `Splats` holds one array per `Column`. Kernels get a `SplatView`: the four core columns
-by name, and the rest as `ExtraColumns`, pointers `c0..c3`. The appearance's columns
+by name, and the rest as `ExtraColumns`, pointers `c0..c5`. The appearance's columns
 come first, then the response's. `ExtraColumns.skip(Pipe.Appear.NUM_COLUMNS)` gives a
 `Response` its own columns starting at `c0`.
 
 <ColumnMap />
 
-There are four extra pointers because a kernel signature is a fixed list of plain
-pointers. `Splats` leaves any extra column beyond the fourth out of the view without an
-error. Adam allows at most 8 columns in total and raises if there are more.
+There are six extra pointers because a kernel signature is a fixed list of plain
+pointers. `Splats` leaves any extra column beyond the sixth out of the view without an
+error. Adam allows at most 16 columns in total and raises if there are more.
 
 `Splats.gather` applies one row operation to all of this at once: clone and split
 append rows, pruning keeps the surviving rows, Morton reordering permutes them.

@@ -3,7 +3,7 @@
 from .math import sh_num_bases
 from .types import F32Ptr, placeholder
 
-comptime NUM_EXTRA_COLUMNS = 4  # kernel arguments reserved for columns after the core ones
+comptime NUM_EXTRA_COLUMNS = 6  # kernel arguments reserved for columns after the core ones
 comptime AppearanceSettings = SIMD[DType.int32, 4]  # run-time integers of an appearance
 
 
@@ -16,6 +16,8 @@ struct ExtraColumns(ImplicitlyCopyable, Movable):
     var c1: F32Ptr
     var c2: F32Ptr
     var c3: F32Ptr
+    var c4: F32Ptr
+    var c5: F32Ptr
 
     @always_inline
     def __init__(
@@ -24,11 +26,15 @@ struct ExtraColumns(ImplicitlyCopyable, Movable):
         c1: F32Ptr = placeholder[DType.float32](),
         c2: F32Ptr = placeholder[DType.float32](),
         c3: F32Ptr = placeholder[DType.float32](),
+        c4: F32Ptr = placeholder[DType.float32](),
+        c5: F32Ptr = placeholder[DType.float32](),
     ):
         self.c0 = c0
         self.c1 = c1
         self.c2 = c2
         self.c3 = c3
+        self.c4 = c4
+        self.c5 = c5
 
     @always_inline
     def skip(self, k: Int) -> Self:
@@ -36,11 +42,15 @@ struct ExtraColumns(ImplicitlyCopyable, Movable):
         if k == 0:
             return self
         if k == 1:
-            return Self(self.c1, self.c2, self.c3)
+            return Self(self.c1, self.c2, self.c3, self.c4, self.c5)
         if k == 2:
-            return Self(self.c2, self.c3)
+            return Self(self.c2, self.c3, self.c4, self.c5)
         if k == 3:
-            return Self(self.c3)
+            return Self(self.c3, self.c4, self.c5)
+        if k == 4:
+            return Self(self.c4, self.c5)
+        if k == 5:
+            return Self(self.c5)
         return Self()
 
     def set(mut self, i: Int, p: F32Ptr):
@@ -50,8 +60,12 @@ struct ExtraColumns(ImplicitlyCopyable, Movable):
             self.c1 = p
         elif i == 2:
             self.c2 = p
-        else:
+        elif i == 3:
             self.c3 = p
+        elif i == 4:
+            self.c4 = p
+        else:
+            self.c5 = p
 
 
 struct SplatView(ImplicitlyCopyable, Movable):

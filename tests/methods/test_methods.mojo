@@ -3,7 +3,7 @@
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from mojosplat.cli import config_items
-from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC
+from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod
 from mojosplat.train.densify import DensifyConfig
 from mojosplat.train.trainer import TrainConfig
 
@@ -49,6 +49,23 @@ def test_mcmc_follows_the_official_configs() raises:
     assert_equal(MCMC.config("playroom").relocate.opacity_reg, 0.001)
 
 
+def test_spherical_voronoi_follows_the_official_configs() raises:
+    var garden = SphericalVoronoiMethod.config("garden")
+    assert_equal(garden.train.iterations, 20_000)
+    assert_equal(garden.relocate.relocate_until, 15_000)
+    assert_equal(garden.relocate.cap_max, 5_000_000)
+    assert_equal(garden.train.images, "images_4")
+    assert_equal(garden.train.lr_means_steps, 30_000)
+    assert_equal(garden.train.sh_degree, 0)
+    assert_equal(garden.schedules().frozen_last, 3_000)
+    var room = SphericalVoronoiMethod.config("room")
+    assert_equal(room.train.iterations, 30_000)
+    assert_equal(room.relocate.relocate_until, 25_000)
+    assert_equal(room.relocate.cap_max, 1_500_000)
+    assert_equal(room.train.images, "images_2")
+    assert_equal(FasterGS.config("garden").schedules().frozen_last, 0)
+
+
 def test_only_mcmc_starts_from_random_points() raises:
     assert_true(MCMC.config("garden").initialization().random_init)
     assert_false(FasterGS.config("garden").initialization().random_init)
@@ -67,6 +84,11 @@ def test_each_method_has_only_its_own_options() raises:
     assert_false(_has_option(fgs, "random-init") or _has_option(beta, "random-init"))
     assert_false(_has_option(mcmc, "grad-threshold"))
     assert_true(_has_option(fgs, "iterations") and _has_option(beta, "iterations"))
+    var sv = SphericalVoronoiMethod.config("garden")
+    assert_true(_has_option(sv, "frozen-last") and _has_option(sv, "cap-max"))
+    assert_false(
+        _has_option(fgs, "frozen-last") or _has_option(beta, "frozen-last") or _has_option(mcmc, "frozen-last")
+    )
 
 
 def main() raises:
