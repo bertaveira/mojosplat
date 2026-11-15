@@ -16,6 +16,7 @@ listed with each method.
 | Faster-GS | `faster-gs` (default) | [Hahlbohm et al., CVPR 2026](https://fhahlbohm.github.io/faster-gaussian-splatting) | 2m24s (1.13×) | 1119 FPS (0.88×) |
 | Beta Splatting | `beta-splatting` | [Liu et al., 2025](https://arxiv.org/abs/2501.18630) | 3m31s (3.90×) | 489 FPS (4.58×) |
 | 3DGS-MCMC | `3dgs-mcmc` | [Kheradmand et al., NeurIPS 2024](https://arxiv.org/abs/2404.09591) | 3m19s (7.13×) | 682 FPS (2.86×) |
+| Spherical Voronoi | `spherical-voronoi` | [Di Sario et al., CVPR 2026](https://arxiv.org/abs/2512.14180) | 3m51s (2.83×) | 444 FPS (2.47×) |
 
 MojoSplat's mean training time per scene and rendering speed on an RTX 5090, over the
 seven Mip-NeRF 360 scenes below. In brackets is the speedup over the official code: its
@@ -41,8 +42,8 @@ Below 1× means MojoSplat is slower. The official times are in each method's sec
   resolution. Each frame is timed from a device sync to a device sync, with no image
   readback. Every cell is two alternating rounds of 11 passes over all test views, with
   the first pass of each round dropped. The two renderers' images agree at a mean of
-  82-108 dB per scene for Faster-GS and Beta Splatting and 70-77 dB for 3DGS-MCMC,
-  far closer than one 8-bit step (about 48 dB), so they do the same work.
+  82-108 dB per scene for Faster-GS, Beta Splatting and Spherical Voronoi and 70-77 dB
+  for 3DGS-MCMC, far closer than one 8-bit step (about 48 dB), so they do the same work.
 
 ## Faster-GS
 
@@ -268,3 +269,89 @@ other methods because the two rasterizers round and cull slightly differently.
 | kitchen | 4.33 ms (231) | 1.42 ms (704) | 3.05× |
 | bonsai | 3.30 ms (303) | 1.16 ms (865) | 2.85× |
 | **mean** | **4.20 ms (238)** | **1.47 ms (682)** | **2.86×** |
+
+## Spherical Voronoi
+
+[Spherical Voronoi](https://github.com/sphericalvoronoi/sphericalvoronoi) replaces
+view-dependent color with a soft Voronoi partition of the sphere: each Gaussian has 8
+sites, each with a color and a learned temperature, and the color seen from a direction
+is the softmax-weighted mix of the sites nearest to it. MojoSplat implements the
+`radiance/` code, which builds it on Beta Splatting: the same Beta footprint, relocation,
+caps and image folders, with 20,000 iterations outdoors and 30,000 indoors, and only the
+colors and temperatures trained over the last 3,000. Official code: `6bcebbe`.
+
+```bash
+pixi run train data/mipnerf360/garden --method spherical-voronoi
+```
+
+### Quality
+
+PSNR / SSIM / LPIPS of the first run of each side. SSIM is `fused_ssim`, and LPIPS is
+`lpipsPyTorch` VGG, as in the official code.
+
+| Scene | Official | MojoSplat |
+|---|---|---|
+| garden | 27.93 / 0.875 / 0.113 | 27.96 / 0.876 / 0.113 |
+| bicycle | 25.71 / 0.795 / 0.194 | 25.78 / 0.796 / 0.194 |
+| stump | 27.05 / 0.802 / 0.213 | 27.19 / 0.805 / 0.210 |
+| room | 32.77 / 0.917 / 0.255 | 33.23 / 0.936 / 0.248 |
+| counter | 31.03 / 0.929 / 0.219 | 31.05 / 0.929 / 0.219 |
+| kitchen | 32.96 / 0.936 / 0.144 | 33.01 / 0.937 / 0.144 |
+| bonsai | 34.81 / 0.956 / 0.222 | 34.77 / 0.956 / 0.222 |
+| **mean** | **30.32 / 0.887 / 0.194** | **30.43 / 0.891 / 0.193** |
+
+The first official room run has one broken test view, at 8.50 dB. It did not come back
+in two more official runs, whose worst views are 24.01 and 23.12 dB, and it is most of
+the room gap and of the gap in the means. Room and bonsai were run three times on each
+side:
+
+| Scene | Official PSNR | MojoSplat PSNR |
+|---|---|---|
+| room | 32.77, 33.18, 33.16 (mean 33.04) | 33.23, 33.10, 33.09 (mean 33.14) |
+| bonsai | 34.81, 34.86, 34.80 (mean 34.83) | 34.77, 34.86, 34.78 (mean 34.80) |
+
+Without the broken run, the official room mean is 33.17, 0.03 dB above MojoSplat's. No
+difference above run-to-run noise is open. Stump is the largest first-run gap
+(MojoSplat 0.14 dB higher) and was not repeated. The authors' published per-scene
+numbers (`summary.csv`, with the official per-channel PSNR) are within 0.03 dB of the
+official runs here on five scenes; on stump they are 0.19 dB higher, and room is
+affected by the broken view. Both sides reach the Beta
+Splatting caps: 5M for garden, 6M for bicycle, 4.5M for stump and 1.5M for the indoor
+scenes.
+
+### Training time
+
+The official times are from its own timer, with the periodic evaluations during training
+turned off; that timer also covers saving the final model, a few seconds per scene.
+MojoSplat's are from a later run of all seven scenes, with the code as merged. Its PSNR,
+from MojoSplat's own evaluator, was within run-to-run noise of the runs above. Bicycle,
+0.12 dB lower than before, was run with two more seeds: 25.67, 25.73 and 25.80 dB.
+
+| Scene | Official (s) | MojoSplat (s) | Speedup |
+|---|---|---|---|
+| garden | 703 | 238 | 2.95× |
+| bicycle | 774 | 242 | 3.20× |
+| stump | 564 | 184 | 3.07× |
+| room | 607 | 220 | 2.75× |
+| counter | 702 | 263 | 2.67× |
+| kitchen | 640 | 241 | 2.66× |
+| bonsai | 591 | 232 | 2.55× |
+| **total** | **4581** | **1619** | **2.83×** |
+
+### Rendering speed
+
+Milliseconds per view, with frames per second in brackets. Both renderers draw the
+MojoSplat-trained model from the training-time run. The official timing is the same
+work as its `BetaModel.render` in evaluation mode: its CUDA Spherical Voronoi kernel,
+then its gsplat rasterizer.
+
+| Scene | Official | MojoSplat | Speedup |
+|---|---|---|---|
+| garden | 5.50 ms (182) | 2.06 ms (486) | 2.67× |
+| bicycle | 8.96 ms (112) | 2.72 ms (368) | 3.30× |
+| stump | 7.38 ms (136) | 2.48 ms (404) | 2.98× |
+| room | 3.93 ms (254) | 1.99 ms (502) | 1.97× |
+| counter | 4.96 ms (202) | 2.29 ms (436) | 2.16× |
+| kitchen | 4.28 ms (234) | 1.80 ms (556) | 2.38× |
+| bonsai | 3.90 ms (256) | 2.41 ms (414) | 1.62× |
+| **mean** | **5.56 ms (180)** | **2.25 ms (444)** | **2.47×** |
