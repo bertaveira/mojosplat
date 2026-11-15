@@ -28,7 +28,7 @@ from ..io.ply import write_ply
 from ..model.init import RANDOM_INIT_GRAY, RANDOM_INIT_POINTS, random_points, splats_from_points
 from ..model.morton import morton_order
 from ..model.splats import Attr, Splats
-from ..render.blocks.contracts import Pipeline
+from ..render.blocks.contracts import Appearance, Pipeline
 from ..render.pipelines import Standard3DGS
 from ..render.rasterizer import Rasterizer
 from .adam import Adam
@@ -160,6 +160,31 @@ def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> 
     """3DGS's get_expon_lr_func (without delay): log-linear interpolation."""
     var t = min(max(Float64(step) / Float64(max(max_steps, 1)), 0.0), 1.0)
     return Float32(exp(log(Float64(init)) * (1.0 - t) + log(Float64(final)) * t))
+
+
+def scheduled_learning_rates[
+    A: Appearance
+](
+    lr: SIMD[DType.float32, 16],
+    base: SIMD[DType.float32, 16],
+    n_columns: Int,
+    n_appearance: Int,
+    iteration: Int,
+    total: Int,
+    frozen_last: Int,
+) -> SIMD[DType.float32, 16]:
+    """`lr` with the appearance's schedules of its own columns (the `n_appearance`
+    after `Attr.COUNT`) applied to their `base` rates, then, over the last
+    `frozen_last` iterations, every other column at 0. `iteration` counts from 1."""
+    var out = lr
+    for i in range(n_appearance):
+        var a = Attr.COUNT + i
+        out[a] = base[a] * A.lr_scale(i, iteration, total, frozen_last)
+    if frozen_last > 0 and iteration > total - frozen_last:
+        for a in range(n_columns):
+            if a < Attr.COUNT or a >= Attr.COUNT + n_appearance:
+                out[a] = 0.0
+    return out
 
 
 struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicDensification](Movable):
@@ -314,16 +339,15 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         return value if log_now else -1.0
 
     def _schedule_learning_rates(mut self, iteration: Int):
-        """The appearance's schedules of its own columns, then the final freeze of every other column.
-        `iteration` counts from 1."""
-        var total = self.config.iterations
-        for i in range(self.n_appearance):
-            var a = Attr.COUNT + i
-            self.adam.lr[a] = self.base_lr[a] * Self.Pipe.Appear.lr_scale(i, iteration, total, self.frozen_last)
-        if self.frozen_last > 0 and iteration > total - self.frozen_last:
-            for a in range(len(self.splats.columns)):
-                if a < Attr.COUNT or a >= Attr.COUNT + self.n_appearance:
-                    self.adam.lr[a] = 0.0
+        self.adam.lr = scheduled_learning_rates[Self.Pipe.Appear](
+            self.adam.lr,
+            self.base_lr,
+            len(self.splats.columns),
+            self.n_appearance,
+            iteration,
+            self.config.iterations,
+            self.frozen_last,
+        )
 
     def finish(mut self) raises -> Int:
         """After training: the strategy's last step (the classic one prunes Gaussians

@@ -51,9 +51,8 @@ MojoSplat's preprocess backward.
 
 The Spherical Voronoi color and its gradients in
 `mojosplat/render/blocks/appearance/spherical_voronoi.mojo` are ported from the
-official CUDA kernel (`spherical_voronoi_cuda.cu`). Its starting values,
-learning-rate schedule and the `spherical-voronoi` method's settings follow the
-official `radiance/` code:
+official CUDA kernel (`spherical_voronoi_cuda.cu`), which is under the license
+below:
 
 - Project: https://github.com/sphericalvoronoi/sphericalvoronoi
 - Paper: F. Di Sario, D. Rebain, D. Verbin, M. Grangetto, A. Tagliasacchi,

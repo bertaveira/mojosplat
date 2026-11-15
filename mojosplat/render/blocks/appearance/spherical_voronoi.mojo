@@ -114,6 +114,7 @@ struct SphericalVoronoi[K: Int](Appearance):
     @always_inline
     @staticmethod
     def _partition(cols: ExtraColumns, g: Int, dir: _F4) -> _Partition:
+        comptime assert 1 <= Self.K <= MAX_LOBES, "SphericalVoronoi supports 1 to 16 sites"
         var v = dir * rsqrt(_dot(dir, dir))
         v[3] = 0.0
         var dist = _Lobes(0.0)

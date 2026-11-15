@@ -10,7 +10,9 @@ or pruned.
 
 Two strategies use it:
 
-    Relocation       Beta Splatting's schedule: position noise only at relocations
+    Relocation       Beta Splatting's schedule: position noise only at relocations,
+                     which skip the optimizer step; `Relocation[step_first=True]`
+                     steps first and relocates after it (Spherical Voronoi)
     MCMCRelocation   the paper's: copies also shrink (its Equation 9), and position
                      noise and the regularizers act on every iteration
 

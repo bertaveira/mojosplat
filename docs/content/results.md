@@ -313,9 +313,10 @@ side:
 Without the broken run, the official room mean is 33.17, 0.03 dB above MojoSplat's. No
 difference above run-to-run noise is open. Stump is the largest first-run gap
 (MojoSplat 0.14 dB higher) and was not repeated. The authors' published per-scene
-numbers (`summary.csv`, with the official per-channel PSNR) are within 0.03 dB of the
-official runs here on five scenes; on stump they are 0.19 dB higher, and room is
-affected by the broken view. Both sides reach the Beta
+numbers (`summary.csv`) use the official per-channel PSNR, which reads 0.01 to 0.08 dB
+above the PSNR in the tables here. Scored that way, the official runs here are within
+0.03 dB of them on five scenes; on stump the published number is 0.19 dB higher, and
+room is affected by the broken view. Both sides reach the Beta
 Splatting caps: 5M for garden, 6M for bicycle, 4.5M for stump and 1.5M for the indoor
 scenes.
 
@@ -325,7 +326,7 @@ The official times are from its own timer, with the periodic evaluations during 
 turned off; that timer also covers saving the final model, a few seconds per scene.
 MojoSplat's are from a later run of all seven scenes, with the code as merged. Its PSNR,
 from MojoSplat's own evaluator, was within run-to-run noise of the runs above. Bicycle,
-0.12 dB lower than before, was run with two more seeds: 25.67, 25.73 and 25.80 dB.
+0.12 dB lower than before, was run with two more seeds: 25.66, 25.73 and 25.80 dB.
 
 | Scene | Official (s) | MojoSplat (s) | Speedup |
 |---|---|---|---|
