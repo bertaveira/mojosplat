@@ -293,8 +293,12 @@ struct SphericalHarmonics(Appearance):
         return List[ColumnSpec]()
 
     @staticmethod
-    def init_column(index: Int, count: Int) -> List[Float32]:
+    def init_column(index: Int, count: Int, rgb: List[UInt8]) -> List[Float32]:
         return List[Float32]()
+
+    @staticmethod
+    def lr_scale(index: Int, iteration: Int, total: Int, frozen_last: Int) -> Float32:
+        return 1.0
 
     @always_inline
     @staticmethod

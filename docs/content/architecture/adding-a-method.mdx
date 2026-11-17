@@ -116,7 +116,9 @@ and its settings. The settings are a struct of the method's own: the shared
 `TrainConfig`, the strategy's config, and any settings only this method has. Every
 field becomes a command-line option, so a method shows only the options it uses.
 A method that starts from something other than the SfM points also returns an
-`InitConfig` from `initialization()`, as `MCMCConfig` does.
+`InitConfig` from `initialization()`, as `MCMCConfig` does, and one that trains only
+the colors at the end returns a `ScheduleConfig` from `schedules()`, as
+`SphericalVoronoiConfig` does.
 
 ```mojo
 struct MyMethodConfig(MethodConfig):
@@ -186,8 +188,8 @@ Blocks, strategies and methods defined there work the same as the ones in MojoSp
 | Limit | Where |
 |---|---|
 | `Splats` always creates `sh0` and `sh_rest`, as columns 4 and 5 | `model/splats.mojo`, constructor and `Attr` |
-| Four extra column pointers in kernels; two are taken by SH | `core/splats.mojo`, `NUM_EXTRA_COLUMNS` |
-| At most 8 columns for Adam | `train/adam.mojo` |
+| Six extra column pointers in kernels; two are taken by SH | `core/splats.mojo`, `NUM_EXTRA_COLUMNS` |
+| At most 16 columns for Adam | `train/adam.mojo` |
 | Record is 32 bytes: 6 floats plus the rectangle | `render/record.mojo`, `REC` |
 | Up to 8 extra per-slot floats and 8 gradient lanes | The `SIMD[float32, 8]` in the contract |
 | Blending is three channels | `render/rasterizer.mojo` `CDIM`, `render/blend.mojo` assert |

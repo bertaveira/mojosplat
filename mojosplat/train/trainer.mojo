@@ -11,7 +11,10 @@ One iteration `it` (0-based, Faster-GS's callback order):
     adam.step(splats)                                             # per-attribute lrs
     strategy.after_step(it)
 plus the schedules: the means learning rate decays exponentially (scaled by
-the scene extent) and the SH degree grows by one every 1000 iterations.
+the scene extent), the SH degree grows by one every 1000 iterations, the
+appearance scales the learning rates of its own columns (`Appearance.lr_scale`),
+and over the last `ScheduleConfig.frozen_last` iterations only the columns the
+appearance keeps training are trained.
 The backward accumulates densification statistics while the strategy asks for them.
 """
 
@@ -25,7 +28,7 @@ from ..io.ply import write_ply
 from ..model.init import RANDOM_INIT_GRAY, RANDOM_INIT_POINTS, random_points, splats_from_points
 from ..model.morton import morton_order
 from ..model.splats import Attr, Splats
-from ..render.blocks.contracts import Pipeline
+from ..render.blocks.contracts import Appearance, Pipeline
 from ..render.pipelines import Standard3DGS
 from ..render.rasterizer import Rasterizer
 from .adam import Adam
@@ -143,10 +146,45 @@ struct InitConfig(Copyable, Defaultable, Movable):
         self.initial_scale = 1.0
 
 
+struct ScheduleConfig(Copyable, Defaultable, Movable):
+    """Learning-rate schedules beyond the means decay. By default nothing is frozen."""
+
+    @__annotation(Arg("Over the last N iterations, train only what the appearance keeps training (0 = off)"))
+    var frozen_last: Int
+
+    def __init__(out self):
+        self.frozen_last = 0
+
+
 def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> Float32:
     """3DGS's get_expon_lr_func (without delay): log-linear interpolation."""
     var t = min(max(Float64(step) / Float64(max(max_steps, 1)), 0.0), 1.0)
     return Float32(exp(log(Float64(init)) * (1.0 - t) + log(Float64(final)) * t))
+
+
+def scheduled_learning_rates[
+    A: Appearance
+](
+    lr: SIMD[DType.float32, 16],
+    base: SIMD[DType.float32, 16],
+    n_columns: Int,
+    n_appearance: Int,
+    iteration: Int,
+    total: Int,
+    frozen_last: Int,
+) -> SIMD[DType.float32, 16]:
+    """`lr` with the appearance's schedules of its own columns (the `n_appearance`
+    after `Attr.COUNT`) applied to their `base` rates, then, over the last
+    `frozen_last` iterations, every other column at 0. `iteration` counts from 1."""
+    var out = lr
+    for i in range(n_appearance):
+        var a = Attr.COUNT + i
+        out[a] = base[a] * A.lr_scale(i, iteration, total, frozen_last)
+    if frozen_last > 0 and iteration > total - frozen_last:
+        for a in range(n_columns):
+            if a < Attr.COUNT or a >= Attr.COUNT + n_appearance:
+                out[a] = 0.0
+    return out
 
 
 struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicDensification](Movable):
@@ -156,6 +194,9 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
     var splats: Splats
     var rasterizer: Rasterizer[]
     var adam: Adam
+    var base_lr: SIMD[DType.float32, 16]  # Adam's learning rates before the appearance's schedule
+    var n_appearance: Int  # columns owned by the appearance, after `Attr.COUNT`
+    var frozen_last: Int
     var loss: PhotometricLoss
     var strategy: Self.Strategy
     var image: DeviceBuffer[DType.float32]
@@ -171,6 +212,7 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         config: TrainConfig,
         strategy: Self.Strategy.Config = Self.Strategy.Config(),
         init: InitConfig = InitConfig(),
+        schedule: ScheduleConfig = ScheduleConfig(),
     ) raises:
         self.ctx = ctx
         self.config = config.copy()
@@ -189,10 +231,11 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
             initial_scale=init.initial_scale,
         )
         var specs = Self.Pipe.Appear.columns()
+        self.n_appearance = len(specs)
         for i in range(len(specs)):
             ref s = specs[i]
             self.splats.add_column(
-                s.name, s.width, trainable=s.trainable, values=Self.Pipe.Appear.init_column(i, self.splats.count)
+                s.name, s.width, trainable=s.trainable, values=Self.Pipe.Appear.init_column(i, self.splats.count, rgb)
             )
         var response_specs = Self.Pipe.Resp.columns()
         for s in response_specs:
@@ -204,7 +247,7 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
                 values=List[Float32](length=self.splats.count * s.width, fill=s.init_value),
             )
         self.splats.enable_training(sh_rest_grad=False)  # Adam recomputes it (write_all=False)
-        var lr = SIMD[DType.float32, 8](0.0)
+        var lr = SIMD[DType.float32, 16](0.0)
         lr[Attr.MEANS] = config.lr_means_init * dataset.scene_extent
         lr[Attr.LOG_SCALES] = config.lr_log_scales
         lr[Attr.ROTATIONS] = config.lr_rotations
@@ -213,6 +256,8 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         lr[Attr.SH_REST] = config.lr_sh_rest
         for i in range(len(specs)):
             lr[Attr.COUNT + i] = specs[i].lr
+        self.base_lr = lr
+        self.frozen_last = schedule.frozen_last
         self.adam = Adam(lr)
         self.rasterizer = Rasterizer(ctx)
         self.loss = PhotometricLoss(ctx, config.lambda_dssim)
@@ -286,11 +331,23 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
             self.config.lr_means_steps,
         )
         self.adam.lr[Attr.MEANS] = means_lr
+        self._schedule_learning_rates(it + 1)
         if self.strategy.after_backward(it, self.splats, means_lr):
             self.adam.step(self.splats, self.rasterizer.sh_rest_grad[Self.Pipe](st))
         self.strategy.after_step(it, self.splats, means_lr)
         self.iteration += 1
         return value if log_now else -1.0
+
+    def _schedule_learning_rates(mut self, iteration: Int):
+        self.adam.lr = scheduled_learning_rates[Self.Pipe.Appear](
+            self.adam.lr,
+            self.base_lr,
+            len(self.splats.columns),
+            self.n_appearance,
+            iteration,
+            self.config.iterations,
+            self.frozen_last,
+        )
 
     def finish(mut self) raises -> Int:
         """After training: the strategy's last step (the classic one prunes Gaussians

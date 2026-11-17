@@ -33,7 +33,7 @@ def test_matches_torch() raises:
         capacity=n + 5,  # spare capacity must not matter
     )
     splats.enable_training()
-    var lr = SIMD[DType.float32, 8](0.0)
+    var lr = SIMD[DType.float32, 16](0.0)
     for a in range(Attr.COUNT):
         lr[a] = Float32(Float64(meta[String("lr_", names[a])]))
     var adam = Adam(lr)
@@ -87,7 +87,13 @@ def _step_once(fused: Bool, sh_degree: Int = 3) raises -> List[List[Float32]]:
     var grad_image = upload(ctx, s.f32("grad_image.f32"))
     var bg = SIMD[DType.float32, 4](0.0)
     var r = Rasterizer(ctx)
-    var lr = SIMD[DType.float32, 8](0.01, 0.02, 0.003, 0.05, 0.004, 0.001, 0, 0)
+    var lr = SIMD[DType.float32, 16](0.0)
+    lr[0] = 0.01
+    lr[1] = 0.02
+    lr[2] = 0.003
+    lr[3] = 0.05
+    lr[4] = 0.004
+    lr[5] = 0.001
     var adam = Adam(lr)
     var st = r.forward(splats.view(), s.camera, bg, dptr(image), sh_degree)
     r.backward(splats.view(), st, dptr(image), dptr(grad_image), splats.grad_view(), write_all=not fused)

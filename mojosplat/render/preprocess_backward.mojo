@@ -31,6 +31,8 @@ def _preprocess_backward_kernel[
     col1: F32Ptr,
     col2: F32Ptr,
     col3: F32Ptr,
+    col4: F32Ptr,
+    col5: F32Ptr,
     cam: KernelVector[DType.float32, 32],
     slot_of: I32Ptr,  # [N] slot of each Gaussian, -1 if culled
     grad_resp: F32Ptr,  # slot gradients of the Response (see its `grad_index`)
@@ -44,14 +46,16 @@ def _preprocess_backward_kernel[
     gcol1: F32Ptr,
     gcol2: F32Ptr,
     gcol3: F32Ptr,
+    gcol4: F32Ptr,
+    gcol5: F32Ptr,
     densification: F32Ptr,  # [2, N] (count, sum |dL/dmean2d_ndc|) if has_densification
     has_densification: Int32,  # Bool is not DevicePassable
     write_all: Int32,  # 0: skip what a fused optimizer recomputes (see the appearance)
     n: Int32,
     settings: KernelVector[DType.int32, 4],
 ):
-    var cols = ExtraColumns(col0, col1, col2, col3)
-    var out_cols = ExtraColumns(gcol0, gcol1, gcol2, gcol3)
+    var cols = ExtraColumns(col0, col1, col2, col3, col4, col5)
+    var out_cols = ExtraColumns(gcol0, gcol1, gcol2, gcol3, gcol4, gcol5)
     var g = block_idx.x * BLOCK_SIZE + thread_idx.x
     if g >= Int(n):
         return
@@ -160,6 +164,8 @@ def preprocess_backward[
         extras.c1,
         extras.c2,
         extras.c3,
+        extras.c4,
+        extras.c5,
         KernelVector[DType.float32, 32](cam),
         slot_of,
         grad_resp,
@@ -173,6 +179,8 @@ def preprocess_backward[
         out_extras.c1,
         out_extras.c2,
         out_extras.c3,
+        out_extras.c4,
+        out_extras.c5,
         densification,
         Int32(1 if has_densification else 0),
         Int32(1 if write_all else 0),

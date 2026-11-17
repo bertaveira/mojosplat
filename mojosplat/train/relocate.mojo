@@ -10,7 +10,9 @@ or pruned.
 
 Two strategies use it:
 
-    Relocation       Beta Splatting's schedule: position noise only at relocations
+    Relocation       Beta Splatting's schedule: position noise only at relocations,
+                     which skip the optimizer step; `Relocation[step_first=True]`
+                     steps first and relocates after it (Spherical Voronoi)
     MCMCRelocation   the paper's: copies also shrink (its Equation 9), and position
                      noise and the regularizers act on every iteration
 
@@ -422,7 +424,7 @@ struct RelocateConfig(Copyable, Defaultable, Movable):
         self.scale_reg = 0.01
 
 
-struct Relocation(Densification):
+struct Relocation[step_first: Bool = False](Densification):
     """Relocation densification, on Beta Splatting's schedule. With t = it + 1
     (the official code counts from 1), inside relocate_from < t < relocate_until:
 
@@ -430,6 +432,8 @@ struct Relocation(Densification):
                                      skip the optimizer step (as the official code)
         otherwise                    add the regularizer gradients, then step
 
+    With `step_first` (Spherical Voronoi's official code), relocation iterations
+    also add the regularizer gradients and step, and relocate after the step.
     Nothing is pruned after training.
     """
 
@@ -446,19 +450,31 @@ struct Relocation(Densification):
     def collects_stats(self, it: Int) -> Bool:
         return False
 
+    def _in_window(self, t: Int) -> Bool:
+        return t > self.config.relocate_from and t < self.config.relocate_until
+
+    def _relocate(mut self, mut splats: Splats, means_lr: Float32) raises:
+        _ = relocate(splats)
+        _ = add_gaussians(splats, self.config.cap_max)
+        add_position_noise(splats, self.config.noise_lr * means_lr)
+        splats.ctx.synchronize()
+
     def after_backward(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises -> Bool:
-        var c = self.config.copy()
         var t = it + 1
-        if t <= c.relocate_from or t >= c.relocate_until:
+        if not self._in_window(t):
             return True
-        if t % c.relocate_interval == 0:
-            _ = relocate(splats)
-            _ = add_gaussians(splats, c.cap_max)
-            add_position_noise(splats, c.noise_lr * means_lr)
-            splats.ctx.synchronize()
-            return False
-        add_regularizer_gradients(splats, c.opacity_reg, c.scale_reg)
+        comptime if not Self.step_first:
+            if t % self.config.relocate_interval == 0:
+                self._relocate(splats, means_lr)
+                return False
+        add_regularizer_gradients(splats, self.config.opacity_reg, self.config.scale_reg)
         return True
+
+    def after_step(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises:
+        comptime if Self.step_first:
+            var t = it + 1
+            if self._in_window(t) and t % self.config.relocate_interval == 0:
+                self._relocate(splats, means_lr)
 
     def finish(mut self, mut splats: Splats) raises -> Int:
         return 0

@@ -20,6 +20,8 @@ export default function ColumnMap() {
     {c: 'c1', name: 'sh_rest', t: 'appearance'},
     {c: 'c2', name: resp ? 'scale_of_alpha' : 'placeholder', t: resp ? 'response' : 'none'},
     {c: 'c3', name: 'placeholder', t: 'none'},
+    {c: 'c4', name: 'placeholder', t: 'none'},
+    {c: 'c5', name: 'placeholder', t: 'none'},
   ];
   return (
     <Panel

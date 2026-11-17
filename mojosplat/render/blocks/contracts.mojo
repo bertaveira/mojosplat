@@ -224,8 +224,17 @@ trait Appearance:
         ...
 
     @staticmethod
-    def init_column(index: Int, count: Int) -> List[Float32]:
-        """Starting values of column `index` of `columns()`."""
+    def init_column(index: Int, count: Int, rgb: List[UInt8]) -> List[Float32]:
+        """Starting values of column `index` of `columns()`, given the point colors [N, 3]."""
+        ...
+
+    @staticmethod
+    def lr_scale(index: Int, iteration: Int, total: Int, frozen_last: Int) -> Float32:
+        """Multiplier on the learning rate of column `index` of `columns()`.
+
+        `iteration` counts from 1. Over the last `frozen_last` iterations
+        (`ScheduleConfig.frozen_last`) every other column is frozen; an appearance
+        decides here which of its own keep training."""
         ...
 
     @staticmethod
