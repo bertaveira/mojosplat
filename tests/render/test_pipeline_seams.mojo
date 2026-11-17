@@ -10,14 +10,27 @@ from std.os.path import exists
 from std.testing import assert_raises, assert_true, TestSuite
 
 from mojosplat.core.camera import Camera
-from mojosplat.core.linalg import Sym2, V2
+from mojosplat.core.linalg import Sym2, V2, V3
 from mojosplat.core.splats import ExtraColumns
 from mojosplat.core.types import SlabPtr, dptr
 from mojosplat.gpu.elementwise import fill_f32
 from mojosplat.io.arrays import download
 from mojosplat.model.splats import Splats
 from mojosplat.render.blocks.appearance.sh import SphericalHarmonics
-from mojosplat.render.blocks.contracts import ColumnSpec, Hit, LoadedResponse, Pipeline, Response, ScreenGrad
+from mojosplat.render.blocks.contracts import (
+    ColumnSpec,
+    Extra,
+    GaussianGeometry,
+    Hit,
+    LoadedResponse,
+    Pipeline,
+    Placement,
+    Response,
+    ResponseGrad,
+    ScreenGrad,
+    SlotGrad,
+)
+from mojosplat.render.blocks.shape import QuatScale
 from mojosplat.render.blocks.placement.pinhole_ewa import PinholeEWA
 from mojosplat.render.blocks.response.gaussian2d import Gaussian2D, LoadedGaussian2D
 from mojosplat.render.pipelines import Standard3DGS
@@ -48,7 +61,7 @@ struct LoadedScaled(ImplicitlyCopyable, LoadedResponse, Movable):
         self.d_s = 0.0
 
     @always_inline
-    def __init__(out self, rec: SIMD[DType.float32, REC], extra: _F8):
+    def __init__(out self, rec: SIMD[DType.float32, REC], extra: Extra):
         self.inner = LoadedGaussian2D(rec, extra)
         self.s = extra[0]
         self.d_s = 0.0
@@ -66,7 +79,7 @@ struct LoadedScaled(ImplicitlyCopyable, LoadedResponse, Movable):
         self.d_s += hit[0] / self.s * dL_dalpha
 
     @always_inline
-    def gradient(self) -> _F8:
+    def gradient(self) -> SlotGrad:
         var g = self.inner.gradient()
         g[6] = self.d_s
         return g
@@ -94,7 +107,13 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
     var inner: Gaussian2D
 
     @always_inline
-    def __init__(out self, mean2d: V2[DType.float32], cov2d: Sym2[DType.float32]):
+    def __init__(
+        out self,
+        mean2d: V2[DType.float32],
+        cov2d: Sym2[DType.float32],
+        geom: GaussianGeometry,
+        cam: SIMD[DType.float32, 32],
+    ):
         self.inner = Gaussian2D(mean2d, cov2d)
 
     @always_inline
@@ -110,9 +129,8 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
         return self.inner.record(opacity)
 
     @always_inline
-    @staticmethod
-    def extra(cols: ExtraColumns, g: Int) -> _F8:
-        var v = _F8(0.0)
+    def extra(self, opacity: Float32, cols: ExtraColumns, g: Int) -> Extra:
+        var v = Extra(0.0)
         v[0] = min(max(cols.c0[unsafe_offset=g], Float32(0.01)), Float32(1.0))  # alpha must stay below 1
         return v
 
@@ -128,7 +146,7 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
 
     @always_inline
     @staticmethod
-    def store_slab(dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: _F8, color: SIMD[DType.float32, 4]):
+    def store_slab(dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: Extra, color: SIMD[DType.float32, 4]):
         Gaussian2D.store_slab(dst, rec, extra, color)
         dst[unsafe_offset=9] = extra[0]
 
@@ -138,17 +156,26 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
         return Gaussian2D.channel(src, k)
 
     @always_inline
-    def backward(self, grad: _F8) -> ScreenGrad:
-        return self.inner.backward(grad)
+    def backward[
+        P: Placement
+    ](self, grad: SlotGrad, place: P, shape: QuatScale[P.dtype], cam: SIMD[DType.float32, 32]) -> ResponseGrad[P.dtype]:
+        return self.inner.backward(grad, place, shape, cam)
 
     @always_inline
     @staticmethod
-    def opacity_gradient(slot_grad: _F8) -> Float32:
+    def densification(
+        screen_norm: Float32, total_mean: V3[DType.float32], mean: V3[DType.float32], cam: SIMD[DType.float32, 32]
+    ) -> SIMD[DType.float32, 2]:
+        return Gaussian2D.densification(screen_norm, total_mean, mean, cam)
+
+    @always_inline
+    @staticmethod
+    def opacity_gradient(slot_grad: SlotGrad) -> Float32:
         return Gaussian2D.opacity_gradient(slot_grad)
 
     @always_inline
     @staticmethod
-    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: _F8):
+    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: SlotGrad):
         grads.c0[unsafe_offset=g] = slot_grad[6]
 
     @always_inline
@@ -166,6 +193,7 @@ struct ScaledGaussian(ImplicitlyCopyable, Movable, Response):
 
 struct ScaledPipeline(Pipeline):
     comptime ID = 99
+    comptime TILE_H = Standard3DGS.TILE_H
     comptime Place = PinholeEWA[DType.float32]
     comptime Resp = ScaledGaussian
     comptime Appear = SphericalHarmonics

@@ -4,8 +4,9 @@ The trainer calls its strategy at fixed points (see trainer.mojo):
 
     before_step(it)        before iteration `it` renders its view
     collects_stats(it)     whether that iteration's backward accumulates the
-                           densification statistics (per-Gaussian visibility
-                           count and screen-space gradient norm)
+                           densification statistics (per Gaussian: a view
+                           count and a summed gradient norm, as the response
+                           defines them in `Response.densification`)
     after_backward(it)     after the backward, before the optimizer; it may add
                            gradients (regularizers), change the Gaussians, and
                            skip that iteration's optimizer step
@@ -15,7 +16,8 @@ The trainer calls its strategy at fixed points (see trainer.mojo):
 
 A strategy owns its settings as `Config`. Every field of it is a command-line
 option (see cli/args.mojo), so a method only shows the options of the strategy
-it uses. `ClassicDensification` (densify.mojo) is 3DGS's clone, split and prune;
+it uses. `ClassicDensification` (densify.mojo) is 3DGS's clone, split and prune,
+`GutDensification` (densify.mojo) the same on 3DGUT's schedule;
 `Relocation` and `MCMCRelocation` (relocate.mojo) are 3DGS-MCMC's, on Beta
 Splatting's schedule and on the paper's.
 """
@@ -45,7 +47,7 @@ trait Densification(Deinitable, Movable):
         its optimizer step. Returns whether the optimizer steps this iteration."""
         ...
 
-    def after_step(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises:
+    def after_step(mut self, it: Int, mut splats: Splats, scene_extent: Float32, means_lr: Float32) raises:
         """After the optimizer step of iteration `it` (also when it was skipped)."""
         pass
 

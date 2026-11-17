@@ -3,7 +3,7 @@
 
 Every densification step, from the statistics the backward pass accumulates
 (per Gaussian: number of views it was visible in, and the summed norm of
-its screen-space mean gradient in NDC):
+its screen-space mean gradient in NDC; 3DGUT's response defines its own):
 
 1. select Gaussians whose mean gradient is >= `grad_threshold`;
 2. clone the selected small ones (largest scale <= percent_dense * extent):
@@ -342,7 +342,8 @@ struct Densifier(Movable):
         fill_f32(ctx, dptr(splats.exp_avg_sq[Attr.OPACITY_LOGITS]), 0.0, n)
 
     def prune_final(mut self, mut splats: Splats, min_opacity: Float64 = 1.0 / 255.0) raises -> Int:
-        """After training: drop nearly transparent / degenerate Gaussians."""
+        """Drop nearly transparent / degenerate Gaussians (after training, and
+        3DGUT's periodic prune). Densification statistics stay with their rows."""
         var n = splats.count
         var ctx = self.ctx
         var split = ctx.enqueue_create_buffer[DType.uint32](max(n, 1))
@@ -375,7 +376,7 @@ struct Densifier(Movable):
             grid_dim=num_blocks(n),
             block_dim=BLOCK_SIZE,
         )
-        splats.gather(dptr(keep_index), n_keep, n_keep)
+        splats.gather(dptr(keep_index), n_keep, n_keep, keep_statistics=True)
         ctx.synchronize()
         _ = (split^, keep^, keep_off^, keep_index^)
         return n - n_keep
@@ -459,3 +460,102 @@ struct ClassicDensification(Densification):
 
     def finish(mut self, mut splats: Splats) raises -> Int:
         return self.densifier.prune_final(splats)
+
+
+struct GutDensifyConfig(Copyable, Defaultable, Movable):
+    """Settings of `GutDensification`; defaults are 3DGUT's (configs/strategy/gs.yaml)."""
+
+    @__annotation(Arg("Clone, split and prune Gaussians"))
+    var densify: Bool
+
+    @__annotation(Arg("Densify and prune after iterations above this"))
+    var densify_from: Int
+
+    @__annotation(Arg("Densify, prune and reset opacities before this iteration"))
+    var densify_until: Int
+
+    @__annotation(Arg("Clone and split every N iterations"))
+    var densify_interval: Int
+
+    @__annotation(Arg("Prune transparent Gaussians every N iterations"))
+    var prune_interval: Int
+
+    @__annotation(Arg("Prune Gaussians below this opacity"))
+    var prune_opacity: Float32
+
+    @__annotation(Arg("Reset opacities every N iterations"))
+    var opacity_reset_interval: Int
+
+    @__annotation(Arg("Densify Gaussians whose mean gradient statistic reaches this"))
+    var grad_threshold: Float32
+
+    @__annotation(Arg("Clone below / split above this size (fraction of the scene extent)"))
+    var percent_dense: Float32
+
+    def __init__(out self):
+        self.densify = True
+        self.densify_from = 500
+        self.densify_until = 15_000
+        self.densify_interval = 300
+        self.prune_interval = 100
+        self.prune_opacity = 0.005
+        self.opacity_reset_interval = 3000
+        self.grad_threshold = 0.0002
+        self.percent_dense = 0.01
+
+
+struct GutDensification(Densification):
+    """3DGS's clone and split on 3DGUT's schedule (NVIDIA's `GSStrategy`). After the
+    optimizer step of iteration `it` (0-based; NVIDIA's `check_step_condition`):
+
+        clone and split   if densify_from < it < densify_until and it % densify_interval == 0
+        prune             if densify_from < it < densify_until and it % prune_interval == 0:
+                          opacity < prune_opacity
+        reset opacities   if 0 < it < densify_until and it % opacity_reset_interval == 0
+
+    Clone and split remove only the split parents (and degenerate rotations, as
+    everywhere here; NVIDIA's code keeps those), and reset the statistics;
+    the opacity prune (which also drops degenerate rotations) keeps them with
+    their rows. The backward collects
+    statistics for 0 < it < densify_until; the statistic is the response's
+    (`GaussianRay3D.densification`). Nothing is pruned after training.
+    """
+
+    comptime Config = GutDensifyConfig
+
+    var config: GutDensifyConfig
+    var densifier: Densifier
+    var last: DensifyStats
+
+    def __init__(out self, ctx: DeviceContext, config: GutDensifyConfig, iterations: Int) raises:
+        self.config = config.copy()
+        self.densifier = Densifier(ctx)
+        self.densifier.grad_threshold = config.grad_threshold
+        self.densifier.percent_dense = config.percent_dense
+        self.densifier.min_opacity = 0.0  # clone and split prune nothing else
+        self.last = DensifyStats()
+
+    def before_step(mut self, it: Int, mut splats: Splats, scene_extent: Float32) raises:
+        pass
+
+    def collects_stats(self, it: Int) -> Bool:
+        return self.config.densify and it > 0 and it < self.config.densify_until
+
+    def after_backward(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises -> Bool:
+        return True
+
+    def after_step(mut self, it: Int, mut splats: Splats, scene_extent: Float32, means_lr: Float32) raises:
+        var c = self.config.copy()
+        if not c.densify or it <= 0 or it >= c.densify_until:
+            return
+        if it > c.densify_from:
+            if it % c.densify_interval == 0:
+                self.last = self.densifier.densify(splats, scene_extent, prune_large=False)
+                splats.reset_densification()
+            if it % c.prune_interval == 0:
+                _ = self.densifier.prune_final(splats, Float64(c.prune_opacity))
+        if it % c.opacity_reset_interval == 0:
+            self.densifier.reset_opacities(splats)
+
+    def finish(mut self, mut splats: Splats) raises -> Int:
+        return 0

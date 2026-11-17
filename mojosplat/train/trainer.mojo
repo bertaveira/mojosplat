@@ -11,8 +11,9 @@ One iteration `it` (0-based, Faster-GS's callback order):
     adam.step(splats)                                             # per-attribute lrs
     strategy.after_step(it)
 plus the schedules: the means learning rate decays exponentially (scaled by
-the scene extent), the SH degree grows by one every 1000 iterations, the
-appearance scales the learning rates of its own columns (`Appearance.lr_scale`),
+the scene extent), the SH degree grows by one every 1000 iterations (with
+`ScheduleConfig.after_step`, both advance after the optimizer step, from the
+0-based step, as in NVIDIA's 3dgrut), the appearance scales the learning rates of its own columns (`Appearance.lr_scale`),
 and over the last `ScheduleConfig.frozen_last` iterations only the columns the
 appearance keeps training are trained.
 The backward accumulates densification statistics while the strategy asks for them.
@@ -25,7 +26,13 @@ from std.random import random_ui64, seed
 from ..cli.args import Arg
 from ..core.types import dptr
 from ..io.ply import write_ply
-from ..model.init import RANDOM_INIT_GRAY, RANDOM_INIT_POINTS, random_points, splats_from_points
+from ..model.init import (
+    RANDOM_INIT_GRAY,
+    RANDOM_INIT_POINTS,
+    nearest_camera_distances,
+    random_points,
+    splats_from_points,
+)
 from ..model.morton import morton_order
 from ..model.splats import Attr, Splats
 from ..render.blocks.contracts import Appearance, Pipeline
@@ -101,6 +108,15 @@ struct TrainConfig(Copyable, Defaultable, Movable):
     @__annotation(Arg("Read back the loss every N iterations (syncs the GPU)"))
     var log_interval: Int
 
+    @__annotation(Arg("Scale intrinsics by the nearest integer image factor, the same on both axes"))
+    var integer_factor: Bool
+
+    @__annotation(Arg("Scene extent: 1.1 x median camera distance from the median camera center (all cameras)"))
+    var median_extent: Bool
+
+    @__annotation(Arg("Average D-SSIM over windows that fit in the image only (fused-ssim padding=valid)"))
+    var ssim_valid: Bool
+
     @__annotation(Arg("Z-order (Morton) reordering every N iterations (0 = off)"))
     var morton_interval: Int
 
@@ -127,6 +143,9 @@ struct TrainConfig(Copyable, Defaultable, Movable):
         self.far = 10000.0
         self.seed = 0
         self.log_interval = 100
+        self.integer_factor = False
+        self.median_extent = False
+        self.ssim_valid = False
         self.morton_interval = 5000
         self.morton_until = 15_000
 
@@ -141,9 +160,17 @@ struct InitConfig(Copyable, Defaultable, Movable):
     @__annotation(Arg("Multiplier on each initial Gaussian's nearest-neighbor scale"))
     var initial_scale: Float32
 
+    @__annotation(Arg("Scale each initial Gaussian to this x its distance to the nearest training camera (0: 3-NN)"))
+    var observer_scale: Float32
+
+    @__annotation(Arg("Start from random quaternions, uniform in [0, 1)^4, instead of the identity"))
+    var random_rotations: Bool
+
     def __init__(out self):
         self.random_init = False
         self.initial_scale = 1.0
+        self.observer_scale = 0.0
+        self.random_rotations = False
 
 
 struct ScheduleConfig(Copyable, Defaultable, Movable):
@@ -152,14 +179,33 @@ struct ScheduleConfig(Copyable, Defaultable, Movable):
     @__annotation(Arg("Over the last N iterations, train only what the appearance keeps training (0 = off)"))
     var frozen_last: Int
 
+    @__annotation(Arg("Advance the SH degree and the means learning rate after each optimizer step (NVIDIA's order)"))
+    var after_step: Bool
+
     def __init__(out self):
         self.frozen_last = 0
+        self.after_step = False
 
 
 def exponential_lr(init: Float32, final: Float32, step: Int, max_steps: Int) -> Float32:
     """3DGS's get_expon_lr_func (without delay): log-linear interpolation."""
     var t = min(max(Float64(step) / Float64(max(max_steps, 1)), 0.0), 1.0)
     return Float32(exp(log(Float64(init)) * (1.0 - t) + log(Float64(final)) * t))
+
+
+def sh_degree_at(iteration: Int, max_degree: Int, interval: Int, after_step: Bool) -> Int:
+    """The SH degree iteration `iteration` (0-based) renders with: one more every
+    `interval` iterations; with `after_step` raised after the optimizer step of
+    iterations k * interval (k >= 1), so one iteration later (NVIDIA's order)."""
+    var it = max(iteration - 1, 0) if after_step else iteration
+    return min(max_degree, it // interval)
+
+
+def means_lr_step(iteration: Int, after_step: Bool) -> Int:
+    """The step the means learning rate of iteration `iteration` (0-based) is
+    evaluated at: 3DGS's 1-based count, or with `after_step` the step before,
+    as the scheduler runs after the optimizer (NVIDIA's order)."""
+    return max(iteration - 1, 0) if after_step else iteration + 1
 
 
 def scheduled_learning_rates[
@@ -192,11 +238,12 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
     var config: TrainConfig
     var dataset: Dataset
     var splats: Splats
-    var rasterizer: Rasterizer[]
+    var rasterizer: Rasterizer[16, Self.Pipe.TILE_H]
     var adam: Adam
     var base_lr: SIMD[DType.float32, 16]  # Adam's learning rates before the appearance's schedule
     var n_appearance: Int  # columns owned by the appearance, after `Attr.COUNT`
     var frozen_last: Int
+    var after_step: Bool  # `ScheduleConfig.after_step`
     var loss: PhotometricLoss
     var strategy: Self.Strategy
     var image: DeviceBuffer[DType.float32]
@@ -222,13 +269,23 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         if init.random_init:
             xyz = random_points(RANDOM_INIT_POINTS, dataset.scene_extent)
             rgb = List[UInt8](length=RANDOM_INIT_POINTS * 3, fill=RANDOM_INIT_GRAY)
+        var distances = List[Float32]()
+        var scale = init.initial_scale
+        if init.observer_scale > 0.0:
+            var centers = List[SIMD[DType.float32, 4]]()
+            for v in dataset.train:
+                centers.append(v.camera.position())
+            distances = nearest_camera_distances(xyz, centers)
+            scale *= init.observer_scale
         self.splats = splats_from_points(
             ctx,
             xyz,
             rgb,
             config.sh_degree,
             initial_opacity=config.initial_opacity,
-            initial_scale=init.initial_scale,
+            initial_scale=scale,
+            distances=distances,
+            random_rotations=init.random_rotations,
         )
         var specs = Self.Pipe.Appear.columns()
         self.n_appearance = len(specs)
@@ -258,9 +315,11 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
             lr[Attr.COUNT + i] = specs[i].lr
         self.base_lr = lr
         self.frozen_last = schedule.frozen_last
+        self.after_step = schedule.after_step
         self.adam = Adam(lr)
-        self.rasterizer = Rasterizer(ctx)
+        self.rasterizer = Rasterizer[16, Self.Pipe.TILE_H](ctx)
         self.loss = PhotometricLoss(ctx, config.lambda_dssim)
+        self.loss.valid_ssim = config.ssim_valid
         self.strategy = Self.Strategy(ctx, strategy, config.iterations)
         var max_px = 1
         for v in dataset.train:
@@ -276,7 +335,7 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
 
     def active_sh_degree(self) -> Int:
         """SH degree used by the next iteration."""
-        return min(self.config.sh_degree, self.iteration // self.config.sh_degree_interval)
+        return sh_degree_at(self.iteration, self.config.sh_degree, self.config.sh_degree_interval, self.after_step)
 
     def _next_view(mut self) -> Int:
         if self.order_pos >= len(self.order):
@@ -327,14 +386,14 @@ struct Trainer[Pipe: Pipeline = Standard3DGS, Strategy: Densification = ClassicD
         var means_lr = exponential_lr(
             self.config.lr_means_init * self.dataset.scene_extent,
             self.config.lr_means_final * self.dataset.scene_extent,
-            it + 1,
+            means_lr_step(it, self.after_step),
             self.config.lr_means_steps,
         )
         self.adam.lr[Attr.MEANS] = means_lr
         self._schedule_learning_rates(it + 1)
         if self.strategy.after_backward(it, self.splats, means_lr):
             self.adam.step(self.splats, self.rasterizer.sh_rest_grad[Self.Pipe](st))
-        self.strategy.after_step(it, self.splats, means_lr)
+        self.strategy.after_step(it, self.splats, self.dataset.scene_extent, means_lr)
         self.iteration += 1
         return value if log_now else -1.0
 

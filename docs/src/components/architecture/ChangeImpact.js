@@ -90,21 +90,21 @@ const CHANGES = {
   record: {
     label: 'More than 6 floats in the record',
     verdict: 'some',
-    summary: 'Use EXTRA first: up to 8 more floats per slot in a separate array. Enlarging the record itself is a change to the format.',
+    summary: 'Use EXTRA first: up to 16 more floats per slot in a separate array. Enlarging the record itself is a change to the format.',
     rows: [
-      ['render/blocks/response/<name>.mojo', 'write', '`EXTRA` up to 8. Each blend reads them from `response_extra`.'],
+      ['render/blocks/response/<name>.mojo', 'write', '`EXTRA` up to 16. Each blend reads them from `response_extra`.'],
       ['render/record.mojo', 'blocked', '`REC = 8` and `REC_BOUNDS = 6` define the format; loads and stores are single 32-byte-aligned accesses.'],
       ['contracts.mojo', 'blocked', 'Every record-taking method is typed `SIMD[float32, REC]`.'],
     ],
   },
   ray: {
     label: 'Evaluating along a ray',
-    verdict: 'no',
-    summary: 'The current Response contract fits footprints evaluated in 2D. Per-hit 3D evaluation would extend it or need its own blend kernel.',
+    verdict: 'some',
+    summary: 'A Response also gets the Gaussian in world space and the camera, and its backward returns the 3D gradient, so it can evaluate the Gaussian along each pixel’s ray (`GaussianRay3D`, 3DGUT). Data that changes per hit along the ray would extend the contract.',
     rows: [
-      ['render/blocks/contracts.mojo', 'blocked', '`Response.__init__` takes `mean2d, cov2d`, and `backward` returns `ScreenGrad` (2D position and covariance gradients).'],
-      ['render/blocks/contracts.mojo', 'blocked', '`Placement.backward` takes those same 2D gradients.'],
-      ['render/blend*.mojo', 'blocked', 'They own the tile walk and front-to-back compositing around `Loaded.eval(px, py)`.'],
+      ['render/blocks/response/<name>.mojo', 'write', 'Use `geom` and `cam` in `__init__`, compute the 3D gradient in `backward` and define `densification`, as `GaussianRay3D` does.'],
+      ['render/pipelines.mojo', 'edit', 'Set `TILE_H` when the tile test depends on the tile size.'],
+      ['render/blend*.mojo', 'blocked', 'They composite in one global depth order around `Loaded.eval(px, py)`: sorting hits per ray (3DGUT’s k-buffer) needs its own blend kernel.'],
     ],
   },
   tools: {
@@ -112,7 +112,7 @@ const CHANGES = {
     verdict: 'some',
     summary: 'The pipeline is a compile-time parameter, so the program must name it. `--method` chooses among the methods a tool names in its code.',
     rows: [
-      ['tools/train.mojo, tools/eval.mojo', 'edit', '`--method` selects a `Method`, and `run[M: Method]` uses `M.Pipe`, as in `Trainer[M.Pipe](ctx, ds^, config)`. `FasterGS` is the only one registered: add a `Method` that names your pipeline and a branch for it in `main`.'],
+      ['tools/train.mojo, tools/eval.mojo', 'edit', '`--method` selects a `Method`, and `run[M: Method]` uses `M.Pipe`, as in `Trainer[M.Pipe](ctx, ds^, config)`. To add one, write a `Method` that names your pipeline and a branch for it in `main`.'],
       ['train/trainer.mojo', 'none', '`TrainConfig` has no pipeline field: a run-time option can only choose among the pipelines compiled into the tool.'],
       ['viewer/server.mojo, tools/render, bench', 'blocked', 'Each owns a `Rasterizer` and calls `render` with no pipeline, so these use Standard3DGS whatever you trained. `tools/train --viewer` raises for any other pipeline.'],
     ],

@@ -60,7 +60,9 @@ def evaluate[M: Method](program: String = "pixi run eval") raises:
     var images = args.images if args.images.byte_length() > 0 else config.images
     var ctx = DeviceContext()
     print(bold("MojoSplat"), dim("·"), "eval", dim("·"), ctx.name())
-    var ds = load_colmap_dataset(ctx, args.scene, images, args.test_every, config.near, config.far)
+    var ds = load_colmap_dataset(
+        ctx, args.scene, images, args.test_every, config.near, config.far, config.integer_factor
+    )
     if len(ds.test) == 0:
         raise Error("the scene has no test views (--test-every 0?)")
     var splats = Splats.from_host(ctx, read_ply(args.model))
@@ -71,7 +73,7 @@ def evaluate[M: Method](program: String = "pixi run eval") raises:
             if not exists(d):
                 makedirs(d)
 
-    var r = Rasterizer(ctx)
+    var r = Rasterizer[16, M.Pipe.TILE_H](ctx)
     var max_px = 1
     for v in ds.test:
         max_px = max(max_px, v.camera.width * v.camera.height)

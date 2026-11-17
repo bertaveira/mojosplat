@@ -98,7 +98,7 @@ struct Splats(Movable):
     var grads: List[DeviceBuffer[DType.float32]]
     var exp_avg: List[DeviceBuffer[DType.float32]]
     var exp_avg_sq: List[DeviceBuffer[DType.float32]]
-    var densification: DeviceBuffer[DType.float32]  # [2, count]: visibility count, |dL/dmean2d| sum
+    var densification: DeviceBuffer[DType.float32]  # [2, count]: view count, summed gradient statistic
 
     def __init__(
         out self,

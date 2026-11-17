@@ -14,13 +14,26 @@ Slot gradients: as `Gaussian2D`, then the raw beta [slot].
 
 from std.math import exp, log, sqrt
 
-from ....core.linalg import Sym2, V2
+from ....core.linalg import Sym2, V2, V3
 from ....core.splats import ExtraColumns
 from ....core.types import SlabPtr
 from ...record import REC
-from ..contracts import ColumnSpec, Hit, LoadedResponse, Response, ScreenGrad
+from ..contracts import (
+    ColumnSpec,
+    Extra,
+    GaussianGeometry,
+    Hit,
+    LoadedResponse,
+    Placement,
+    Response,
+    ResponseGrad,
+    ScreenGrad,
+    SlotGrad,
+    through_placement,
+)
+from ..shape import QuatScale
 from ..screen import ConicFromCov, DILATION
-from .gaussian2d import MIN_COV2D_DET, _will_contribute
+from .gaussian2d import Gaussian2D, MIN_COV2D_DET, _will_contribute
 
 comptime _F4 = SIMD[DType.float32, 4]
 comptime _F8 = SIMD[DType.float32, 8]
@@ -74,7 +87,7 @@ struct LoadedBeta(ImplicitlyCopyable, LoadedResponse, Movable):
         self.beta = src[unsafe_offset=9]
 
     @always_inline
-    def __init__(out self, rec: SIMD[DType.float32, REC], extra: _F8):
+    def __init__(out self, rec: SIMD[DType.float32, REC], extra: Extra):
         self = Self()
         self.mx = rec[0]
         self.my = rec[1]
@@ -123,17 +136,16 @@ struct LoadedBeta(ImplicitlyCopyable, LoadedResponse, Movable):
         self.d_beta += dL_dalpha * self.opacity * vis * log(one_minus)
 
     @always_inline
-    def gradient(self) -> _F8:
-        return _F8(
-            self.d_mx,
-            self.d_my,
-            self.d_ca,
-            0.5 * self.d_cb,
-            self.d_cc,
-            self.opacity * (1.0 - self.opacity) * self.d_op,
-            self.d_beta * self.beta,
-            0.0,
-        )
+    def gradient(self) -> SlotGrad:
+        var g = SlotGrad(0.0)
+        g[0] = self.d_mx
+        g[1] = self.d_my
+        g[2] = self.d_ca
+        g[3] = 0.5 * self.d_cb
+        g[4] = self.d_cc
+        g[5] = self.opacity * (1.0 - self.opacity) * self.d_op
+        g[6] = self.d_beta * self.beta
+        return g
 
 
 struct BetaFootprint(ImplicitlyCopyable, Movable, Response):
@@ -160,7 +172,13 @@ struct BetaFootprint(ImplicitlyCopyable, Movable, Response):
     var inverse: ConicFromCov[DType.float32]
 
     @always_inline
-    def __init__(out self, mean2d: V2[DType.float32], cov2d: Sym2[DType.float32]):
+    def __init__(
+        out self,
+        mean2d: V2[DType.float32],
+        cov2d: Sym2[DType.float32],
+        geom: GaussianGeometry,
+        cam: SIMD[DType.float32, 32],
+    ):
         self.mean = mean2d
         self.inverse = ConicFromCov[DType.float32](Sym2[DType.float32](cov2d.a + DILATION, cov2d.b, cov2d.c + DILATION))
 
@@ -180,9 +198,8 @@ struct BetaFootprint(ImplicitlyCopyable, Movable, Response):
         return SIMD[DType.float32, REC](self.mean.x, self.mean.y, c.a, c.b, c.c, opacity, 0.0, 0.0)
 
     @always_inline
-    @staticmethod
-    def extra(cols: ExtraColumns, g: Int) -> _F8:
-        var v = _F8(0.0)
+    def extra(self, opacity: Float32, cols: ExtraColumns, g: Int) -> Extra:
+        var v = Extra(0.0)
         v[0] = 4.0 * exp(cols.c0[unsafe_offset=g])
         return v
 
@@ -199,7 +216,7 @@ struct BetaFootprint(ImplicitlyCopyable, Movable, Response):
 
     @always_inline
     @staticmethod
-    def store_slab(dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: _F8, color: SIMD[DType.float32, 4]):
+    def store_slab(dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: Extra, color: SIMD[DType.float32, 4]):
         dst.unsafe_bitcast[_F4]()[] = _F4(rec[0], rec[1], rec[2], rec[3])
         dst.unsafe_offset(4).unsafe_bitcast[_F4]()[] = _F4(rec[4], rec[5], color[0], color[1])
         dst.unsafe_offset(8).unsafe_bitcast[_F4]()[] = _F4(color[2], extra[0], 0.0, 0.0)
@@ -212,20 +229,30 @@ struct BetaFootprint(ImplicitlyCopyable, Movable, Response):
         return src.unsafe_offset(4).unsafe_bitcast[_F4]()[][2 + k]
 
     @always_inline
-    def backward(self, grad: _F8) -> ScreenGrad:
-        return ScreenGrad(
+    def backward[
+        P: Placement
+    ](self, grad: SlotGrad, place: P, shape: QuatScale[P.dtype], cam: SIMD[DType.float32, 32]) -> ResponseGrad[P.dtype]:
+        var screen = ScreenGrad(
             V2[DType.float32](grad[0], grad[1]),
             self.inverse.backward(Sym2[DType.float32](grad[2], grad[3], grad[4])),
         )
+        return through_placement(screen, place, shape, cam)
 
     @always_inline
     @staticmethod
-    def opacity_gradient(slot_grad: _F8) -> Float32:
+    def densification(
+        screen_norm: Float32, total_mean: V3[DType.float32], mean: V3[DType.float32], cam: SIMD[DType.float32, 32]
+    ) -> SIMD[DType.float32, 2]:
+        return Gaussian2D.densification(screen_norm, total_mean, mean, cam)
+
+    @always_inline
+    @staticmethod
+    def opacity_gradient(slot_grad: SlotGrad) -> Float32:
         return slot_grad[5]
 
     @always_inline
     @staticmethod
-    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: _F8):
+    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: SlotGrad):
         grads.c0[unsafe_offset=g] = slot_grad[6]
 
     @always_inline

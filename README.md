@@ -100,7 +100,7 @@ Contributions are welcome; please include tests (`pixi run test`).
 
 ## License
 
-[MIT](LICENSE). Ported code from Faster-GS (Apache-2.0), Deformable Beta Splatting (Apache-2.0), Spherical Voronoi (MIT), NeRFICG (MIT) and fused-ssim (MIT) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE).
+[MIT](LICENSE). Ported code from Faster-GS (Apache-2.0), Deformable Beta Splatting (Apache-2.0), 3DGUT (NVIDIA 3dgrut, Apache-2.0), Spherical Voronoi (MIT), NeRFICG (MIT) and fused-ssim (MIT) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE).
 
 ## Acknowledgments
 

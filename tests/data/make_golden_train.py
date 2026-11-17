@@ -6,7 +6,9 @@ Writes into tests/data/golden/train/:
     loss/   image.f32 [H,W,3], target.u8 [H,W,3], grad.f32 = dL/dimage,
             meta.txt (H, W, loss, psnr), for
             L = 0.8 * L1 + 0.2 * (1 - SSIM) with 3DGS's SSIM (11x11 Gaussian
-            window, sigma 1.5, conv2d with zero padding), float64 autograd.
+            window, sigma 1.5, conv2d with zero padding), float64 autograd;
+            loss_valid / grad_valid.f32: the same with SSIM averaged over the
+            windows that fit in the image (fused-ssim padding="valid", 3DGUT).
     adam/   5 steps of torch.optim.Adam (eps 1e-15, one group per attribute
             with its own lr) on random float32 parameters and gradients:
             init_<a>.f32, grads_<a>.f32 [steps, n], param_<a>.f32,
@@ -42,7 +44,7 @@ def gaussian(window_size, sigma):
     return g / g.sum()
 
 
-def ssim(img1, img2, window_size=11):
+def ssim(img1, img2, window_size=11, valid=False):
     channel = img1.shape[0]
     w1 = gaussian(window_size, 1.5).unsqueeze(1)
     w2 = (w1 @ w1.t()).unsqueeze(0).unsqueeze(0)
@@ -57,6 +59,8 @@ def ssim(img1, img2, window_size=11):
     sigma12 = F.conv2d(img1 * img2, window, padding=pad, groups=channel) - mu1_mu2
     C1, C2 = 0.01 ** 2, 0.03 ** 2
     ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+    if valid:
+        ssim_map = ssim_map[..., pad:-pad, pad:-pad]
     return ssim_map.mean()
 
 
@@ -73,11 +77,19 @@ def make_loss(d: Path):
     l1 = (image - t).abs().mean()
     loss = 0.8 * l1 + 0.2 * (1 - ssim(image.permute(2, 0, 1), t.permute(2, 0, 1)))
     loss.backward()
+    grad = image.grad.clone()
+    image.grad = None
+    loss_valid = 0.8 * (image - t).abs().mean() + 0.2 * (1 - ssim(image.permute(2, 0, 1), t.permute(2, 0, 1), valid=True))
+    loss_valid.backward()
     mse = ((image.detach().clamp(0, 1) - t) ** 2).mean()
     save(d / "image.f32", image)
     save(d / "target.u8", target, "u1")
-    save(d / "grad.f32", image.grad)
-    (d / "meta.txt").write_text(f"H={H}\nW={W}\nloss={loss.item():.12g}\npsnr={(-10 * torch.log10(mse)).item():.12g}\n")
+    save(d / "grad.f32", grad)
+    save(d / "grad_valid.f32", image.grad)
+    (d / "meta.txt").write_text(
+        f"H={H}\nW={W}\nloss={loss.item():.12g}\npsnr={(-10 * torch.log10(mse)).item():.12g}\n"
+        f"loss_valid={loss_valid.item():.12g}\n"
+    )
     print(f"loss: {loss.item():.6f}")
 
 

@@ -59,14 +59,14 @@ export default function Anatomy() {
 
     var shape = QuatScale[dt](log_scales, rotations)
     var place = P(mean, shape, cam_v)
-    var resp = R(mean2d, place.cov2d().f32())
+    var resp = R(mean2d, place.cov2d().f32(), GaussianGeometry.of(mean, shape), cam)
     if not resp.valid(): active = False
     var rec = resp.record(opacity)
     # exact tile count, slot allocation: kernel
     var args = R.tile_args(rec)
     R.touches_tile[tile_w, tile_h](args, tx, ty)
 ${p.extra ? '' : '    # not generated for this pipeline:\n'}    comptime if R.EXTRA > 0:
-        var extra = R.extra(cols.skip(Pipe.Appear.NUM_COLUMNS), g)
+        var extra = resp.extra(opacity, cols.skip(Pipe.Appear.NUM_COLUMNS), g)
     var rgb = Pipe.Appear.color(cols, g, dir, settings)`}
           </Code>
         </div>

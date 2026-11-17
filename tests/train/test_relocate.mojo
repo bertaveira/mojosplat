@@ -126,9 +126,9 @@ def test_step_first_relocates_after_the_step() raises:
     assert_true(strategy.after_backward(599, splats, 1e-4), "steps at t = 600")
     var before = download(ctx, splats.params[Attr.MEANS], 6)
     assert_equal(before[0], 0.0)
-    strategy.after_step(598, splats, 1e-4)  # t = 599: not a relocation
+    strategy.after_step(598, splats, 1.0, 1e-4)  # t = 599: not a relocation
     assert_equal(download(ctx, splats.params[Attr.MEANS], 6)[0], 0.0)
-    strategy.after_step(599, splats, 1e-4)
+    strategy.after_step(599, splats, 1.0, 1e-4)
     var after = download(ctx, splats.params[Attr.MEANS], 6)
     assert_true(abs(after[0] - 10.0) < 0.5, "the dead row moved onto the live one")
 

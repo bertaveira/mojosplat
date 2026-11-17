@@ -100,10 +100,10 @@ def test_no_noise_after_the_last_step() raises:
     var ctx = DeviceContext()
     var splats = _make(ctx, [0.0001])
     var strategy = MCMCRelocation(ctx, RelocateConfig(), iterations=10)
-    strategy.after_step(9, splats, 1.0)
+    strategy.after_step(9, splats, 1.0, 1.0)
     var m = download(ctx, splats.params[Attr.MEANS], 3)
     assert_equal(m[0], 0.0)
-    strategy.after_step(8, splats, 1.0)
+    strategy.after_step(8, splats, 1.0, 1.0)
     m = download(ctx, splats.params[Attr.MEANS], 3)
     assert_true(m[0] != 0.0 or m[1] != 1.0 or m[2] != 2.0, "moved before the last iteration")
 

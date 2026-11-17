@@ -177,10 +177,11 @@ reverse.
 ```mojo
 var shape = QuatScale[dt](log_scales, rotations)    # forward, top to bottom
 var place = P(mean, shape, cam)
-var resp = R(place.mean2d(), place.cov2d())
+var resp = R(place.mean2d(), place.cov2d(), GaussianGeometry.of(mean, shape), cam)
 
-var screen = resp.backward(slot_gradients)          # backward, bottom to top
-var grad = place.backward(shape, screen.mean2d, screen.cov2d)
+var grad = resp.backward(slot_gradients, place, shape, cam)    # backward, bottom to top
+# Gaussian2D.backward: its own pullback to screen gradients, then
+#     place.backward(shape, screen.mean2d, screen.cov2d)
 ```
 
 Fields the backward doesn't use are removed by the compiler, so this costs what

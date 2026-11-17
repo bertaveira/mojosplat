@@ -1,11 +1,12 @@
-"""The learning-rate schedules the Trainer applies each iteration
-(`scheduled_learning_rates`), with Spherical Voronoi's final freeze."""
+"""The schedules the Trainer applies each iteration: learning rates
+(`scheduled_learning_rates`, with Spherical Voronoi's final freeze), and the
+SH degree and means learning-rate steps in 3DGS's and NVIDIA's order."""
 
 from std.testing import assert_equal, assert_true, TestSuite
 
 from mojosplat.model.splats import Attr
 from mojosplat.render.blocks.appearance.spherical_voronoi import SphericalVoronoi
-from mojosplat.train.trainer import scheduled_learning_rates
+from mojosplat.train.trainer import means_lr_step, scheduled_learning_rates, sh_degree_at
 
 comptime SV = SphericalVoronoi[8]
 comptime SITES = Attr.COUNT
@@ -48,6 +49,24 @@ def test_nothing_frozen_by_default() raises:
         assert_true(last[a] > 0.0, "column " + String(a) + " should train with frozen_last = 0")
     for a in range(Attr.COUNT):
         assert_equal(last[a], _rates()[a])
+
+
+def test_sh_degree_in_both_orders() raises:
+    assert_equal(sh_degree_at(0, 3, 1000, False), 0)
+    assert_equal(sh_degree_at(999, 3, 1000, False), 0)
+    assert_equal(sh_degree_at(1000, 3, 1000, False), 1)
+    assert_equal(sh_degree_at(1000, 3, 1000, True), 0)  # raised after step 1000
+    assert_equal(sh_degree_at(1001, 3, 1000, True), 1)
+    assert_equal(sh_degree_at(3001, 3, 1000, True), 3)
+    assert_equal(sh_degree_at(29_999, 3, 1000, True), 3)
+
+
+def test_means_lr_step_in_both_orders() raises:
+    assert_equal(means_lr_step(0, False), 1)
+    assert_equal(means_lr_step(41, False), 42)
+    assert_equal(means_lr_step(0, True), 0)  # the initial rate
+    assert_equal(means_lr_step(1, True), 0)  # set after step 0
+    assert_equal(means_lr_step(42, True), 41)
 
 
 def main() raises:

@@ -17,7 +17,10 @@ Add a block by implementing one of these traits and naming it in a pipeline
 docs/design.md under "Portability".
 """
 
-from ...core.linalg import Sym2, V2, V3, V4
+from std.math import sqrt
+
+from ...core.camera import CAM_H, CAM_W
+from ...core.linalg import Mat3, Sym2, V2, V3, V4
 from ...core.splats import AppearanceSettings, ExtraColumns
 from ...core.types import SlabPtr
 from ..record import REC
@@ -26,6 +29,42 @@ from .shape import QuatScale, ShapeGrad
 
 # What `LoadedResponse.eval` returns: lane 0 is alpha, the rest is the block's own.
 comptime Hit = SIMD[DType.float32, 8]
+
+# Per-slot values a response saves besides the record, up to its `EXTRA` lanes.
+comptime Extra = SIMD[DType.float32, 16]
+
+# Per-slot gradients of a response, up to its `GRAD` lanes.
+comptime SlotGrad = SIMD[DType.float32, 16]
+
+
+@fieldwise_init
+struct GaussianGeometry(ImplicitlyCopyable, Movable):
+    """A Gaussian in world space, for responses evaluated along rays."""
+
+    var mean: V3[DType.float32]
+    var R: Mat3[DType.float32]  # columns are the principal axes
+    var variance: V3[DType.float32]
+
+    @always_inline
+    @staticmethod
+    def of[dt: DType, //](m: V3[dt], shape: QuatScale[dt]) -> GaussianGeometry:
+        comptime F = DType.float32
+        var R = shape.R
+        return GaussianGeometry(
+            V3[F](m.x.cast[F](), m.y.cast[F](), m.z.cast[F]()),
+            Mat3[F](
+                R.m00.cast[F](),
+                R.m01.cast[F](),
+                R.m02.cast[F](),
+                R.m10.cast[F](),
+                R.m11.cast[F](),
+                R.m12.cast[F](),
+                R.m20.cast[F](),
+                R.m21.cast[F](),
+                R.m22.cast[F](),
+            ),
+            V3[F](shape.v0.cast[F](), shape.v1.cast[F](), shape.v2.cast[F]()),
+        )
 
 
 @fieldwise_init
@@ -55,6 +94,15 @@ struct ScreenGrad(ImplicitlyCopyable, Movable):
     var cov2d: Sym2[DType.float32]
 
 
+@fieldwise_init
+struct ResponseGrad[dt: DType](ImplicitlyCopyable, Movable):
+    """What `Response.backward` hands the kernel: the 3D gradient, and |dL/dmean2d| in NDC
+    when the response works in screen space (the classic densification statistic), else 0."""
+
+    var grad: GaussianGrad[Self.dt]
+    var screen_norm: Float32
+
+
 trait Placement(Deinitable):
     """Where a Gaussian lands: 3D Gaussian -> image-space position and size."""
 
@@ -80,6 +128,25 @@ trait Placement(Deinitable):
         ...
 
 
+@always_inline
+def through_placement[
+    P: Placement
+](screen: ScreenGrad, place: P, shape: QuatScale[P.dtype], cam: SIMD[DType.float32, 32]) -> ResponseGrad[P.dtype]:
+    """`Response.backward` of a screen-space response: through the placement, with
+    |dL/dmean2d| in NDC for the classic densification statistic."""
+    comptime dt = P.dtype
+    var nx = 0.5 * screen.mean2d.x * cam[CAM_W]
+    var ny = 0.5 * screen.mean2d.y * cam[CAM_H]
+    return ResponseGrad[dt](
+        place.backward(
+            shape,
+            V2[dt](screen.mean2d.x.cast[dt](), screen.mean2d.y.cast[dt]()),
+            screen.cov2d.cast[dt](),
+        ),
+        sqrt(nx * nx + ny * ny),
+    )
+
+
 trait LoadedResponse(Deinitable):
     """One Gaussian ready to be evaluated at pixels, in both blend kernels.
 
@@ -95,7 +162,7 @@ trait LoadedResponse(Deinitable):
         """From the blend slab (`Response.store_slab`)."""
         ...
 
-    def __init__(out self, rec: SIMD[DType.float32, REC], extra: SIMD[DType.float32, 8]):
+    def __init__(out self, rec: SIMD[DType.float32, REC], extra: Extra):
         """From the record and the response's per-slot values."""
         ...
 
@@ -106,7 +173,7 @@ trait LoadedResponse(Deinitable):
         """Backward: add this pixel's contribution to the gradient sums."""
         ...
 
-    def gradient(self) -> SIMD[DType.float32, 8]:
+    def gradient(self) -> SlotGrad:
         """The summed slot gradients (`Response.GRAD` lanes)."""
         ...
 
@@ -123,7 +190,7 @@ trait Response(Deinitable):
     comptime TILE_ARGS: Int  # lanes of `tile_args` that are used
     comptime SLAB: Int  # floats per Gaussian in the blend slab
     comptime GRAD: Int  # per-slot gradient values, see `grad_index`
-    comptime EXTRA: Int  # per-slot floats saved besides the record (<= 8)
+    comptime EXTRA: Int  # per-slot floats saved besides the record (<= 16)
     comptime NUM_COLUMNS: Int  # `Splats` columns owned by the response
     comptime MIN_OPACITY: Float32  # Gaussians below this are culled
     comptime STOP_BEFORE_LAST: Bool  # True: a fragment that would saturate the pixel is not applied
@@ -140,7 +207,13 @@ trait Response(Deinitable):
 
     # --- Preprocess ---
 
-    def __init__(out self, mean2d: V2[DType.float32], cov2d: Sym2[DType.float32]):
+    def __init__(
+        out self,
+        mean2d: V2[DType.float32],
+        cov2d: Sym2[DType.float32],
+        geom: GaussianGeometry,
+        cam: SIMD[DType.float32, 32],
+    ):
         ...
 
     def valid(self) -> Bool:
@@ -155,9 +228,8 @@ trait Response(Deinitable):
         """The per-slot payload (bounds lanes are filled in by the kernel)."""
         ...
 
-    @staticmethod
-    def extra(cols: ExtraColumns, g: Int) -> SIMD[DType.float32, 8]:
-        """The `EXTRA` per-slot values of Gaussian `g`, from the response's columns."""
+    def extra(self, opacity: Float32, cols: ExtraColumns, g: Int) -> Extra:
+        """The `EXTRA` per-slot values of Gaussian `g`, from the response and its columns."""
         ...
 
     @staticmethod
@@ -172,9 +244,7 @@ trait Response(Deinitable):
     # --- Blend ---
 
     @staticmethod
-    def store_slab(
-        dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: SIMD[DType.float32, 8], color: SIMD[DType.float32, 4]
-    ):
+    def store_slab(dst: SlabPtr, rec: SIMD[DType.float32, REC], extra: Extra, color: SIMD[DType.float32, 4]):
         ...
 
     @staticmethod
@@ -184,17 +254,27 @@ trait Response(Deinitable):
 
     # --- Preprocess backward ---
 
-    def backward(self, grad: SIMD[DType.float32, 8]) -> ScreenGrad:
-        """Slot gradients (`GRAD` lanes of `Loaded.gradient`) -> screen gradients."""
+    def backward[
+        P: Placement
+    ](self, grad: SlotGrad, place: P, shape: QuatScale[P.dtype], cam: SIMD[DType.float32, 32]) -> ResponseGrad[P.dtype]:
+        """Slot gradients (`GRAD` lanes of `Loaded.gradient`) -> dL/d(mean, shape).
+        A screen-space response goes through `place`; a 3D one uses its own route."""
         ...
 
     @staticmethod
-    def opacity_gradient(slot_grad: SIMD[DType.float32, 8]) -> Float32:
+    def densification(
+        screen_norm: Float32, total_mean: V3[DType.float32], mean: V3[DType.float32], cam: SIMD[DType.float32, 32]
+    ) -> SIMD[DType.float32, 2]:
+        """(count increment, statistic increment) for this view. `total_mean` includes the appearance term."""
+        ...
+
+    @staticmethod
+    def opacity_gradient(slot_grad: SlotGrad) -> Float32:
         """dL/d(opacity logit) from the slot gradients."""
         ...
 
     @staticmethod
-    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: SIMD[DType.float32, 8]):
+    def write_gradients(cols: ExtraColumns, grads: ExtraColumns, g: Int, slot_grad: SlotGrad):
         """Write the gradients of the response's own columns."""
         ...
 
@@ -267,6 +347,7 @@ trait Pipeline:
     """A renderer: which blocks the kernels are built from."""
 
     comptime ID: Int  # checked between a forward and its backward
+    comptime TILE_H: Int  # tile height (16 wide): tile lists depend on it
     comptime Place: Placement
     comptime Resp: Response
     comptime Appear: Appearance

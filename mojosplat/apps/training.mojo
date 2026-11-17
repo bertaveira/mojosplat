@@ -123,7 +123,16 @@ def train[M: Method](program: String = "pixi run train") raises:
     var ctx = DeviceContext()
     print(bold("MojoSplat"), dim("·"), "train", dim("·"), ctx.name())
     var t0 = Int(perf_counter_ns())
-    var ds = load_colmap_dataset(ctx, args.scene, config.images, args.test_every, config.near, config.far)
+    var ds = load_colmap_dataset(
+        ctx,
+        args.scene,
+        config.images,
+        args.test_every,
+        config.near,
+        config.far,
+        config.integer_factor,
+        config.median_extent,
+    )
     done(
         String(
             "Loaded ",

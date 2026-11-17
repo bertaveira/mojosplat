@@ -27,7 +27,7 @@ from std.memory import stack_allocation
 from std.sys.info import is_amd_gpu
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, U32Ptr
-from .blocks.contracts import Pipeline
+from .blocks.contracts import Extra, Pipeline
 from .pipelines import Standard3DGS
 from .record import load_record
 
@@ -96,7 +96,7 @@ def _blend_backward_kernel[
     if valid:
         g = Int(instance_ids[unsafe_offset=start + tp])
         var rec = load_record(records, g)
-        var extra = SIMD[DType.float32, 8](0.0)
+        var extra = Extra(0.0)
         comptime for k in range(R.EXTRA):
             extra[k] = response_extra[unsafe_offset=g * R.EXTRA + k]
         resp = R.Loaded(rec, extra)

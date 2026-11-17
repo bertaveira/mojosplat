@@ -470,7 +470,7 @@ struct Relocation[step_first: Bool = False](Densification):
         add_regularizer_gradients(splats, self.config.opacity_reg, self.config.scale_reg)
         return True
 
-    def after_step(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises:
+    def after_step(mut self, it: Int, mut splats: Splats, scene_extent: Float32, means_lr: Float32) raises:
         comptime if Self.step_first:
             var t = it + 1
             if self._in_window(t) and t % self.config.relocate_interval == 0:
@@ -521,7 +521,7 @@ struct MCMCRelocation(Densification):
         add_regularizer_gradients(splats, c.opacity_reg, c.scale_reg)
         return t < self.iterations
 
-    def after_step(mut self, it: Int, mut splats: Splats, means_lr: Float32) raises:
+    def after_step(mut self, it: Int, mut splats: Splats, scene_extent: Float32, means_lr: Float32) raises:
         if it + 1 < self.iterations:
             add_position_noise(splats, self.config.noise_lr * means_lr, sigmoid=True)
 
