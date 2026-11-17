@@ -17,6 +17,7 @@ listed with each method.
 | Beta Splatting | `beta-splatting` | [Liu et al., 2025](https://arxiv.org/abs/2501.18630) | 3m31s (3.90×) | 489 FPS (4.58×) |
 | 3DGS-MCMC | `3dgs-mcmc` | [Kheradmand et al., NeurIPS 2024](https://arxiv.org/abs/2404.09591) | 3m19s (7.13×) | 682 FPS (2.86×) |
 | Spherical Voronoi | `spherical-voronoi` | [Di Sario et al., CVPR 2026](https://arxiv.org/abs/2512.14180) | 3m51s (2.83×) | 444 FPS (2.47×) |
+| 3DGUT | `3dgut` | [Wu et al., CVPR 2025](https://research.nvidia.com/labs/toronto-ai/3DGUT) | 2m29s (3.93×) | 1043 FPS (6.74×) |
 
 MojoSplat's mean training time per scene and rendering speed on an RTX 5090, over the
 seven Mip-NeRF 360 scenes below. In brackets is the speedup over the official code: its
@@ -42,8 +43,8 @@ Below 1× means MojoSplat is slower. The official times are in each method's sec
   resolution. Each frame is timed from a device sync to a device sync, with no image
   readback. Every cell is two alternating rounds of 11 passes over all test views, with
   the first pass of each round dropped. The two renderers' images agree at a mean of
-  82-108 dB per scene for Faster-GS, Beta Splatting and Spherical Voronoi and 70-77 dB
-  for 3DGS-MCMC, far closer than one 8-bit step (about 48 dB), so they do the same work.
+  82-108 dB per scene for Faster-GS, Beta Splatting, Spherical Voronoi and 3DGUT and
+  70-77 dB for 3DGS-MCMC, far closer than one 8-bit step (about 48 dB), so they do the same work.
 
 ## Faster-GS
 
@@ -356,3 +357,95 @@ then its gsplat rasterizer.
 | kitchen | 4.28 ms (234) | 1.80 ms (556) | 2.38× |
 | bonsai | 3.90 ms (256) | 2.41 ms (414) | 1.62× |
 | **mean** | **5.56 ms (180)** | **2.25 ms (444)** | **2.47×** |
+
+## 3DGUT
+
+[3DGUT](https://github.com/nv-tlabs/3dgrut) places each Gaussian on the image with the
+unscented transform, seven projected sigma points instead of a linearized projection,
+and evaluates it in 3D along each pixel's ray, where 3DGS uses a 2D Gaussian. MojoSplat
+implements NVIDIA's unsorted pinhole renderer with the paper's settings
+(`configs/paper/3dgut/unsorted_colmap.yaml`): its 16x16 tiles, initialization, scene
+extent and image scaling, its densification on its own schedule, and the D-SSIM over
+windows inside the image. Official code: `dfd3d54`.
+
+```bash
+pixi run train data/mipnerf360/garden --method 3dgut
+```
+
+### Quality
+
+PSNR / SSIM / LPIPS of the first run of each side. SSIM is torchmetrics with
+`data_range=1.0`, and LPIPS is torchmetrics VGG, as in the official code. These runs
+used the port before it was merged into the current code; the merged code's runs are
+under the training time below.
+
+| Scene | Official | MojoSplat |
+|---|---|---|
+| garden | 27.14 / 0.853 / 0.144 | 27.07 / 0.853 / 0.143 |
+| bicycle | 25.01 / 0.755 / 0.238 | 24.99 / 0.756 / 0.240 |
+| stump | 26.42 / 0.769 / 0.256 | 26.44 / 0.769 / 0.256 |
+| room | 31.56 / 0.917 / 0.290 | 31.69 / 0.918 / 0.290 |
+| counter | 29.04 / 0.909 / 0.253 | 29.13 / 0.910 / 0.252 |
+| kitchen | 31.35 / 0.927 / 0.155 | 31.00 / 0.927 / 0.156 |
+| bonsai | 32.45 / 0.944 / 0.244 | 32.42 / 0.944 / 0.243 |
+| **mean** | **29.00 / 0.868 / 0.226** | **28.96 / 0.868 / 0.226** |
+
+Kitchen, the only gap above 0.15 dB, was run three times on each side: 31.35, 31.25
+and 30.88 dB official (mean 31.16), and 31.00, 31.25 and 31.25 dB MojoSplat (mean
+31.17). No difference above run-to-run noise is open.
+
+The two codes differ in ways that do not change the image measurably:
+
+- Random numbers (initial rotations, split offsets, view order) come from different
+  generators.
+- NVIDIA also accepts a hit only when its distance along the ray lies inside a +-1e6
+  box. That distance is a norm, so the test only rejects a distance of exactly 0 or
+  hits more than 1e6 units away, and MojoSplat leaves it out.
+- Clone and split also remove Gaussians whose quaternion is nearly zero, as in
+  MojoSplat's other methods.
+
+Our backward was compared with NVIDIA's on a garden model trained by MojoSplat, for one
+test view and fixed per-pixel loss weights. The forward images agree at 81 dB.
+Opacity gradients agree to 1.3e-3 (relative L2), scales to 4.8e-3, positions and
+rotations to 1.6e-2 and 1.5e-2 (cosine 0.9999), and the densification statistic to
+1.1e-2. Color gradients agree to 1.7e-3, except for about 7,500 Gaussians whose start
+from a black SfM point left a color channel at exactly zero: float rounding puts it
+just below zero in MojoSplat, which masks its gradient, and exactly at zero in NVIDIA's
+kernel, which does not. NVIDIA's own initialization puts the same channels just below
+zero, so its training masks them too.
+
+### Training time
+
+The official times are from its `training_time` table; the garden value is a rerun
+with nothing else on the GPU. MojoSplat's are from a run of all seven scenes with the
+code as merged. Its PSNR, from MojoSplat's own evaluator, was within run-to-run noise
+of the runs above: 27.07, 24.99, 26.37, 31.70, 29.06, 31.29 and 32.47 dB.
+
+| Scene | Official (s) | MojoSplat (s) | Speedup |
+|---|---|---|---|
+| garden | 685 | 182 | 3.77× |
+| bicycle | 832 | 215 | 3.87× |
+| stump | 720 | 192 | 3.76× |
+| room | 383 | 91 | 4.22× |
+| counter | 447 | 108 | 4.13× |
+| kitchen | 600 | 150 | 3.99× |
+| bonsai | 440 | 107 | 4.10× |
+| **total** | **4107** | **1045** | **3.93×** |
+
+### Rendering speed
+
+Milliseconds per view, with frames per second in brackets. Both renderers draw the
+MojoSplat-trained model from the training-time run, loaded into the official code with
+its own `init_from_ply`. The official timing is `model(batch)`, which also returns its
+other outputs. Images agree at a mean of 82-89 dB per scene.
+
+| Scene | Official | MojoSplat | Speedup |
+|---|---|---|---|
+| garden | 8.02 ms (125) | 1.01 ms (995) | 7.98× |
+| bicycle | 10.57 ms (95) | 1.21 ms (826) | 8.73× |
+| stump | 9.86 ms (101) | 0.98 ms (1016) | 10.02× |
+| room | 3.59 ms (278) | 0.72 ms (1389) | 4.99× |
+| counter | 3.65 ms (274) | 0.84 ms (1189) | 4.34× |
+| kitchen | 5.25 ms (190) | 1.15 ms (868) | 4.56× |
+| bonsai | 4.28 ms (234) | 0.80 ms (1248) | 5.34× |
+| **mean** | **6.46 ms (155)** | **0.96 ms (1043)** | **6.74×** |
