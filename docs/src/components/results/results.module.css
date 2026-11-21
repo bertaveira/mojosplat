@@ -1,0 +1,275 @@
+.root {
+  --official: #2a78d6;
+  --ours: #eb6834;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --muted: #6f6d68;
+  --band: rgba(137, 135, 129, 0.16);
+  --ring: var(--ifm-background-color);
+}
+
+:global([data-theme='dark']) .root {
+  --official: #3987e5;
+  --ours: #d95926;
+  --grid: #2c2c2a;
+  --axis: #4a4a46;
+  --muted: #a3a29b;
+  --band: rgba(195, 194, 183, 0.12);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.controls > span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.controls > div {
+  margin-bottom: 0.35rem;
+}
+
+@media (max-width: 560px) {
+  .controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  font-size: 0.82rem;
+  color: var(--ifm-color-emphasis-800);
+  margin: 0.2rem 0 0.4rem;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.swOfficial {
+  background: var(--official);
+}
+
+.swOurs {
+  background: var(--ours);
+}
+
+.swHollow {
+  border: 2px solid var(--official);
+  background: transparent;
+}
+
+.swBand {
+  width: 18px;
+  border-radius: 2px;
+  background: var(--band);
+}
+
+.swMean {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  background: var(--ifm-font-color-base);
+}
+
+.chart {
+  position: relative;
+  width: 100%;
+}
+
+.chart svg {
+  display: block;
+  overflow: visible;
+}
+
+.chart text {
+  font-size: 12px;
+  fill: var(--ifm-font-color-base);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .tick {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.chart .rowLabel {
+  font-size: 12.5px;
+}
+
+.chart .strong {
+  font-weight: 700;
+}
+
+.grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+
+.zero {
+  stroke: var(--axis);
+  stroke-width: 1.5;
+}
+
+.band {
+  fill: var(--band);
+}
+
+.official {
+  fill: var(--official);
+  stroke: var(--ring);
+  stroke-width: 2;
+}
+
+.officialHollow {
+  fill: var(--ring);
+  stroke: var(--official);
+  stroke-width: 2;
+}
+
+.ours {
+  fill: var(--ours);
+  stroke: var(--ring);
+  stroke-width: 2;
+}
+
+.barOfficial {
+  fill: var(--official);
+}
+
+.barOurs {
+  fill: var(--ours);
+}
+
+.mean {
+  fill: var(--ifm-font-color-base);
+  stroke: var(--ring);
+  stroke-width: 1.5;
+}
+
+.hit {
+  fill: transparent;
+  cursor: default;
+}
+
+.rowHover {
+  fill: var(--ifm-color-emphasis-100);
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  min-width: 11rem;
+  max-width: 19rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+  background: var(--ifm-background-surface-color);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltip b {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.tipRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.tipRow > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.scroll {
+  overflow-x: auto;
+  margin-bottom: 0.25rem;
+}
+
+.table {
+  display: table;
+  width: 100%;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.25rem;
+}
+
+.table th,
+.table td {
+  padding: 0.35rem 0.6rem;
+  white-space: nowrap;
+}
+
+.table td:not(:first-child),
+.table th:not(:first-child) {
+  text-align: right;
+}
+
+.table tr.total td {
+  font-weight: 700;
+}
+
+.sub {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-left: 0.3rem;
+}
+
+.runs {
+  color: var(--ifm-color-emphasis-800);
+  font-size: 0.8rem;
+  white-space: normal !important;
+  text-align: left !important;
+}
+
+.note {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--ifm-color-emphasis-800);
+  margin-top: 0.5rem;
+}
+
+.note p {
+  margin: 0 0 0.35rem;
+}
+
+.summary td:first-child {
+  white-space: normal;
+}
+
+.summary .paper {
+  font-size: 0.8rem;
+  color: var(--ifm-color-emphasis-800);
+}
+
+.summary code {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}

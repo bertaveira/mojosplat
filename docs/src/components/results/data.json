@@ -1,0 +1,1322 @@
+{
+ "scenes": [
+  "garden",
+  "bicycle",
+  "stump",
+  "room",
+  "counter",
+  "kitchen",
+  "bonsai"
+ ],
+ "methods": [
+  {
+   "id": "faster-gs",
+   "name": "Faster-GS",
+   "default": true,
+   "paper": {
+    "label": "Hahlbohm et al., CVPR 2026",
+    "url": "https://fhahlbohm.github.io/faster-gaussian-splatting"
+   },
+   "perScene": {
+    "train": "2m24s",
+    "fps": 1119
+   },
+   "officialRepeatsFloat": false,
+   "quality": {
+    "official": {
+     "garden": [
+      27.51,
+      0.867,
+      0.12
+     ],
+     "bicycle": [
+      25.29,
+      0.766,
+      0.231
+     ],
+     "stump": [
+      26.6,
+      0.771,
+      0.247
+     ],
+     "room": [
+      31.66,
+      0.92,
+      0.282
+     ],
+     "counter": [
+      29.12,
+      0.91,
+      0.254
+     ],
+     "kitchen": [
+      31.56,
+      0.929,
+      0.152
+     ],
+     "bonsai": [
+      32.2,
+      0.942,
+      0.251
+     ],
+     "mean": [
+      29.13,
+      0.872,
+      0.22
+     ]
+    },
+    "ours": {
+     "garden": [
+      27.43,
+      0.866,
+      0.122
+     ],
+     "bicycle": [
+      25.26,
+      0.765,
+      0.233
+     ],
+     "stump": [
+      26.63,
+      0.77,
+      0.248
+     ],
+     "room": [
+      31.62,
+      0.92,
+      0.284
+     ],
+     "counter": [
+      29.05,
+      0.908,
+      0.256
+     ],
+     "kitchen": [
+      31.21,
+      0.928,
+      0.153
+     ],
+     "bonsai": [
+      32.05,
+      0.941,
+      0.253
+     ],
+     "mean": [
+      29.04,
+      0.871,
+      0.221
+     ]
+    }
+   },
+   "repeats": {
+    "kitchen": {
+     "official": [
+      31.56,
+      31.45,
+      31.34
+     ],
+     "officialMean": 31.45,
+     "ours": [
+      31.21,
+      31.43,
+      31.46
+     ],
+     "oursMean": 31.37
+    },
+    "bonsai": {
+     "official": [
+      32.2,
+      32.22,
+      32.25
+     ],
+     "officialMean": 32.22,
+     "ours": [
+      32.05,
+      32.29,
+      32.36
+     ],
+     "oursMean": 32.23
+    },
+    "counter": {
+     "official": [
+      29.12,
+      29.12,
+      29.15
+     ],
+     "officialMean": 29.13,
+     "ours": [
+      29.05,
+      29.1,
+      29.1
+     ],
+     "oursMean": 29.08
+    }
+   },
+   "train": {
+    "garden": {
+     "official": 225.0,
+     "ours": 199.0,
+     "speedup": 1.13
+    },
+    "bicycle": {
+     "official": 233.0,
+     "ours": 204.0,
+     "speedup": 1.14
+    },
+    "stump": {
+     "official": 197.0,
+     "ours": 166.0,
+     "speedup": 1.19
+    },
+    "room": {
+     "official": 115.0,
+     "ours": 105.0,
+     "speedup": 1.1
+    },
+    "counter": {
+     "official": 112.0,
+     "ours": 104.0,
+     "speedup": 1.08
+    },
+    "kitchen": {
+     "official": 147.0,
+     "ours": 137.0,
+     "speedup": 1.07
+    },
+    "bonsai": {
+     "official": 110.0,
+     "ours": 93.0,
+     "speedup": 1.18
+    },
+    "total": {
+     "official": 1139.0,
+     "ours": 1008.0,
+     "speedup": 1.13
+    }
+   },
+   "render": {
+    "garden": {
+     "official": [
+      0.96,
+      1037.0
+     ],
+     "ours": [
+      1.08,
+      924.0
+     ],
+     "speedup": 0.89
+    },
+    "bicycle": {
+     "official": [
+      1.13,
+      888.0
+     ],
+     "ours": [
+      1.26,
+      795.0
+     ],
+     "speedup": 0.9
+    },
+    "stump": {
+     "official": [
+      0.76,
+      1311.0
+     ],
+     "ours": [
+      0.85,
+      1181.0
+     ],
+     "speedup": 0.9
+    },
+    "room": {
+     "official": [
+      0.63,
+      1597.0
+     ],
+     "ours": [
+      0.71,
+      1406.0
+     ],
+     "speedup": 0.88
+    },
+    "counter": {
+     "official": [
+      0.64,
+      1553.0
+     ],
+     "ours": [
+      0.75,
+      1339.0
+     ],
+     "speedup": 0.86
+    },
+    "kitchen": {
+     "official": [
+      0.83,
+      1209.0
+     ],
+     "ours": [
+      0.97,
+      1033.0
+     ],
+     "speedup": 0.85
+    },
+    "bonsai": {
+     "official": [
+      0.55,
+      1808.0
+     ],
+     "ours": [
+      0.64,
+      1558.0
+     ],
+     "speedup": 0.86
+    },
+    "mean": {
+     "official": [
+      0.79,
+      1272.0
+     ],
+     "ours": [
+      0.89,
+      1119.0
+     ],
+     "speedup": 0.88
+    }
+   }
+  },
+  {
+   "id": "beta-splatting",
+   "name": "Beta Splatting",
+   "default": false,
+   "paper": {
+    "label": "Liu et al., 2025",
+    "url": "https://arxiv.org/abs/2501.18630"
+   },
+   "perScene": {
+    "train": "3m31s",
+    "fps": 489
+   },
+   "officialRepeatsFloat": true,
+   "quality": {
+    "official": {
+     "garden": [
+      27.63,
+      0.869,
+      0.102
+     ],
+     "bicycle": [
+      25.23,
+      0.783,
+      0.174
+     ],
+     "stump": [
+      26.76,
+      0.794,
+      0.186
+     ],
+     "room": [
+      32.55,
+      0.933,
+      0.192
+     ],
+     "counter": [
+      30.12,
+      0.922,
+      0.174
+     ],
+     "kitchen": [
+      32.23,
+      0.932,
+      0.122
+     ],
+     "bonsai": [
+      33.7,
+      0.952,
+      0.182
+     ],
+     "mean": [
+      29.75,
+      0.884,
+      0.162
+     ]
+    },
+    "ours": {
+     "garden": [
+      27.61,
+      0.87,
+      0.102
+     ],
+     "bicycle": [
+      25.27,
+      0.783,
+      0.174
+     ],
+     "stump": [
+      26.77,
+      0.795,
+      0.186
+     ],
+     "room": [
+      32.59,
+      0.931,
+      0.193
+     ],
+     "counter": [
+      30.15,
+      0.923,
+      0.173
+     ],
+     "kitchen": [
+      32.22,
+      0.933,
+      0.121
+     ],
+     "bonsai": [
+      33.4,
+      0.951,
+      0.183
+     ],
+     "mean": [
+      29.72,
+      0.884,
+      0.162
+     ]
+    }
+   },
+   "repeats": {
+    "room": {
+     "official": [
+      32.6,
+      32.54,
+      32.53
+     ],
+     "officialMean": 32.56,
+     "ours": [
+      32.59,
+      32.5,
+      32.37
+     ],
+     "oursMean": 32.49
+    },
+    "bonsai": {
+     "official": [
+      33.76,
+      33.75,
+      33.75,
+      33.62,
+      33.63
+     ],
+     "officialMean": null,
+     "ours": [
+      33.4,
+      33.56,
+      33.48
+     ],
+     "oursMean": 33.48,
+     "officialNote": "33.76, 33.75, 33.75 with seed 0; 33.62 seed 1; 33.63 seed 2"
+    }
+   },
+   "train": {
+    "garden": {
+     "official": 1098.0,
+     "ours": 243.0,
+     "speedup": 4.53
+    },
+    "bicycle": {
+     "official": 1262.0,
+     "ours": 259.0,
+     "speedup": 4.86
+    },
+    "stump": {
+     "official": 947.0,
+     "ours": 207.0,
+     "speedup": 4.57
+    },
+    "room": {
+     "official": 580.0,
+     "ours": 172.0,
+     "speedup": 3.37
+    },
+    "counter": {
+     "official": 693.0,
+     "ours": 217.0,
+     "speedup": 3.19
+    },
+    "kitchen": {
+     "official": 623.0,
+     "ours": 199.0,
+     "speedup": 3.14
+    },
+    "bonsai": {
+     "official": 564.0,
+     "ours": 180.0,
+     "speedup": 3.13
+    },
+    "total": {
+     "official": 5767.0,
+     "ours": 1478.0,
+     "speedup": 3.9
+    }
+   },
+   "render": {
+    "garden": {
+     "official": [
+      11.51,
+      87.0
+     ],
+     "ours": [
+      1.79,
+      557.0
+     ],
+     "speedup": 6.41
+    },
+    "bicycle": {
+     "official": [
+      15.54,
+      64.0
+     ],
+     "ours": [
+      2.26,
+      443.0
+     ],
+     "speedup": 6.88
+    },
+    "stump": {
+     "official": [
+      12.76,
+      78.0
+     ],
+     "ours": [
+      2.22,
+      450.0
+     ],
+     "speedup": 5.75
+    },
+    "room": {
+     "official": [
+      5.98,
+      167.0
+     ],
+     "ours": [
+      1.9,
+      528.0
+     ],
+     "speedup": 3.15
+    },
+    "counter": {
+     "official": [
+      7.18,
+      139.0
+     ],
+     "ours": [
+      2.28,
+      439.0
+     ],
+     "speedup": 3.15
+    },
+    "kitchen": {
+     "official": [
+      6.5,
+      154.0
+     ],
+     "ours": [
+      1.76,
+      567.0
+     ],
+     "speedup": 3.68
+    },
+    "bonsai": {
+     "official": [
+      6.05,
+      165.0
+     ],
+     "ours": [
+      2.1,
+      477.0
+     ],
+     "speedup": 2.89
+    },
+    "mean": {
+     "official": [
+      9.36,
+      107.0
+     ],
+     "ours": [
+      2.04,
+      489.0
+     ],
+     "speedup": 4.58
+    }
+   }
+  },
+  {
+   "id": "3dgs-mcmc",
+   "name": "3DGS-MCMC",
+   "default": false,
+   "paper": {
+    "label": "Kheradmand et al., NeurIPS 2024",
+    "url": "https://arxiv.org/abs/2404.09591"
+   },
+   "perScene": {
+    "train": "3m19s",
+    "fps": 682
+   },
+   "officialRepeatsFloat": false,
+   "quality": {
+    "official": {
+     "garden": [
+      27.57,
+      0.873,
+      0.1
+     ],
+     "bicycle": [
+      25.59,
+      0.795,
+      0.175
+     ],
+     "stump": [
+      27.27,
+      0.808,
+      0.177
+     ],
+     "room": [
+      31.99,
+      0.928,
+      0.201
+     ],
+     "counter": [
+      29.11,
+      0.913,
+      0.192
+     ],
+     "kitchen": [
+      31.81,
+      0.931,
+      0.126
+     ],
+     "bonsai": [
+      32.41,
+      0.945,
+      0.197
+     ],
+     "mean": [
+      29.39,
+      0.885,
+      0.167
+     ]
+    },
+    "ours": {
+     "garden": [
+      27.59,
+      0.873,
+      0.101
+     ],
+     "bicycle": [
+      25.59,
+      0.794,
+      0.176
+     ],
+     "stump": [
+      27.16,
+      0.807,
+      0.178
+     ],
+     "room": [
+      32.0,
+      0.928,
+      0.2
+     ],
+     "counter": [
+      29.04,
+      0.913,
+      0.192
+     ],
+     "kitchen": [
+      32.02,
+      0.932,
+      0.126
+     ],
+     "bonsai": [
+      32.5,
+      0.946,
+      0.196
+     ],
+     "mean": [
+      29.41,
+      0.884,
+      0.167
+     ]
+    }
+   },
+   "repeats": {
+    "stump": {
+     "official": [
+      27.27,
+      27.24
+     ],
+     "officialMean": 27.26,
+     "ours": [
+      27.16,
+      27.24
+     ],
+     "oursMean": 27.2
+    },
+    "kitchen": {
+     "official": [
+      31.81,
+      31.95
+     ],
+     "officialMean": 31.88,
+     "ours": [
+      32.02,
+      31.83
+     ],
+     "oursMean": 31.93
+    }
+   },
+   "train": {
+    "garden": {
+     "official": 1695.0,
+     "ours": 277.0,
+     "speedup": 6.13
+    },
+    "bicycle": {
+     "official": 1832.0,
+     "ours": 293.0,
+     "speedup": 6.25
+    },
+    "stump": {
+     "official": 1580.0,
+     "ours": 256.0,
+     "speedup": 6.18
+    },
+    "room": {
+     "official": 1242.0,
+     "ours": 131.0,
+     "speedup": 9.45
+    },
+    "counter": {
+     "official": 1173.0,
+     "ours": 134.0,
+     "speedup": 8.74
+    },
+    "kitchen": {
+     "official": 1342.0,
+     "ours": 172.0,
+     "speedup": 7.8
+    },
+    "bonsai": {
+     "official": 1042.0,
+     "ours": 127.0,
+     "speedup": 8.21
+    },
+    "total": {
+     "official": 9906.0,
+     "ours": 1390.0,
+     "speedup": 7.13
+    }
+   },
+   "render": {
+    "garden": {
+     "official": [
+      4.09,
+      245.0
+     ],
+     "ours": [
+      1.66,
+      603.0
+     ],
+     "speedup": 2.47
+    },
+    "bicycle": {
+     "official": [
+      5.24,
+      191.0
+     ],
+     "ours": [
+      1.88,
+      533.0
+     ],
+     "speedup": 2.79
+    },
+    "stump": {
+     "official": [
+      5.18,
+      193.0
+     ],
+     "ours": [
+      2.13,
+      471.0
+     ],
+     "speedup": 2.44
+    },
+    "room": {
+     "official": [
+      3.29,
+      304.0
+     ],
+     "ours": [
+      0.95,
+      1056.0
+     ],
+     "speedup": 3.48
+    },
+    "counter": {
+     "official": [
+      3.94,
+      254.0
+     ],
+     "ours": [
+      1.09,
+      920.0
+     ],
+     "speedup": 3.62
+    },
+    "kitchen": {
+     "official": [
+      4.33,
+      231.0
+     ],
+     "ours": [
+      1.42,
+      704.0
+     ],
+     "speedup": 3.05
+    },
+    "bonsai": {
+     "official": [
+      3.3,
+      303.0
+     ],
+     "ours": [
+      1.16,
+      865.0
+     ],
+     "speedup": 2.85
+    },
+    "mean": {
+     "official": [
+      4.2,
+      238.0
+     ],
+     "ours": [
+      1.47,
+      682.0
+     ],
+     "speedup": 2.86
+    }
+   }
+  },
+  {
+   "id": "spherical-voronoi",
+   "name": "Spherical Voronoi",
+   "default": false,
+   "paper": {
+    "label": "Di Sario et al., CVPR 2026",
+    "url": "https://arxiv.org/abs/2512.14180"
+   },
+   "perScene": {
+    "train": "3m51s",
+    "fps": 444
+   },
+   "officialRepeatsFloat": false,
+   "quality": {
+    "official": {
+     "garden": [
+      27.93,
+      0.875,
+      0.113
+     ],
+     "bicycle": [
+      25.71,
+      0.795,
+      0.194
+     ],
+     "stump": [
+      27.05,
+      0.802,
+      0.213
+     ],
+     "room": [
+      32.77,
+      0.917,
+      0.255
+     ],
+     "counter": [
+      31.03,
+      0.929,
+      0.219
+     ],
+     "kitchen": [
+      32.96,
+      0.936,
+      0.144
+     ],
+     "bonsai": [
+      34.81,
+      0.956,
+      0.222
+     ],
+     "mean": [
+      30.32,
+      0.887,
+      0.194
+     ]
+    },
+    "ours": {
+     "garden": [
+      27.96,
+      0.876,
+      0.113
+     ],
+     "bicycle": [
+      25.78,
+      0.796,
+      0.194
+     ],
+     "stump": [
+      27.19,
+      0.805,
+      0.21
+     ],
+     "room": [
+      33.23,
+      0.936,
+      0.248
+     ],
+     "counter": [
+      31.05,
+      0.929,
+      0.219
+     ],
+     "kitchen": [
+      33.01,
+      0.937,
+      0.144
+     ],
+     "bonsai": [
+      34.77,
+      0.956,
+      0.222
+     ],
+     "mean": [
+      30.43,
+      0.891,
+      0.193
+     ]
+    }
+   },
+   "repeats": {
+    "room": {
+     "official": [
+      32.77,
+      33.18,
+      33.16
+     ],
+     "officialMean": 33.04,
+     "ours": [
+      33.23,
+      33.1,
+      33.09
+     ],
+     "oursMean": 33.14
+    },
+    "bonsai": {
+     "official": [
+      34.81,
+      34.86,
+      34.8
+     ],
+     "officialMean": 34.83,
+     "ours": [
+      34.77,
+      34.86,
+      34.78
+     ],
+     "oursMean": 34.8
+    }
+   },
+   "train": {
+    "garden": {
+     "official": 703.0,
+     "ours": 238.0,
+     "speedup": 2.95
+    },
+    "bicycle": {
+     "official": 774.0,
+     "ours": 242.0,
+     "speedup": 3.2
+    },
+    "stump": {
+     "official": 564.0,
+     "ours": 184.0,
+     "speedup": 3.07
+    },
+    "room": {
+     "official": 607.0,
+     "ours": 220.0,
+     "speedup": 2.75
+    },
+    "counter": {
+     "official": 702.0,
+     "ours": 263.0,
+     "speedup": 2.67
+    },
+    "kitchen": {
+     "official": 640.0,
+     "ours": 241.0,
+     "speedup": 2.66
+    },
+    "bonsai": {
+     "official": 591.0,
+     "ours": 232.0,
+     "speedup": 2.55
+    },
+    "total": {
+     "official": 4581.0,
+     "ours": 1619.0,
+     "speedup": 2.83
+    }
+   },
+   "render": {
+    "garden": {
+     "official": [
+      5.5,
+      182.0
+     ],
+     "ours": [
+      2.06,
+      486.0
+     ],
+     "speedup": 2.67
+    },
+    "bicycle": {
+     "official": [
+      8.96,
+      112.0
+     ],
+     "ours": [
+      2.72,
+      368.0
+     ],
+     "speedup": 3.3
+    },
+    "stump": {
+     "official": [
+      7.38,
+      136.0
+     ],
+     "ours": [
+      2.48,
+      404.0
+     ],
+     "speedup": 2.98
+    },
+    "room": {
+     "official": [
+      3.93,
+      254.0
+     ],
+     "ours": [
+      1.99,
+      502.0
+     ],
+     "speedup": 1.97
+    },
+    "counter": {
+     "official": [
+      4.96,
+      202.0
+     ],
+     "ours": [
+      2.29,
+      436.0
+     ],
+     "speedup": 2.16
+    },
+    "kitchen": {
+     "official": [
+      4.28,
+      234.0
+     ],
+     "ours": [
+      1.8,
+      556.0
+     ],
+     "speedup": 2.38
+    },
+    "bonsai": {
+     "official": [
+      3.9,
+      256.0
+     ],
+     "ours": [
+      2.41,
+      414.0
+     ],
+     "speedup": 1.62
+    },
+    "mean": {
+     "official": [
+      5.56,
+      180.0
+     ],
+     "ours": [
+      2.25,
+      444.0
+     ],
+     "speedup": 2.47
+    }
+   }
+  },
+  {
+   "id": "3dgut",
+   "name": "3DGUT",
+   "default": false,
+   "paper": {
+    "label": "Wu et al., CVPR 2025",
+    "url": "https://research.nvidia.com/labs/toronto-ai/3DGUT"
+   },
+   "perScene": {
+    "train": "2m29s",
+    "fps": 1043
+   },
+   "officialRepeatsFloat": false,
+   "quality": {
+    "official": {
+     "garden": [
+      27.14,
+      0.853,
+      0.144
+     ],
+     "bicycle": [
+      25.01,
+      0.755,
+      0.238
+     ],
+     "stump": [
+      26.42,
+      0.769,
+      0.256
+     ],
+     "room": [
+      31.56,
+      0.917,
+      0.29
+     ],
+     "counter": [
+      29.04,
+      0.909,
+      0.253
+     ],
+     "kitchen": [
+      31.35,
+      0.927,
+      0.155
+     ],
+     "bonsai": [
+      32.45,
+      0.944,
+      0.244
+     ],
+     "mean": [
+      29.0,
+      0.868,
+      0.226
+     ]
+    },
+    "ours": {
+     "garden": [
+      27.07,
+      0.853,
+      0.143
+     ],
+     "bicycle": [
+      24.99,
+      0.756,
+      0.24
+     ],
+     "stump": [
+      26.44,
+      0.769,
+      0.256
+     ],
+     "room": [
+      31.69,
+      0.918,
+      0.29
+     ],
+     "counter": [
+      29.13,
+      0.91,
+      0.252
+     ],
+     "kitchen": [
+      31.0,
+      0.927,
+      0.156
+     ],
+     "bonsai": [
+      32.42,
+      0.944,
+      0.243
+     ],
+     "mean": [
+      28.96,
+      0.868,
+      0.226
+     ]
+    }
+   },
+   "repeats": {
+    "kitchen": {
+     "official": [
+      31.35,
+      31.25,
+      30.88
+     ],
+     "officialMean": 31.16,
+     "ours": [
+      31.0,
+      31.25,
+      31.25
+     ],
+     "oursMean": 31.17
+    }
+   },
+   "train": {
+    "garden": {
+     "official": 685.0,
+     "ours": 182.0,
+     "speedup": 3.77
+    },
+    "bicycle": {
+     "official": 832.0,
+     "ours": 215.0,
+     "speedup": 3.87
+    },
+    "stump": {
+     "official": 720.0,
+     "ours": 192.0,
+     "speedup": 3.76
+    },
+    "room": {
+     "official": 383.0,
+     "ours": 91.0,
+     "speedup": 4.22
+    },
+    "counter": {
+     "official": 447.0,
+     "ours": 108.0,
+     "speedup": 4.13
+    },
+    "kitchen": {
+     "official": 600.0,
+     "ours": 150.0,
+     "speedup": 3.99
+    },
+    "bonsai": {
+     "official": 440.0,
+     "ours": 107.0,
+     "speedup": 4.1
+    },
+    "total": {
+     "official": 4107.0,
+     "ours": 1045.0,
+     "speedup": 3.93
+    }
+   },
+   "render": {
+    "garden": {
+     "official": [
+      8.02,
+      125.0
+     ],
+     "ours": [
+      1.01,
+      995.0
+     ],
+     "speedup": 7.98
+    },
+    "bicycle": {
+     "official": [
+      10.57,
+      95.0
+     ],
+     "ours": [
+      1.21,
+      826.0
+     ],
+     "speedup": 8.73
+    },
+    "stump": {
+     "official": [
+      9.86,
+      101.0
+     ],
+     "ours": [
+      0.98,
+      1016.0
+     ],
+     "speedup": 10.02
+    },
+    "room": {
+     "official": [
+      3.59,
+      278.0
+     ],
+     "ours": [
+      0.72,
+      1389.0
+     ],
+     "speedup": 4.99
+    },
+    "counter": {
+     "official": [
+      3.65,
+      274.0
+     ],
+     "ours": [
+      0.84,
+      1189.0
+     ],
+     "speedup": 4.34
+    },
+    "kitchen": {
+     "official": [
+      5.25,
+      190.0
+     ],
+     "ours": [
+      1.15,
+      868.0
+     ],
+     "speedup": 4.56
+    },
+    "bonsai": {
+     "official": [
+      4.28,
+      234.0
+     ],
+     "ours": [
+      0.8,
+      1248.0
+     ],
+     "speedup": 5.34
+    },
+    "mean": {
+     "official": [
+      6.46,
+      155.0
+     ],
+     "ours": [
+      0.96,
+      1043.0
+     ],
+     "speedup": 6.74
+    }
+   }
+  }
+ ]
+}

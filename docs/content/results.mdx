@@ -1,0 +1,204 @@
+---
+title: Methods and results
+sidebar_position: 3
+description: Every method against its official code on Mip-NeRF 360, for quality, training time and rendering speed.
+---
+
+import {MethodSummary, ResultsExplorer} from '@site/src/components/results/Results';
+
+# Methods and results
+
+Each method in MojoSplat reproduces a paper and is selected with `--method`. Every method is
+trained with its official code and with MojoSplat on the same GPU and the same scenes,
+and both are scored with the same metric code. Differences that are still open are
+listed with each method.
+
+<MethodSummary />
+
+Mean PSNR over the seven Mip-NeRF 360 scenes below, official code / MojoSplat, and
+MojoSplat's mean training time per scene and rendering speed on an RTX 5090. In grey is
+the speedup over the official code: its time divided by MojoSplat's, from total training
+time and mean milliseconds per view. Below 1× means MojoSplat is slower.
+
+## How the comparison is run
+
+- **GPU:** NVIDIA RTX 5090, one job at a time.
+- **Scenes:** the seven Mip-NeRF 360 scenes available here: garden, bicycle and stump
+  at `images_4`, and room, counter, kitchen and bonsai at `images_2`. Every 8th image is
+  a test view. `flowers` and `treehill` were not available.
+- **Final model only:** all numbers come from the final iteration of training. No
+  checkpoint is selected on test views.
+- **Same scorer:** both sides render 8-bit PNGs, which are scored against the same
+  ground truth with the metric functions the official code uses. LPIPS values are only
+  comparable within one method, because methods use different LPIPS implementations.
+- **Repeats:** a quality gap of about 0.15 dB or more on a first run is repeated on both
+  sides, with a different seed each time, before it counts as a real difference.
+- **Training time** is the training loop only, from each codebase's own timer. Dataset
+  loading and evaluation are excluded.
+- **Rendering time** is milliseconds per view for the same model, cameras and
+  resolution. Each frame is timed from a device sync to a device sync, with no image
+  readback. Every cell is two alternating rounds of 11 passes over all test views, with
+  the first pass of each round dropped. The two renderers' images agree at a mean of
+  82-108 dB per scene for Faster-GS, Beta Splatting, Spherical Voronoi and 3DGUT and
+  70-77 dB for 3DGS-MCMC, far closer than one 8-bit step (about 48 dB), so they do the same work.
+
+## Results per scene
+
+Pick a method and a measure. With all methods selected, each row is one method and each
+dot one scene. With one method selected, the chart shows every training run of both
+sides, including the repeats. Hover over a row for its numbers, or switch to the table.
+
+<ResultsExplorer />
+
+## Faster-GS
+
+[Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) is MojoSplat's
+default method. Its rasterizer and training recipe are a Mojo port of the official CUDA
+code. Official code: NeRFICG at `623ad16`.
+
+- **Quality:** kitchen, bonsai and counter were run three times on each side, and the
+  means agree. Both sides end with the same number of Gaussians to within 2.5%. For
+  example, garden has 4.15M with the official code and 4.20M with MojoSplat.
+- **Rendering:** MojoSplat is about 12% slower. The remaining gap is the radix sort.
+  MojoSplat's sort runs separate upsweep, scan and downsweep kernels for every pass,
+  while the official code uses CUB's single-pass Onesweep sort. Official timings are
+  for its `rasterize` entry point.
+
+## Beta Splatting
+
+[Deformable Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) replaces the
+Gaussian footprint with a Beta kernel, whose sharpness is learned per primitive, and
+view-dependent color with Spherical Beta lobes. It densifies by relocation, as 3DGS-MCMC
+does, up to a fixed cap per scene. Official code: `431d575`, with the settings of its
+`benchmark.py`.
+
+```bash
+pixi run train data/mipnerf360/garden --method beta-splatting
+```
+
+- **Quality:** room and bonsai were repeated. The official repeats are the float PSNR its
+  code reports, which is about 0.05 dB above its 8-bit scores. Two differences are still
+  open:
+  - **Bonsai PSNR** is about 0.13 dB below the mean of the three official seeds, with
+    SSIM and LPIPS level. All three MojoSplat runs are below the lowest official run, so
+    it may be a small real difference.
+  - **Room SSIM** is about 0.002 lower in all three MojoSplat runs, while PSNR matches.
+
+  Both sides reach the fixed Gaussian cap: 5M for garden, 6M for bicycle, 4.5M for stump
+  and 1.5M for the indoor scenes.
+- **Training time:** MojoSplat's times are from a later run of all seven scenes, with the
+  code as merged. Its PSNR, from MojoSplat's own evaluator, was within run-to-run noise of
+  the quality runs.
+- **Rendering:** both renderers draw the MojoSplat-trained model from the training-time
+  run. The official timing is the same call as its `BetaModel.render`.
+
+## 3DGS-MCMC
+
+[3DGS-MCMC](https://github.com/ubc-vision/3dgs-mcmc) keeps the 3DGS renderer and replaces
+its densification: Gaussians that become transparent are moved onto opaque ones, the
+model grows by 5% at a time up to a fixed cap per scene, and position noise lets
+Gaussians explore. MojoSplat implements it from the paper and uses the official per-scene
+settings. Training starts from 100,000 random points, as the official code does by
+default; `--no-random-init` starts from the SfM points. Official code: `7b4fc9f`.
+
+```bash
+pixi run train data/mipnerf360/garden --method 3dgs-mcmc
+```
+
+- **Quality:** the two largest gaps, stump and kitchen, were run again on both sides with
+  a different seed; both are run-to-run noise. Both sides reach the same Gaussian cap:
+  5.2M for garden, 5.9M for bicycle, 4.75M for stump, 1.5M for room, 1.2M for counter,
+  1.8M for kitchen and 1.3M for bonsai. The paper's random-start table is 0.05-0.47 dB
+  higher on every scene than both codebases here. The unmodified official code is as far
+  below it as MojoSplat, so the difference is not in the reimplementation.
+- **Training time:** the official times are the wall time of its `train.py`, which has no
+  timer of its own. That includes loading the dataset and saving the model, about 16 s of
+  a 22-minute kitchen run, so the speedups are about 1% too high.
+- **Rendering:** both renderers draw the MojoSplat-trained model. MojoSplat renders it
+  with the same rasterizer as Faster-GS. The official timing is its `render` function,
+  which uses the original 3DGS rasterizer. Their images agree at a mean of 70-77 dB per
+  scene, a little less closely than the other methods because the two rasterizers round
+  and cull slightly differently.
+
+## Spherical Voronoi
+
+[Spherical Voronoi](https://github.com/sphericalvoronoi/sphericalvoronoi) replaces
+view-dependent color with a soft Voronoi partition of the sphere: each Gaussian has 8
+sites, each with a color and a learned temperature, and the color seen from a direction
+is the softmax-weighted mix of the sites nearest to it. MojoSplat implements the
+`radiance/` code, which builds it on Beta Splatting: the same Beta footprint, relocation,
+caps and image folders, with 20,000 iterations outdoors and 30,000 indoors, and only the
+colors and temperatures trained over the last 3,000. Official code: `6bcebbe`.
+
+```bash
+pixi run train data/mipnerf360/garden --method spherical-voronoi
+```
+
+- **Quality:** no difference above run-to-run noise is open. The first official room run
+  has one broken test view, at 8.50 dB. It did not come back in two more official runs,
+  whose worst views are 24.01 and 23.12 dB, and it is most of the room gap and of the gap
+  in the means. Without the broken run, the official room mean is 33.17, 0.03 dB above
+  MojoSplat's. Stump is the largest first-run gap (MojoSplat 0.14 dB higher) and was not
+  repeated.
+
+  The authors' published per-scene numbers (`summary.csv`) use the official per-channel
+  PSNR, which reads 0.01 to 0.08 dB above the PSNR here. Scored that way, the official
+  runs here are within 0.03 dB of them on five scenes; on stump the published number is
+  0.19 dB higher, and room is affected by the broken view. Both sides reach the Beta
+  Splatting caps: 5M for garden, 6M for bicycle, 4.5M for stump and 1.5M for the indoor
+  scenes.
+- **Training time:** the official times are from its own timer, with the periodic
+  evaluations during training turned off; that timer also covers saving the final model,
+  a few seconds per scene. MojoSplat's are from a later run of all seven scenes, with the
+  code as merged. Its PSNR, from MojoSplat's own evaluator, was within run-to-run noise of
+  the quality runs. Bicycle, 0.12 dB lower than before, was run with two more seeds:
+  25.66, 25.73 and 25.80 dB.
+- **Rendering:** both renderers draw the MojoSplat-trained model from the training-time
+  run. The official timing is the same work as its `BetaModel.render` in evaluation mode:
+  its CUDA Spherical Voronoi kernel, then its gsplat rasterizer.
+
+## 3DGUT
+
+[3DGUT](https://github.com/nv-tlabs/3dgrut) places each Gaussian on the image with the
+unscented transform, seven projected sigma points instead of a linearized projection,
+and evaluates it in 3D along each pixel's ray, where 3DGS uses a 2D Gaussian. MojoSplat
+implements NVIDIA's unsorted pinhole renderer with the paper's settings
+(`configs/paper/3dgut/unsorted_colmap.yaml`): its 16x16 tiles, initialization, scene
+extent and image scaling, its densification on its own schedule, and the D-SSIM over
+windows inside the image. Official code: `dfd3d54`.
+
+```bash
+pixi run train data/mipnerf360/garden --method 3dgut
+```
+
+- **Quality:** kitchen, the only gap above 0.15 dB, was run three times on each side. No
+  difference above run-to-run noise is open. The quality runs used the port before it was
+  merged into the current code. A run of all seven scenes with the merged code, from
+  MojoSplat's own evaluator, was within run-to-run noise of them: 27.07, 24.99, 26.37,
+  31.70, 29.06, 31.29 and 32.47 dB.
+- **Training time:** the official times are from its `training_time` table; the garden
+  value is a rerun with nothing else on the GPU. MojoSplat's are from the merged-code run.
+- **Rendering:** both renderers draw the MojoSplat-trained model from the training-time
+  run, loaded into the official code with its own `init_from_ply`. The official timing is
+  `model(batch)`, which also returns its other outputs. Images agree at a mean of 82-89 dB
+  per scene.
+
+The two codes differ in ways that do not change the image measurably:
+
+- Random numbers (initial rotations, split offsets, view order) come from different
+  generators.
+- NVIDIA also accepts a hit only when its distance along the ray lies inside a +-1e6
+  box. That distance is a norm, so the test only rejects a distance of exactly 0 or
+  hits more than 1e6 units away, and MojoSplat leaves it out.
+- Clone and split also remove Gaussians whose quaternion is nearly zero, as in
+  MojoSplat's other methods.
+
+Our backward was compared with NVIDIA's on a garden model trained by MojoSplat, for one
+test view and fixed per-pixel loss weights. The forward images agree at 81 dB.
+Opacity gradients agree to 1.3e-3 (relative L2), scales to 4.8e-3, positions and
+rotations to 1.6e-2 and 1.5e-2 (cosine 0.9999), and the densification statistic to
+1.1e-2. Color gradients agree to 1.7e-3, except for about 7,500 Gaussians whose start
+from a black SfM point left a color channel at exactly zero: float rounding puts it
+just below zero in MojoSplat, which masks its gradient, and exactly at zero in NVIDIA's
+kernel, which does not. NVIDIA's own initialization puts the same channels just below
+zero, so its training masks them too.
