@@ -119,9 +119,9 @@ The render code separates GPU work from the math for one Gaussian:
 
 | Trait | Question | Today |
 |---|---|---|
-| `Placement` | Where does a Gaussian land on the image? | `PinholeEWA` |
-| `Response` / `LoadedResponse` | What does a pixel see of it? | `Gaussian2D` |
-| `Appearance` | What color does it have? | `SphericalHarmonics` |
+| `Placement` | Where does a Gaussian land on the image? | `PinholeEWA`, `PinholeUT` |
+| `Response` / `LoadedResponse` | What does a pixel see of it? | `Gaussian2D`, `BetaFootprint`, `GaussianRay3D` |
+| `Appearance` | What color does it have? | `SphericalHarmonics`, `SphericalBetaColor`, `SphericalVoronoi` |
 
 Nothing is registered or looked up at run time. Kernels take the pipeline as a
 compile-time parameter (`_preprocess_kernel[..., Pipe]`), and Mojo generates one
@@ -139,9 +139,15 @@ To add a block, implement one trait, name it in a pipeline, and add it to
 `tests/render/test_block_gradients.mojo`. Mojo checks generic code only when it
 is instantiated, so a block that no test instantiates may not compile.
 
-The current `Response` contract fits footprints evaluated in 2D. Evaluating along
-a ray with per-hit data (3DGUT, Neural Harmonic Textures) will need that contract
-extended or its own blend kernel.
+A response gets the projected 2D Gaussian, and also the Gaussian in world space
+and the camera, so it can be evaluated along each pixel's ray (`GaussianRay3D`,
+3DGUT). Its `backward` returns the gradient of the mean and shape: a 2D footprint
+goes through `Placement.backward` (`through_placement`), a ray response computes
+it itself. The response also defines the densification statistic
+(`Response.densification`). A pipeline sets the tile height (`TILE_H`); 3DGUT uses
+NVIDIA's 16 x 16 tiles, since which Gaussians a pixel sees depends on them.
+Per-hit data that changes along the ray (Neural Harmonic Textures) would still
+need the contract extended.
 
 ## Training
 
@@ -151,12 +157,14 @@ Densification is a strategy (`train/strategy.mojo`) with its own config,
 called before each iteration, around the optimizer step and after training;
 classic clone, split and prune (`ClassicDensification`) is the default, and
 `Relocation` / `MCMCRelocation` (`train/relocate.mojo`) are 3DGS-MCMC's, on
-Beta Splatting's schedule and on the paper's. `Relocation` skips the optimizer
+Beta Splatting's schedule and on the paper's; `GutDensification` is clone,
+split and prune on NVIDIA's 3DGUT schedule, after the optimizer step. `Relocation` skips the optimizer
 step on relocation iterations, as Beta Splatting does; `Relocation[step_first=True]`
 steps first and relocates after it, as Spherical Voronoi does. A method's
 settings are its own struct holding `TrainConfig`, its strategy's config and
 anything else it needs (3DGS-MCMC: `InitConfig`, its random start; Spherical
-Voronoi: `ScheduleConfig`, its final color-only iterations), so options only
+Voronoi: `ScheduleConfig`, its final color-only iterations; 3DGUT: both, for its
+camera-distance scales and schedules that advance after the optimizer step), so options only
 appear for the methods that use them. An appearance may scale the learning
 rates of its own columns per iteration (`Appearance.lr_scale`).
 

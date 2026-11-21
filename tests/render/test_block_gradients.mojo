@@ -240,9 +240,9 @@ def test_gaussian2d_covariance_gradient() raises:
     var cov: SIMD[DType.float32, 4] = SIMD[DType.float32, 4](5.0, -1.3, 3.0, 0.0)
     var h: Float32 = 0.02
     for k in range(3):
-        var slot = SIMD[DType.float32, 8](0.0)
+        var slot = SIMD[DType.float32, 16](0.0)
         slot[2 + k] = 1.0
-        var r = Gaussian2D(mean, Sym2[DType.float32](cov[0], cov[1], cov[2])).backward(slot)
+        var r = Gaussian2D(mean, Sym2[DType.float32](cov[0], cov[1], cov[2])).screen_backward(slot)
         var analytic = SIMD[DType.float32, 4](r.cov2d.a, 2.0 * r.cov2d.b, r.cov2d.c, 0.0)
         var weight = 2.0 if k == 1 else 1.0
         for i in range(3):
@@ -260,7 +260,7 @@ def alpha_of(p: SIMD[DType.float32, 8], px: Float32, py: Float32) -> Float32:
     """Alpha for p = (mx, my, a, b, c, opacity logit)."""
     var rec = p
     rec[5] = 1.0 / (1.0 + Float32(_exp(-Float64(p[5]))))
-    return LoadedGaussian2D(rec, SIMD[DType.float32, 8](0.0)).eval(px, py)[0]
+    return LoadedGaussian2D(rec, SIMD[DType.float32, 16](0.0)).eval(px, py)[0]
 
 
 def test_loaded_gaussian2d_pixel_gradient() raises:
@@ -273,7 +273,7 @@ def test_loaded_gaussian2d_pixel_gradient() raises:
     for pixel in pixels:
         var rec = p
         rec[5] = 1.0 / (1.0 + Float32(_exp(-Float64(p[5]))))
-        var loaded = LoadedGaussian2D(rec, SIMD[DType.float32, 8](0.0))
+        var loaded = LoadedGaussian2D(rec, SIMD[DType.float32, 16](0.0))
         loaded.add(loaded.eval(pixel[0], pixel[1]), 1.0)
         var g = loaded.gradient()
         for i in range(6):

@@ -9,6 +9,7 @@ from mojosplat.core.types import dptr
 from mojosplat.gpu.elementwise import fill_f32
 from mojosplat.io.arrays import download
 from mojosplat.model.splats import Splats
+from mojosplat.render.blocks.contracts import Extra
 from mojosplat.render.blocks.response.beta import LoadedBeta
 from mojosplat.core.math import SH_C0
 from mojosplat.core.splats import ExtraColumns
@@ -24,7 +25,7 @@ def loaded(p: F8) -> LoadedBeta:
     """p = (mx, my, a, b, c, opacity logit, raw beta)."""
     var rec = p
     rec[5] = 1.0 / (1.0 + Float32(exp(-Float64(p[5]))))
-    var extra = F8(0.0)
+    var extra = Extra(0.0)
     extra[0] = 4.0 * Float32(exp(Float64(p[6])))
     return LoadedBeta(rec, extra)
 

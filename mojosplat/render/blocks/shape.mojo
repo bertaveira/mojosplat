@@ -106,6 +106,23 @@ struct QuatScale[dt: DType](ImplicitlyCopyable, Movable):
         var dR20 = 2.0 * (S.m00 * d.c02 + S.m10 * d.c12 + S.m20 * d.c22)
         var dR21 = 2.0 * (S.m01 * d.c02 + S.m11 * d.c12 + S.m21 * d.c22)
         var dR22 = 2.0 * (S.m02 * d.c02 + S.m12 * d.c12 + S.m22 * d.c22)
+        return ShapeGrad[Self.dt](
+            V3[Self.dt](2.0 * self.v0 * dv0, 2.0 * self.v1 * dv1, 2.0 * self.v2 * dv2),
+            self.rotation_backward(Mat3[Self.dt](dR00, dR01, dR02, dR10, dR11, dR12, dR20, dR21, dR22)),
+        )
+
+    @always_inline
+    def rotation_backward(self, dR: Mat3[Self.dt]) -> V4[Self.dt]:
+        """dL/d(rotation matrix entries) -> dL/d(raw quaternion)."""
+        var dR00 = dR.m00
+        var dR01 = dR.m01
+        var dR02 = dR.m02
+        var dR10 = dR.m10
+        var dR11 = dR.m11
+        var dR12 = dR.m12
+        var dR20 = dR.m20
+        var dR21 = dR.m21
+        var dR22 = dR.m22
         var d_xx = dR11 + dR22
         var d_yy = dR00 + dR22
         var d_zz = dR00 + dR11
@@ -128,12 +145,9 @@ struct QuatScale[dt: DType](ImplicitlyCopyable, Movable):
             - q.y * q.y * d_yy
             - q.z * q.z * d_zz
         )
-        return ShapeGrad[Self.dt](
-            V3[Self.dt](2.0 * self.v0 * dv0, 2.0 * self.v1 * dv1, 2.0 * self.v2 * dv2),
-            V4[Self.dt](
-                two * (q.x * d_rx + q.y * d_ry + q.z * d_rz - q.w * helper),
-                two * (q.w * d_rx - 2.0 * q.x * d_xx + q.y * d_xy + q.z * d_xz - q.x * helper),
-                two * (q.w * d_ry + q.x * d_xy - 2.0 * q.y * d_yy + q.z * d_yz - q.y * helper),
-                two * (q.w * d_rz + q.x * d_xz + q.y * d_yz - 2.0 * q.z * d_zz - q.z * helper),
-            ),
+        return V4[Self.dt](
+            two * (q.x * d_rx + q.y * d_ry + q.z * d_rz - q.w * helper),
+            two * (q.w * d_rx - 2.0 * q.x * d_xx + q.y * d_xy + q.z * d_xz - q.x * helper),
+            two * (q.w * d_ry + q.x * d_xy - 2.0 * q.y * d_yy + q.z * d_yz - q.y * helper),
+            two * (q.w * d_rz + q.x * d_xz + q.y * d_yz - 2.0 * q.z * d_zz - q.z * helper),
         )

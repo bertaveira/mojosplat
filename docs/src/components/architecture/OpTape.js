@@ -19,9 +19,9 @@ const BLOCKS = [
 const LINES = [
   'var shape = QuatScale[dt](log_scales, rotations)',
   'var place = P(mean, shape, cam_v)',
-  'var resp = R(place.mean2d().f32(), place.cov2d().f32())',
-  'var screen = resp.backward(slot_grad)',
-  'var grad = place.backward(shape, screen.mean2d, screen.cov2d)',
+  'var resp = R(place.mean2d().f32(), place.cov2d().f32(), geom, cam)',
+  'var grad = resp.backward(slot_grad, place, shape, cam)',
+  '    # Gaussian2D: place.backward(shape, screen.mean2d, screen.cov2d)',
 ];
 
 const STEPS = [

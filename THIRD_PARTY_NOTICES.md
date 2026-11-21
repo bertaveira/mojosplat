@@ -65,6 +65,28 @@ Changes made in the port: rewritten in Mojo as a MojoSplat appearance block,
 evaluated in MojoSplat's preprocess kernels with its gradients written by
 MojoSplat's preprocess backward.
 
+## 3DGUT (NVIDIA 3dgrut)
+
+The unscented-transform placement in
+`mojosplat/render/blocks/placement/pinhole_ut.mojo` and the proxy bounds and
+tile test in `mojosplat/render/blocks/response/ray3d.mojo` are ported from the
+3DGUT CUDA kernels of NVIDIA's 3dgrut (`gutProjector.cuh`). The per-ray
+response in `ray3d.mojo` follows its definitions, evaluated in MojoSplat's own
+closed form, and the `3dgut` method (`GutDensification` in
+`mojosplat/train/densify.mojo`, the initialization, scene extent and
+schedules) follows 3dgrut's training code and configs:
+
+- Project: https://github.com/nv-tlabs/3dgrut
+- Paper: Q. Wu, J. Martinez Esturo, A. Mirzaei, N. Moenne-Loccoz, Z. Gojcic,
+  "3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting", CVPR 2025
+- Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES
+- License: Apache License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0
+
+Changes made in the port: rewritten in Mojo as MojoSplat blocks run by
+MojoSplat's kernels; the ray response is evaluated per pixel as a ratio of two
+quadratics in the pixel offset, with coefficients computed once per Gaussian,
+and its gradients are written by MojoSplat's preprocess backward.
+
 ## NeRFICG
 
 The Morton (Z-order) encoding in `mojosplat/model/morton.mojo` follows

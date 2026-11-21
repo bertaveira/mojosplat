@@ -36,7 +36,7 @@ from std.bit import count_trailing_zeros
 from std.memory import stack_allocation
 
 from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, U32Ptr, placeholder
-from .blocks.contracts import Pipeline
+from .blocks.contracts import Extra, Pipeline
 from .pipelines import Standard3DGS
 from .record import load_record, record_bounds, unpack_bounds
 
@@ -133,7 +133,7 @@ def _blend_kernel[
                 var c = SIMD[DType.float32, 4](0.0)
                 comptime for k in range(CDIM):
                     c[k] = max(colors[unsafe_offset=g * CDIM + k], 0.0)
-                var extra = SIMD[DType.float32, 8](0.0)
+                var extra = Extra(0.0)
                 comptime for k in range(R.EXTRA):
                     extra[k] = response_extra[unsafe_offset=g * R.EXTRA + k]
                 R.store_slab(slab.unsafe_offset(lane * STRIDE), rec, extra, c)

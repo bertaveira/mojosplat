@@ -8,7 +8,7 @@ The program itself is `mojosplat.apps.evaluate`; this picks the method.
 """
 
 from mojosplat.apps import evaluate, method_arg, unknown_method
-from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod
+from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod, ThreeDGUT
 
 
 def main() raises:
@@ -21,5 +21,10 @@ def main() raises:
         evaluate[MCMC]()
     elif name == SphericalVoronoiMethod.name():
         evaluate[SphericalVoronoiMethod]()
+    elif name == ThreeDGUT.name():
+        evaluate[ThreeDGUT]()
     else:
-        unknown_method(name, [FasterGS.name(), BetaSplattingMethod.name(), MCMC.name(), SphericalVoronoiMethod.name()])
+        unknown_method(
+            name,
+            [FasterGS.name(), BetaSplattingMethod.name(), MCMC.name(), SphericalVoronoiMethod.name(), ThreeDGUT.name()],
+        )

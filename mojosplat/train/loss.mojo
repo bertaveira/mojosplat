@@ -80,10 +80,13 @@ def _ssim_v_kernel(
     height: Int32,
     gw: KernelVector[DType.float32, 16],
     lam: Float32,
-    inv_n: Float32,
+    inv_ssim: Float32,
+    valid: Int32,
 ):
     """Vertical pass -> SSIM and its partials; d3 [3, N] = dL/d(mu1, E11, E12),
-    loss_px [N] = per-element loss contribution (before averaging)."""
+    loss_px [N] = per-element loss contribution (before averaging over N).
+    `valid` != 0 uses only pixels whose window fits in the image (fused-ssim
+    padding="valid"); `inv_ssim` is 1 / the number of elements SSIM averages."""
     var n = Int(width) * Int(height) * 3
     var idx = block_idx.x * BLOCK_SIZE + thread_idx.x
     if idx >= n:
@@ -110,14 +113,23 @@ def _ssim_v_kernel(
     var b2 = s11 + s22 + C2
     var inv_b = 1.0 / (b1 * b2)
     var ssim = a1 * a2 * inv_b
-    # dL/dssim = -lambda / N
-    var gs = -lam * inv_n
+    # dL/dssim = -lambda / (elements averaged)
+    var gs = -lam * inv_ssim
+    var inside = True
+    if valid != 0:
+        var x = Int((UInt32(idx) % UInt32(stride)) // 3)
+        inside = x >= HALF and x < Int(width) - HALF and y >= HALF and y < Int(height) - HALF
+        if not inside:
+            gs = 0.0
     # No division by a1 or a2: ssim is 0 when a2 is 0, and ssim / a2 would be NaN.
     d3[unsafe_offset=idx] = gs * (2.0 * mu2 * (a2 - a1) * inv_b + ssim * (2.0 * mu1 / b2 - 2.0 * mu1 / b1))
     d3[unsafe_offset=n + idx] = gs * (-ssim / b2)
     d3[unsafe_offset=2 * n + idx] = gs * (2.0 * a1 * inv_b)
     var diff = image[unsafe_offset=idx] - _target(target, idx)
-    loss_px[unsafe_offset=idx] = (1.0 - lam) * abs(diff) + lam * (1.0 - ssim)
+    var ssim_term = lam * (1.0 - ssim)
+    if valid != 0:  # averaged over the valid elements, not N
+        ssim_term = ssim_term * Float32(n) * inv_ssim if inside else 0.0
+    loss_px[unsafe_offset=idx] = (1.0 - lam) * abs(diff) + ssim_term
 
 
 def _grad_h_kernel(d3: F32Ptr, hd3: F32Ptr, width: Int32, height: Int32, gw: KernelVector[DType.float32, 16]):
@@ -183,6 +195,7 @@ struct PhotometricLoss(Movable):
 
     var ctx: DeviceContext
     var lam: Float32  # SSIM weight (0.2 in 3DGS)
+    var valid_ssim: Bool  # average SSIM over fully covered windows only
     var cap: Int
     var h5: DeviceBuffer[DType.float32]
     var d3: DeviceBuffer[DType.float32]
@@ -194,6 +207,7 @@ struct PhotometricLoss(Movable):
     def __init__(out self, ctx: DeviceContext, lambda_dssim: Float32 = 0.2) raises:
         self.ctx = ctx
         self.lam = lambda_dssim
+        self.valid_ssim = False
         self.cap = 0
         self.h5 = ctx.enqueue_create_buffer[DType.float32](1)
         self.d3 = ctx.enqueue_create_buffer[DType.float32](1)
@@ -227,6 +241,9 @@ struct PhotometricLoss(Movable):
         var ctx = self.ctx
         var stream = ctx.stream()
         var inv_n = Float32(1.0 / Float64(n))
+        var inv_ssim = inv_n
+        if self.valid_ssim:
+            inv_ssim = Float32(1.0 / Float64((width - 2 * HALF) * (height - 2 * HALF) * 3))
         var g = num_blocks(n)
         stream.enqueue_function(
             ctx.compile_function[_moments_h_kernel](),
@@ -250,7 +267,8 @@ struct PhotometricLoss(Movable):
             Int32(height),
             self.gw,
             self.lam,
-            inv_n,
+            inv_ssim,
+            Int32(1 if self.valid_ssim else 0),
             grid_dim=g,
             block_dim=BLOCK_SIZE,
         )

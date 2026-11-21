@@ -30,9 +30,9 @@ its own column, tested from the column through blend and back to the column's gr
 | What | Where | Limit |
 |---|---|---|
 | Position, shape, opacity for the tile test and blend | The record, your six floats | 6 floats |
-| A per-Gaussian value blend needs (here `b`) | Its own `Splats` column, copied per slot into `EXTRA` | 8 floats, in a separate array |
+| A per-Gaussian value blend needs (here `b`) | Its own `Splats` column, copied per slot into `EXTRA` | 16 floats, in a separate array |
 | Values each lane needs per pixel | The slab, sized by `SLAB` | In shared memory, per lane |
-| What the backward sums per slot | `GRAD` lanes returned by `gradient` | 8 lanes |
+| What the backward sums per slot | `GRAD` lanes returned by `gradient` | 16 lanes |
 
 ### 2. Write the two structs
 
@@ -50,7 +50,8 @@ struct MyFootprint(ImplicitlyCopyable, Movable, Response):
     comptime STOP_BEFORE_LAST = False
 ```
 
-`Response` is what preprocess builds from a covariance. `LoadedResponse` is what the
+`Response` is what preprocess builds from the projected 2D Gaussian (it also gets the
+Gaussian in world space and the camera, for responses evaluated along rays). `LoadedResponse` is what the
 two blend kernels evaluate at pixels, built from the slab or the record. Its `eval`
 returns a `Hit`: lane 0 is alpha, and the other seven lanes belong to the block. The
 backward kernel passes that `Hit` back to `add`, so a block needs no hidden per-pixel
@@ -60,19 +61,23 @@ Then the methods. Each exists because a specific kernel calls it:
 
 | You write | Called from | Purpose |
 |---|---|---|
-| `__init__(mean2d, cov2d)`, `valid`, `extent`, `record`, `tile_args`, `touches_tile` | preprocess, instances | Forward, culling, the tile test |
-| `extra(cols, g)` | preprocess | Read your column and return `b` for this slot |
+| `__init__(mean2d, cov2d, geom, cam)`, `valid`, `extent`, `record`, `tile_args`, `touches_tile` | preprocess, instances | Forward, culling, the tile test |
+| `extra(opacity, cols, g)` | preprocess | Read your column and return `b` for this slot |
 | `store_slab`, `channel`, `skip_fragment` | blend | Lay out the slab |
 | `Loaded(src)`, `Loaded()`, `Loaded(rec, extra)` | blend, blend backward | Unpack from slab or record |
 | `eval`, `add`, `gradient` | blend, blend backward | Pixel value, gradient sums |
-| `backward`, `opacity_gradient` | preprocess backward | Back to `ScreenGrad` and the opacity logit |
+| `backward`, `opacity_gradient` | preprocess backward | Back to the mean and shape, and the opacity logit |
+| `densification` | preprocess backward | The densification statistic of one view |
 | `write_gradients`, `zero_gradients`, `grad_index` | preprocess backward | Write the column's gradient; slot layout |
 | `columns()` | `Trainer` | Declare your column as a `ColumnSpec` with its initial value and learning rate |
 
 :::note
-`Response.backward` must return a `ScreenGrad`, gradients with respect to the screen
-position and the 2D covariance, because that is what `Placement.backward` takes. A
-footprint that needs other inputs from the projection does not fit this contract.
+A footprint evaluated in 2D computes a `ScreenGrad`, the gradients with respect to the
+screen position and the 2D covariance, and returns `through_placement(screen, place,
+shape, cam)` from `backward`: `Placement.backward` takes it to the mean and shape, and
+the screen-position gradient becomes 3DGS's densification statistic. A response
+evaluated along rays (`GaussianRay3D`, 3DGUT) computes the 3D gradient itself and
+defines its own statistic.
 :::
 
 ### 3. Name it in a pipeline
@@ -80,6 +85,7 @@ footprint that needs other inputs from the projection does not fit this contract
 ```mojo
 struct MyPipeline(Pipeline):
     comptime ID = 1
+    comptime TILE_H = DEFAULT_TILE_H  # tiles are 16 wide; 3DGUT uses 16 x 16
     comptime Place = PinholeEWA[DType.float32]
     comptime Resp = MyFootprint
     comptime Appear = SphericalHarmonics
@@ -115,10 +121,11 @@ A `Method` in `mojosplat/methods/` gives the pipeline a name, a densification st
 and its settings. The settings are a struct of the method's own: the shared
 `TrainConfig`, the strategy's config, and any settings only this method has. Every
 field becomes a command-line option, so a method shows only the options it uses.
-A method that starts from something other than the SfM points also returns an
-`InitConfig` from `initialization()`, as `MCMCConfig` does, and one that trains only
-the colors at the end returns a `ScheduleConfig` from `schedules()`, as
-`SphericalVoronoiConfig` does.
+A method that starts differently from 3DGS also returns an `InitConfig` from
+`initialization()`, as `MCMCConfig` (random points) and `ThreeDGUTConfig` (camera
+distance scales, random rotations) do, and one with other schedules returns a
+`ScheduleConfig` from `schedules()`, as `SphericalVoronoiConfig` (only the colors train
+at the end) and `ThreeDGUTConfig` (schedules advance after the optimizer step) do.
 
 ```mojo
 struct MyMethodConfig(MethodConfig):
@@ -191,9 +198,9 @@ Blocks, strategies and methods defined there work the same as the ones in MojoSp
 | Six extra column pointers in kernels; two are taken by SH | `core/splats.mojo`, `NUM_EXTRA_COLUMNS` |
 | At most 16 columns for Adam | `train/adam.mojo` |
 | Record is 32 bytes: 6 floats plus the rectangle | `render/record.mojo`, `REC` |
-| Up to 8 extra per-slot floats and 8 gradient lanes | The `SIMD[float32, 8]` in the contract |
+| Up to 16 extra per-slot floats and 16 gradient lanes | `Extra` and `SlotGrad` in the contract |
+| Tiles are 16 pixels wide; a pipeline sets their height | `Pipeline.TILE_H` |
 | Blending is three channels | `render/rasterizer.mojo` `CDIM`, `render/blend.mojo` assert |
-| `Response.backward` returns a 2D position and covariance gradient | `render/blocks/contracts.mojo` `ScreenGrad` |
 | `Placement.depth` is also the sort key, so it must order Gaussians front to back | `render/blocks/contracts.mojo` |
 | Shape is always `QuatScale` | `render/blocks/contracts.mojo`, kernels |
 | `tools/train` and `tools/eval` get their method from `--method`, from the methods registered in their `main` | `tools/train.mojo`, `tools/eval.mojo` |

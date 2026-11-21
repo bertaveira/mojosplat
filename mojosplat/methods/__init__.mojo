@@ -5,3 +5,4 @@ from .faster_gs import FasterGS, FasterGSConfig
 from .mcmc import MCMC, MCMCConfig
 from .method import Method, MethodConfig
 from .spherical_voronoi import SphericalVoronoiConfig, SphericalVoronoiMethod
+from .three_dgut import ThreeDGUT, ThreeDGUTConfig

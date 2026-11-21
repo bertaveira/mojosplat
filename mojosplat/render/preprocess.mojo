@@ -36,7 +36,7 @@ from ..core.camera import CAM_FAR, CAM_NEAR, CAM_POS_X, CAM_POS_Y, CAM_POS_Z
 from ..core.linalg import V3, V4
 from ..core.splats import AppearanceSettings, ExtraColumns
 from ..core.types import F32Ptr, I32Ptr, KernelVector, LANE_MASK_DTYPE, LaneMask, U32Ptr, num_blocks
-from .blocks.contracts import Pipeline
+from .blocks.contracts import GaussianGeometry, Pipeline
 from .blocks.shape import QuatScale
 from .pipelines import Standard3DGS
 from .record import udiv, umod, N_SEQUENTIAL, pack_bounds, store_record
@@ -100,7 +100,7 @@ def _preprocess_kernel[
         active = False
     var place = P(mean, shape, cam_v)
     var mean2d = place.mean2d().f32()
-    var resp = R(mean2d, place.cov2d().f32())
+    var resp = R(mean2d, place.cov2d().f32(), GaussianGeometry.of(mean, shape), cam.value)
     if not resp.valid():
         active = False
     var rec = resp.record(opacity)
@@ -192,7 +192,7 @@ def _preprocess_kernel[
     )
     var cols = ExtraColumns(col0, col1, col2, col3, col4, col5)
     comptime if R.EXTRA > 0:
-        var extra = R.extra(cols.skip(Pipe.Appear.NUM_COLUMNS), g)
+        var extra = resp.extra(opacity, cols.skip(Pipe.Appear.NUM_COLUMNS), g)
         comptime for k in range(R.EXTRA):
             response_extra[unsafe_offset=slot * R.EXTRA + k] = extra[k]
     # Stored unclamped: blending clamps at 0, the backward needs the mask.

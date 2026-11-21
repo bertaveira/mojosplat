@@ -48,7 +48,7 @@ contiguously, and the record's 32 bytes hold the geometry and opacity that the b
 <RecordLayout />
 
 The record is fixed at `REC = 8` floats (`render/record.mojo`). A Response can carry
-per-slot values beyond its six floats, up to 8, through `EXTRA`, in a separate
+per-slot values beyond its six floats, up to 16, through `EXTRA`, in a separate
 `response_extra` array.
 
 The **slab** is the warp-private shared memory that blend composites from. It is

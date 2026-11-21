@@ -3,7 +3,7 @@
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from mojosplat.cli import config_items
-from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod
+from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod, ThreeDGUT
 from mojosplat.train.densify import DensifyConfig
 from mojosplat.train.trainer import TrainConfig
 
@@ -66,6 +66,25 @@ def test_spherical_voronoi_follows_the_official_configs() raises:
     assert_equal(FasterGS.config("garden").schedules().frozen_last, 0)
 
 
+def test_3dgut_follows_the_official_configs() raises:
+    var garden = ThreeDGUT.config("garden")
+    assert_equal(garden.train.images, "images_4")
+    assert_equal(garden.train.lr_opacity, 0.05)
+    assert_equal(garden.train.near, 0.2)
+    assert_true(garden.train.far >= 1e10)
+    assert_true(garden.train.ssim_valid and garden.train.integer_factor and garden.train.median_extent)
+    assert_equal(garden.init.observer_scale, 0.01)
+    assert_true(garden.init.random_rotations)
+    assert_true(garden.schedules().after_step)
+    assert_equal(garden.densify.densify_from, 500)
+    assert_equal(garden.densify.densify_until, 15_000)
+    assert_equal(garden.densify.densify_interval, 300)
+    assert_equal(garden.densify.prune_interval, 100)
+    assert_equal(garden.densify.prune_opacity, 0.005)
+    assert_equal(ThreeDGUT.config("room").train.images, "images_2")
+    assert_false(FasterGS.config("garden").schedules().after_step)
+
+
 def test_only_mcmc_starts_from_random_points() raises:
     assert_true(MCMC.config("garden").initialization().random_init)
     assert_false(FasterGS.config("garden").initialization().random_init)
@@ -89,6 +108,10 @@ def test_each_method_has_only_its_own_options() raises:
     assert_false(
         _has_option(fgs, "frozen-last") or _has_option(beta, "frozen-last") or _has_option(mcmc, "frozen-last")
     )
+    var gut = ThreeDGUT.config("garden")
+    assert_true(_has_option(gut, "prune-interval") and _has_option(gut, "observer-scale"))
+    assert_false(_has_option(fgs, "prune-interval") or _has_option(mcmc, "prune-interval"))
+    assert_false(_has_option(gut, "cap-max"))
 
 
 def main() raises:

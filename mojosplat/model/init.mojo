@@ -18,8 +18,8 @@ from max.gpu.host import DeviceContext
 from max.gpu.memory import AddressSpace
 from max.gpu.sync import barrier
 from std.math import log, sqrt
-from std.random import random_float64
 from std.memory import stack_allocation
+from std.random import random_float64
 
 from ..core.math import SH_C0
 from ..core.types import F32Ptr, dptr, num_blocks
@@ -113,6 +113,21 @@ def random_points(count: Int, radius: Float32) -> List[Float32]:
     return xyz^
 
 
+def nearest_camera_distances(xyz: List[Float32], centers: List[SIMD[DType.float32, 4]]) -> List[Float32]:
+    """For each point of xyz [N, 3], the distance to the nearest camera center."""
+    var n = len(xyz) // 3
+    var out = List[Float32](capacity=n)
+    for i in range(n):
+        var best = Float64.MAX
+        for c in centers:
+            var dx = Float64(xyz[i * 3] - c[0])
+            var dy = Float64(xyz[i * 3 + 1] - c[1])
+            var dz = Float64(xyz[i * 3 + 2] - c[2])
+            best = min(best, dx * dx + dy * dy + dz * dz)
+        out.append(Float32(sqrt(best)))
+    return out^
+
+
 def splats_from_points(
     ctx: DeviceContext,
     xyz: List[Float32],
@@ -121,24 +136,39 @@ def splats_from_points(
     initial_opacity: Float32 = 0.1,
     capacity: Int = 0,
     initial_scale: Float32 = 1.0,
+    distances: List[Float32] = List[Float32](),
+    random_rotations: Bool = False,
 ) raises -> Splats:
     """3DGS initialization from a colored point cloud (xyz [N, 3], rgb [N, 3]).
-    `initial_scale` multiplies the nearest-neighbor scale (3DGS-MCMC uses 0.1)."""
+
+    Each Gaussian's scale is `initial_scale` times the root mean squared
+    distance to its 3 nearest neighbors (3DGS; 3DGS-MCMC uses 0.1), or times
+    `distances` ([N]) when given (3DGUT: the distance to the nearest training
+    camera, with 0.01). `random_rotations` draws quaternions uniformly from
+    [0, 1)^4 (3DGUT) instead of the identity."""
     var n = len(xyz) // 3
-    var dist2 = knn3_mean_dist2(ctx, xyz)
+    var given = len(distances) > 0
+    if given and len(distances) != n:
+        raise Error("splats_from_points: one distance per point")
+    var dist2 = List[Float32]() if given else knn3_mean_dist2(ctx, xyz)
     var log_scales = List[Float32](capacity=n * 3)
     var rotations = List[Float32](capacity=n * 4)
     var opacity = List[Float32](capacity=n)
     var sh0 = List[Float32](capacity=n * 3)
     var logit = log(initial_opacity / (1.0 - initial_opacity))
     for i in range(n):
-        var s = log(sqrt(max(dist2[i], 1e-7)) * initial_scale)
+        var d = max(distances[i], 1e-7) if given else sqrt(max(dist2[i], 1e-7))
+        var s = log(d * initial_scale)
         for _ in range(3):
             log_scales.append(s)
-        rotations.append(1.0)
-        rotations.append(0.0)
-        rotations.append(0.0)
-        rotations.append(0.0)
+        if random_rotations:
+            for _ in range(4):
+                rotations.append(Float32(random_float64(0.0, 1.0)))
+        else:
+            rotations.append(1.0)
+            rotations.append(0.0)
+            rotations.append(0.0)
+            rotations.append(0.0)
         opacity.append(logit)
         for k in range(3):
             sh0.append((Float32(rgb[i * 3 + k]) / 255.0 - 0.5) / SH_C0)

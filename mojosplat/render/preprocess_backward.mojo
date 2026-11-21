@@ -12,11 +12,11 @@ from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceContext, DeviceStream
 from std.math import sqrt
 
-from ..core.camera import CAM_H, CAM_POS_X, CAM_POS_Y, CAM_POS_Z, CAM_W
+from ..core.camera import CAM_POS_X, CAM_POS_Y, CAM_POS_Z
 from ..core.types import BLOCK_SIZE, F32Ptr, I32Ptr, KernelVector, num_blocks
 from ..core.linalg import V2, V3, V4
 from ..core.splats import AppearanceSettings, ExtraColumns
-from .blocks.contracts import Pipeline
+from .blocks.contracts import GaussianGeometry, Pipeline, SlotGrad
 from .blocks.shape import QuatScale
 from .pipelines import Standard3DGS
 
@@ -96,7 +96,7 @@ def _preprocess_backward_kernel[
         settings.value,
         write_all != 0,
     )
-    var slot_grad = SIMD[DType.float32, 8](0.0)
+    var slot_grad = SlotGrad(0.0)
     comptime for k in range(R.GRAD):
         slot_grad[k] = grad_resp[unsafe_offset=R.grad_index(k, Int(n_slots), s)]
     out_opacity[unsafe_offset=g] = R.opacity_gradient(slot_grad)
@@ -105,25 +105,30 @@ def _preprocess_backward_kernel[
     # Forward, top to bottom.
     var shape = QuatScale[dt](V3[dt].load(log_scales, g), V4[dt].load(rotations, g))
     var place = P(mean, shape, cam_v)
-    var resp = R(place.mean2d().f32(), place.cov2d().f32())
+    var resp = R(place.mean2d().f32(), place.cov2d().f32(), GaussianGeometry.of(mean, shape), cam.value)
 
-    var screen = resp.backward(slot_grad)
-    if has_densification != 0:
-        var nx = 0.5 * screen.mean2d.x * cam[CAM_W]
-        var ny = 0.5 * screen.mean2d.y * cam[CAM_H]
-        densification[unsafe_offset=g] += 1.0
-        densification[unsafe_offset=Int(n) + g] += sqrt(nx * nx + ny * ny)
+    # Backward, bottom to top: the response owns the route to the 3D parameters.
+    var rg = resp.backward(slot_grad, place, shape, cam.value)
+    var grad = rg.grad
 
-    # Backward, bottom to top.
-    var grad = place.backward(
-        shape,
-        V2[dt](screen.mean2d.x.cast[dt](), screen.mean2d.y.cast[dt]()),
-        screen.cov2d.cast[dt](),
+    var total_mean = V3[DType.float32](
+        grad.mean.x.cast[DType.float32]() + dmean_color[0],
+        grad.mean.y.cast[DType.float32]() + dmean_color[1],
+        grad.mean.z.cast[DType.float32]() + dmean_color[2],
     )
+    if has_densification != 0:
+        var stat = R.densification(
+            rg.screen_norm,
+            total_mean,
+            V3[DType.float32](mean.x.cast[DType.float32](), mean.y.cast[DType.float32](), mean.z.cast[DType.float32]()),
+            cam.value,
+        )
+        densification[unsafe_offset=g] += stat[0]
+        densification[unsafe_offset=Int(n) + g] += stat[1]
 
-    out_means[unsafe_offset=g * 3 + 0] = grad.mean.x.cast[DType.float32]() + dmean_color[0]
-    out_means[unsafe_offset=g * 3 + 1] = grad.mean.y.cast[DType.float32]() + dmean_color[1]
-    out_means[unsafe_offset=g * 3 + 2] = grad.mean.z.cast[DType.float32]() + dmean_color[2]
+    out_means[unsafe_offset=g * 3 + 0] = total_mean.x
+    out_means[unsafe_offset=g * 3 + 1] = total_mean.y
+    out_means[unsafe_offset=g * 3 + 2] = total_mean.z
     grad.shape.log_scales.store(out_log_scales, g)
     grad.shape.quat.store(out_rotations, g)
 

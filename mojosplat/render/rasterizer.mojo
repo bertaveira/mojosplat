@@ -22,7 +22,6 @@ scales, unnormalized quaternions, opacity logits and SH coefficients.
 Design and kernels follow Faster-GS (Hahlbohm et al., CVPR 2026, Apache-2.0).
 """
 
-from max.gpu import WARP_SIZE
 from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from std.memory import ArcPointer
 from std.time import perf_counter_ns
@@ -39,7 +38,7 @@ from ..core.camera import CAM_POS_X, CAM_POS_Y, CAM_POS_Z, Camera
 from ..core.types import F32Ptr, I32Ptr, U16Ptr, U32Ptr, dptr, placeholder
 from .instances import create_instances, depth_ordering, tile_key_bits, tile_offsets
 from .blocks.contracts import Pipeline
-from .pipelines import Standard3DGS
+from .pipelines import DEFAULT_TILE_H, Standard3DGS
 from .preprocess import preprocess
 from .record import REC
 from ..gpu.scan import exclusive_scan, scan_workspace_size
@@ -112,7 +111,7 @@ struct ForwardState(ImplicitlyCopyable, Movable):
         self.tile_max_n = placeholder[DType.uint32]()
 
 
-struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16](Movable):
+struct Rasterizer[tile_w: Int = 16, tile_h: Int = DEFAULT_TILE_H](Movable):
     """Forward renderer and its backward; owns and reuses scratch buffers."""
 
     comptime CDIM = 3
@@ -372,10 +371,14 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         (same rest_stride); every element is written (culled Gaussians get
         0), so they need no initialization. If
         `has_densification`, `densification` [2, N] accumulates (count,
-        |dL/dmean2d| in NDC) per Gaussian, as used by 3DGS densification.
+        statistic) per Gaussian as the response defines them
+        (`Response.densification`; 3DGS: |dL/dmean2d| in NDC).
         With `write_all=False`, `grads.sh_rest` is left untouched: a fused
         optimizer recomputes those gradients from `sh_rest_grad(st)`.
         """
+        comptime assert (
+            Pipe.TILE_H == DEFAULT_TILE_H or Self.tile_h == Pipe.TILE_H
+        ), "this pipeline needs Rasterizer[16, Pipe.TILE_H]"
         if st.pipeline_id != Pipe.ID:
             raise Error("Rasterizer.backward: state comes from a forward with another pipeline")
         var ctx = self.ctx
@@ -463,6 +466,10 @@ struct Rasterizer[tile_w: Int = 16, tile_h: Int = 12 if WARP_SIZE == 32 else 16]
         background: SIMD[DType.float32, 4],
         sh_degree: Int,
     ) raises -> ForwardState:
+        # A pipeline with its own tile height (3DGUT) renders differently on other tiles.
+        comptime assert (
+            Pipe.TILE_H == DEFAULT_TILE_H or Self.tile_h == Pipe.TILE_H
+        ), "this pipeline needs Rasterizer[16, Pipe.TILE_H]"
         var st = ForwardState()
         st.n = splats.count
         st.width = camera.width

@@ -9,7 +9,7 @@ The program itself is `mojosplat.apps.train`; this picks the method.
 """
 
 from mojosplat.apps import method_arg, train, unknown_method
-from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod
+from mojosplat.methods import BetaSplattingMethod, FasterGS, MCMC, SphericalVoronoiMethod, ThreeDGUT
 
 
 def main() raises:
@@ -22,5 +22,10 @@ def main() raises:
         train[MCMC]()
     elif name == SphericalVoronoiMethod.name():
         train[SphericalVoronoiMethod]()
+    elif name == ThreeDGUT.name():
+        train[ThreeDGUT]()
     else:
-        unknown_method(name, [FasterGS.name(), BetaSplattingMethod.name(), MCMC.name(), SphericalVoronoiMethod.name()])
+        unknown_method(
+            name,
+            [FasterGS.name(), BetaSplattingMethod.name(), MCMC.name(), SphericalVoronoiMethod.name(), ThreeDGUT.name()],
+        )

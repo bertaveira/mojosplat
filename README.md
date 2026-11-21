@@ -52,6 +52,7 @@ Each method, selected with `--method`, is also trained with its official code on
 | [Beta Splatting](https://github.com/RongLiu-Leo/beta-splatting) | `beta-splatting` | 3m31s (3.90×) | 489 FPS (4.58×) |
 | [3DGS-MCMC](https://github.com/ubc-vision/3dgs-mcmc) | `3dgs-mcmc` | 3m19s (7.13×) | 682 FPS (2.86×) |
 | [Spherical Voronoi](https://github.com/sphericalvoronoi/sphericalvoronoi) | `spherical-voronoi` | 3m51s (2.83×) | 444 FPS (2.47×) |
+| [3DGUT](https://github.com/nv-tlabs/3dgrut) | `3dgut` | 2m29s (3.93×) | 1043 FPS (6.74×) |
 
 ## Using the library
 
@@ -100,7 +101,7 @@ Contributions are welcome; please include tests (`pixi run test`).
 
 ## License
 
-[MIT](LICENSE). Ported code from Faster-GS (Apache-2.0), Deformable Beta Splatting (Apache-2.0), Spherical Voronoi (MIT), NeRFICG (MIT) and fused-ssim (MIT) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE).
+[MIT](LICENSE). Ported code from Faster-GS (Apache-2.0), Deformable Beta Splatting (Apache-2.0), 3DGUT (NVIDIA 3dgrut, Apache-2.0), Spherical Voronoi (MIT), NeRFICG (MIT) and fused-ssim (MIT) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MAX is installed by pixi under Modular's [MAX License](https://github.com/modular/modular/blob/main/Licenses/MAX_LICENSE).
 
 ## Acknowledgments
 
